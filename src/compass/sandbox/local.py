@@ -31,21 +31,29 @@ _SAFE_ENV_VARS = frozenset({
     "TMPDIR",
 })
 
-# Patterns for environment variables that must be blocked.
-_BLOCKED_ENV_PATTERNS = (
+# Provider-/cloud-specific prefixes that indicate secrets.
+_BLOCKED_ENV_PREFIXES = (
     "AWS_",
-    "GITHUB_TOKEN",
-    "GITHUB_PAT",
-    "GH_TOKEN",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "AZURE_",
+    "GCP_",
+    "GITHUB_",
+)
+
+# Secret-indicator tokens matched anywhere in the name. Real-world secrets are
+# usually *suffixed* (FOO_API_KEY, MY_SERVICE_SECRET, USER_TOKEN), so a
+# prefix-only check would miss them. Over-blocking here is intentional: this is
+# a fail-safe, and refusing to pass through a benign var is far cheaper than
+# leaking a credential into the sandbox.
+_BLOCKED_ENV_SUBSTRINGS = (
     "API_KEY",
     "SECRET",
     "PASSWORD",
+    "PASSWD",
     "CREDENTIAL",
     "PRIVATE_KEY",
-    "ACCESS_TOKEN",
-    "OPENAI_",
-    "ANTHROPIC_",
-    "HF_TOKEN",
+    "TOKEN",
 )
 
 # File extension to language mapping for collect_files.
@@ -93,7 +101,9 @@ _EXT_TO_LANGUAGE: dict[str, str] = {
 def _is_blocked(name: str) -> bool:
     """Return True if the environment variable name should be blocked."""
     upper = name.upper()
-    return any(upper.startswith(pat) or upper == pat for pat in _BLOCKED_ENV_PATTERNS)
+    if any(upper.startswith(prefix) for prefix in _BLOCKED_ENV_PREFIXES):
+        return True
+    return any(token in upper for token in _BLOCKED_ENV_SUBSTRINGS)
 
 
 class PathTraversalError(ValueError):

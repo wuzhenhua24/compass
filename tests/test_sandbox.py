@@ -381,3 +381,50 @@ class TestLocalSandboxConcurrency:
             outputs = {r.stdout.strip() for r in results}
             assert outputs == {"a", "b", "c"}
             assert all(r.exit_code == 0 for r in results)
+
+
+# ===================================================================
+# Environment variable blocking
+# ===================================================================
+
+
+class TestEnvBlocking:
+    """The secret-blocking safety net must catch suffix-style names too."""
+
+    def test_prefix_style_secrets_blocked(self):
+        from compass.sandbox.local import _is_blocked
+
+        for name in ["AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+            assert _is_blocked(name) is True
+
+    def test_suffix_style_secrets_blocked(self):
+        """Regression: prefix-only matching missed the common *_API_KEY /
+        *_SECRET / *_PASSWORD / *_TOKEN convention."""
+        from compass.sandbox.local import _is_blocked
+
+        for name in [
+            "MYSVC_API_KEY",
+            "DB_PASSWORD",
+            "GCP_SERVICE_SECRET",
+            "USER_TOKEN",
+            "SERVICE_ACCESS_TOKEN",
+        ]:
+            assert _is_blocked(name) is True, name
+
+    def test_benign_vars_not_blocked(self):
+        from compass.sandbox.local import _is_blocked
+
+        for name in ["PATH", "LANG", "HOME", "TERM", "MY_VAR"]:
+            assert _is_blocked(name) is False, name
+
+    @pytest.mark.asyncio
+    async def test_passthrough_secret_is_filtered(self):
+        """A secret named in env_passthrough must NOT reach the sandbox env."""
+        os.environ["MYSVC_API_KEY"] = "leaked-value"
+        try:
+            sb = LocalSandbox(config={"env_passthrough": ["MYSVC_API_KEY"]})
+            async with sb:
+                env = sb._build_env()
+                assert "MYSVC_API_KEY" not in env
+        finally:
+            os.environ.pop("MYSVC_API_KEY", None)

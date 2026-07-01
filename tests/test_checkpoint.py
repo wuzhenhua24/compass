@@ -109,6 +109,20 @@ class TestSerialization:
         assert er.score == 0.85
         assert er.metadata == {"key": "value"}
 
+    def test_case_result_round_trip_preserves_tags_and_category(self):
+        """Regression: tags/category must survive the checkpoint round-trip so a
+        resumed run keeps its per-category / per-tag analysis intact."""
+        original = _make_case_result(case_id="rt_tags", passed=True, score=0.9)
+        original.tags = ["safety", "smoke"]
+        original.category = "backend"
+
+        restored = _dict_to_case_result(_case_result_to_dict(original))
+
+        assert restored.tags == ["safety", "smoke"]
+        assert restored.category == "backend"
+        # Timestamp is preserved too (not reset to "now").
+        assert restored.timestamp == original.timestamp
+
     def test_case_result_round_trip_with_error(self):
         """CaseResult with error survives round-trip."""
         original = CaseResult(
@@ -206,6 +220,36 @@ class TestScenarioFingerprint:
             tags=["scenario_tag"],
         )
         assert scenario_fingerprint(s1) == scenario_fingerprint(s2)
+
+    def test_changing_case_aggregation_changes_fingerprint(self):
+        """Regression: editing a case's aggregation (e.g. pass_threshold) must
+        invalidate the checkpoint so a resume does not reuse stale verdicts."""
+        s1 = _make_scenario()
+        s2 = _make_scenario()
+        s2.cases[0].aggregation.pass_threshold = 0.95
+        assert scenario_fingerprint(s1) != scenario_fingerprint(s2)
+
+    def test_changing_short_circuit_changes_fingerprint(self):
+        from compass.core.scenario import ShortCircuitMode
+
+        s1 = _make_scenario()
+        s2 = _make_scenario()
+        s2.cases[0].aggregation.short_circuit = ShortCircuitMode.CODE_FAIL
+        assert scenario_fingerprint(s1) != scenario_fingerprint(s2)
+
+    def test_changing_trials_changes_fingerprint(self):
+        """Regression: changing trial count changes pass@k/pass^k, so it must
+        invalidate the checkpoint."""
+        s1 = _make_scenario()
+        s2 = _make_scenario()
+        s2.cases[0].trials = 5
+        assert scenario_fingerprint(s1) != scenario_fingerprint(s2)
+
+    def test_changing_defaults_trials_changes_fingerprint(self):
+        s1 = _make_scenario()
+        s2 = _make_scenario()
+        s2.defaults.trials = 3
+        assert scenario_fingerprint(s1) != scenario_fingerprint(s2)
 
 
 # ===================================================================

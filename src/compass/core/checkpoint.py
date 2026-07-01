@@ -31,7 +31,9 @@ _CHECKPOINT_FILE = "checkpoint.json"
 def scenario_fingerprint(scenario: Any) -> str:
     """Generate a deterministic hash of scenario configuration.
 
-    Covers agent config, grader configs, case IDs and their inputs/graders.
+    Covers everything that affects *how a case is executed and scored*: agent
+    config, grader configs, defaults (trials/timeout), default aggregation, and
+    per-case input, graders, aggregation, trial count and expect.
     Does NOT cover metadata, tags, or descriptions so cosmetic edits
     don't invalidate checkpoints.
     """
@@ -46,13 +48,18 @@ def scenario_fingerprint(scenario: Any) -> str:
             [g.model_dump() for g in scenario.default_graders], sort_keys=True
         ).encode()
     )
+    # Defaults (trials, timeout, environment) — changing trial count changes
+    # pass@k / pass^k, so it must invalidate the checkpoint.
+    hasher.update(
+        json.dumps(scenario.defaults.model_dump(), sort_keys=True).encode()
+    )
     # Default aggregation
     hasher.update(
         json.dumps(
             scenario.default_aggregation.model_dump(), sort_keys=True
         ).encode()
     )
-    # Each case: id + input + graders + aggregation + expect
+    # Each case: id + input + graders + aggregation + trials + expect
     for case in scenario.cases:
         hasher.update(case.id.encode())
         hasher.update(
@@ -63,6 +70,12 @@ def scenario_fingerprint(scenario: Any) -> str:
                 [g.model_dump() for g in case.graders], sort_keys=True
             ).encode()
         )
+        # Aggregation and trial count change the scoring verdict, so a resume
+        # after editing them must not silently reuse stale case results.
+        hasher.update(
+            json.dumps(case.aggregation.model_dump(), sort_keys=True).encode()
+        )
+        hasher.update(str(case.trials).encode())
         hasher.update(case.expect.encode())
     return hasher.hexdigest()[:16]
 
@@ -118,6 +131,11 @@ def _case_result_to_dict(result: CaseResult) -> dict[str, Any]:
         "output_data": result.output_data,
         "duration_ms": result.duration_ms,
         "error": result.error,
+        # Classification — must be persisted or resumed runs lose their
+        # tags/category and break per-category / per-tag analysis.
+        "tags": result.tags,
+        "category": result.category,
+        "timestamp": result.timestamp.isoformat(),
         "total_trials": result.total_trials,
         "passed_trials": result.passed_trials,
         "trial_metrics": result.trial_metrics,
@@ -144,7 +162,7 @@ def _dict_to_case_result(data: dict[str, Any]) -> CaseResult:
             )
         )
 
-    return CaseResult(
+    kwargs: dict[str, Any] = dict(
         case_id=data["case_id"],
         status=TestStatus(data["status"]),
         passed=data["passed"],
@@ -154,10 +172,20 @@ def _dict_to_case_result(data: dict[str, Any]) -> CaseResult:
         output_data=data.get("output_data", {}),
         duration_ms=data.get("duration_ms", 0.0),
         error=data.get("error"),
+        tags=data.get("tags", []),
+        category=data.get("category", ""),
         total_trials=data.get("total_trials", 1),
         passed_trials=data.get("passed_trials", 0),
         trial_metrics=data.get("trial_metrics"),
     )
+    # Restore the original timestamp when present (older checkpoints omit it).
+    ts = data.get("timestamp")
+    if ts:
+        try:
+            kwargs["timestamp"] = datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            pass
+    return CaseResult(**kwargs)
 
 
 # ── CheckpointStore ──
