@@ -1,0 +1,37 @@
+[
+  {
+    "task_id": "cat_on_sofa",
+    "passed": true,
+    "duration_ms": 9500,
+    "grade_results": [
+      {"name": "image_assertions", "grader_type": "code", "grader_scope": "outcome", "passed": true, "score": 1.0},
+      {"name": "semantic_match", "grader_type": "model", "grader_scope": "outcome", "passed": true, "score": 0.85},
+      {"name": "tool_usage", "grader_type": "code", "grader_scope": "transcript", "passed": true, "score": 0.9},
+      {"name": "cost_budget", "grader_type": "code", "grader_scope": "transcript", "passed": true, "score": 0.95}
+    ]
+  },
+  {
+    "task_id": "sunset_landscape",
+    "passed": false,
+    "duration_ms": 12000,
+    "grade_results": [
+      {"name": "image_assertions", "grader_type": "code", "grader_scope": "outcome", "passed": true, "score": 1.0},
+      {"name": "semantic_match", "grader_type": "model", "grader_scope": "outcome", "passed": false, "score": 0.18},
+      {"name": "aesthetic_score", "grader_type": "model", "grader_scope": "outcome", "passed": false, "score": 0.35},
+      {"name": "tool_usage", "grader_type": "code", "grader_scope": "transcript", "passed": true, "score": 0.85},
+      {"name": "cost_budget", "grader_type": "code", "grader_scope": "transcript", "passed": true, "score": 0.9}
+    ]
+  },
+  {
+    "task_id": "cyberpunk_city",
+    "passed": false,
+    "duration_ms": 35000,
+    "grade_results": [
+      {"name": "image_assertions", "grader_type": "code", "grader_scope": "outcome", "passed": true, "score": 1.0},
+      {"name": "semantic_match", "grader_type": "model", "grader_scope": "outcome", "passed": true, "score": 0.72},
+      {"name": "tool_usage", "grader_type": "code", "grader_scope": "transcript", "passed": false, "score": 0.3},
+      {"name": "cost_budget", "grader_type": "code", "grader_scope": "transcript", "passed": false, "score": 0.1},
+      {"name": "latency_budget", "grader_type": "code", "grader_scope": "transcript", "passed": false, "score": 0.2}
+    ]
+  }
+]

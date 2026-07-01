@@ -89,7 +89,8 @@ compass_report.html
 compass_report.json
 .compass/
 output/
-results/
+# Top-level run outputs only — keep nested fixtures like examples/results/.
+/results/
 
 # Personal
 docs/
