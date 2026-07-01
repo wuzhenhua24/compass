@@ -675,6 +675,40 @@ graders:
 | `latency_budget` | 延迟预算 | `max_total_ms`, `max_per_tool_ms` |
 | `efficiency` | 综合效率评估（工具数 vs 产出） | `expected_tool_count` |
 
+#### 模型价格配置（可覆盖）
+
+`LLMToolCallMixin` 会用内置价格表（`compass.adapters.MODEL_PRICING`，按 1M token 计价，含 input/output/cached-input）自动估算每次调用的成本。价格经常变动，因此**内置表只是默认值，用户可以覆盖**，优先级为 `外部文件 / 运行时注册 > 内置默认`。
+
+**方式一：外部价格文件（适合 CLI / 团队共享）**
+
+设置环境变量 `COMPASS_PRICING_FILE` 指向一个 JSON 或 YAML 文件，或放在默认位置 `~/.compass/pricing.{json,yaml,yml}`（`import compass` 时自动加载）：
+
+```json
+{
+  "gpt-5":     { "input": 2.0, "output": 8.0, "cached": 0.2 },
+  "my-model":  { "input": 1.5, "output": 6.0 }
+}
+```
+
+```bash
+export COMPASS_PRICING_FILE=/path/to/pricing.json
+```
+
+`cached` 可选（缓存读取价，通常约为 input 的 0.1×）。文件是「模型 → 价格」映射，同名覆盖内置默认、新名新增。
+
+**方式二：SDK 运行时注册（适合程序化调用 / 测试）**
+
+```python
+from compass.adapters import register_pricing, load_pricing_file, reset_pricing
+
+register_pricing("gpt-5", {"input": 2.0, "output": 8.0, "cached": 0.2})
+register_pricing("my-model", (1.5, 6.0))          # (input, output[, cached]) 元组
+load_pricing_file("pricing.yaml")                  # 批量从文件合并
+reset_pricing()                                    # 恢复内置默认（丢弃所有覆盖）
+```
+
+> 模型名会被规范化（小写、`_`→`-`），带日期后缀的 ID 走**最长前缀匹配**（如 `claude-opus-4-8-20260101` → `claude-opus-4-8`）。未收录且未配置的模型，`calculate_cost` 返回 `None`（成本视为未知）。
+
 #### 风格约定校验
 
 > 设计目标：检测 Agent 输出是否遵循预定义的格式、模板和命名约定

@@ -14,12 +14,25 @@ from compass.adapters.llm import (
     MODEL_PRICING,
     get_model_pricing,
     calculate_cost,
+    register_pricing,
+    load_pricing_file,
+    load_default_pricing,
+    reset_pricing,
     extract_usage,
     extract_openai_usage,
     extract_anthropic_usage,
     extract_google_usage,
 )
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall
+
+
+@pytest.fixture(autouse=True)
+def _pricing_defaults():
+    """Isolate every test from machine-level pricing files (COMPASS_PRICING_FILE
+    or ~/.compass/pricing.*) that ``load_default_pricing()`` applies at import."""
+    reset_pricing()
+    yield
+    reset_pricing()
 
 
 # ===================================================================
@@ -60,6 +73,38 @@ class TestModelPricing:
         pricing = get_model_pricing("unknown-model-xyz")
         assert pricing is None
 
+    def test_current_anthropic_models_present(self):
+        """Current-generation Anthropic models are priced (stale-table fix)."""
+        assert MODEL_PRICING["claude-opus-4-8"].input_per_1m == 5.00
+        assert MODEL_PRICING["claude-opus-4-8"].output_per_1m == 25.00
+        assert MODEL_PRICING["claude-sonnet-5"].input_per_1m == 3.00
+        assert MODEL_PRICING["claude-haiku-4-5"].input_per_1m == 1.00
+        # Cached-input reflects the ~0.1x cache-read rate.
+        assert MODEL_PRICING["claude-opus-4-8"].cached_input_per_1m == 0.50
+
+    def test_get_model_pricing_longest_prefix_wins(self):
+        """A dated ID must resolve to the longest matching key, not a shorter
+        prefix that happens to iterate first (order-independent matching).
+
+        'claude-opus-4-8-...' must map to claude-opus-4-8 ($5/$25), NOT the
+        legacy 'claude-opus-4' ($15/$75) which is inserted earlier.
+        """
+        pricing = get_model_pricing("claude-opus-4-8-20260101")
+        assert pricing == MODEL_PRICING["claude-opus-4-8"]
+        assert pricing != MODEL_PRICING["claude-opus-4"]
+
+    def test_calculate_cost_with_cached_tokens(self):
+        """Cached input tokens are billed at the cached rate on top of input."""
+        cost = calculate_cost(
+            "claude-opus-4-8",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cached_tokens=1_000_000,
+        )
+        assert cost is not None
+        # 1M fresh input @ $5 + 1M cached input @ $0.50 = $5.50
+        assert cost.input_cost_usd == pytest.approx(5.50)
+
     def test_calculate_cost_known_model(self):
         """Calculate cost for known model."""
         cost = calculate_cost("gpt-4o", input_tokens=1000, output_tokens=500)
@@ -84,6 +129,78 @@ class TestModelPricing:
         cost = calculate_cost("gpt-4o", input_tokens=100, output_tokens=50)
         assert cost is not None
         assert cost.metadata.get("model") == "gpt-4o"
+
+
+class TestPricingOverrides:
+    """User-configurable pricing: register_pricing / load_pricing_file / env."""
+
+    def test_register_overrides_existing_model(self):
+        register_pricing("gpt-4o", {"input": 9.99, "output": 19.99})
+        pricing = get_model_pricing("gpt-4o")
+        assert pricing.input_per_1m == 9.99
+        assert pricing.output_per_1m == 19.99
+        # And it flows through calculate_cost.
+        cost = calculate_cost("gpt-4o", input_tokens=1_000_000, output_tokens=0)
+        assert cost.total_usd == pytest.approx(9.99)
+
+    def test_register_new_model_via_tuple(self):
+        register_pricing("my-private-model", (1.5, 6.0))
+        pricing = get_model_pricing("my-private-model")
+        assert pricing.input_per_1m == 1.5
+        assert pricing.output_per_1m == 6.0
+
+    def test_register_normalizes_key(self):
+        register_pricing("GPT_5", {"input": 2.0, "output": 8.0, "cached": 0.2})
+        # Lookup with any casing / separator resolves to the same entry.
+        assert get_model_pricing("gpt-5").input_per_1m == 2.0
+        assert get_model_pricing("gpt_5").cached_input_per_1m == 0.2
+
+    def test_register_accepts_model_pricing_instance(self):
+        register_pricing("x-model", ModelPricing(3.0, 9.0, 0.3))
+        assert get_model_pricing("x-model").cached_input_per_1m == 0.3
+
+    def test_register_rejects_incomplete_dict(self):
+        with pytest.raises(ValueError):
+            register_pricing("bad", {"input": 1.0})  # missing output
+
+    def test_load_pricing_file_json(self, tmp_path):
+        import json
+
+        f = tmp_path / "pricing.json"
+        f.write_text(json.dumps({
+            "gpt-4o": {"input": 1.0, "output": 2.0},
+            "brand-new": {"input": 4.0, "output": 8.0, "cached": 0.4},
+        }))
+        n = load_pricing_file(f)
+        assert n == 2
+        assert get_model_pricing("gpt-4o").input_per_1m == 1.0
+        assert get_model_pricing("brand-new").cached_input_per_1m == 0.4
+
+    def test_load_pricing_file_yaml(self, tmp_path):
+        f = tmp_path / "pricing.yaml"
+        f.write_text("my-model:\n  input: 5.0\n  output: 10.0\n")
+        assert load_pricing_file(f) == 1
+        assert get_model_pricing("my-model").output_per_1m == 10.0
+
+    def test_load_default_pricing_from_env(self, tmp_path, monkeypatch):
+        import json
+
+        f = tmp_path / "custom.json"
+        f.write_text(json.dumps({"env-model": {"input": 7.0, "output": 14.0}}))
+        monkeypatch.setenv("COMPASS_PRICING_FILE", str(f))
+        count = load_default_pricing()
+        assert count == 1
+        assert get_model_pricing("env-model").input_per_1m == 7.0
+
+    def test_load_default_pricing_missing_env_file_is_safe(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COMPASS_PRICING_FILE", str(tmp_path / "nope.json"))
+        assert load_default_pricing() == 0  # warns, doesn't raise
+
+    def test_reset_pricing_restores_defaults(self):
+        register_pricing("gpt-4o", {"input": 0.01, "output": 0.01})
+        assert get_model_pricing("gpt-4o").input_per_1m == 0.01
+        reset_pricing()
+        assert get_model_pricing("gpt-4o").input_per_1m == 2.50  # built-in default
 
 
 # ===================================================================
