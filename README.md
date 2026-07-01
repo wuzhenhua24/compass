@@ -1928,6 +1928,36 @@ result = await grader.grade(GradeContext(transcript=transcript, outcome=transcri
 - **成本协同**：SDK span 只带 token、不带美元 → 复用 Compass 的可配置价格表补算。
 - 其余框架（LangChain / LlamaIndex / CrewAI 等）后续通过离线 OTLP/OpenInference 导入或各自的 JSONL session 导入接入。
 
+**第二个集成：pi（`@earendil-works/pi-*`）JSONL session 导入**（`compass.integrations.pi_sessions`）
+
+与 OpenAI 的实时 processor 不同，pi 把一次运行**落盘为 JSONL session 树**（首行 session 头，之后每行一个 `SessionTreeEntry`，靠 `parentId` 连成树/分支）。这是一个**离线导入器**——读文件、重建 Transcript：
+
+```python
+from compass.integrations import import_pi_session, import_pi_sessions
+
+t = import_pi_session("~/.pi/sessions/2026-01-01-weather.jsonl")
+# 或批量导入一个目录
+transcripts = import_pi_sessions("~/.pi/sessions/")
+# t.tool_calls / t.reasoning_steps / t.outcome 均已就绪，可直接评分
+```
+
+**映射关系**
+
+| pi 条目 | → Compass |
+|---|---|
+| session 头 `{id, cwd, timestamp}` | `trial_id` / `metadata` / 时间轴 |
+| assistant 消息的 `usage` | 一个 `llm.generation` `ToolCall`（`tokens` + **原生 `cost`**；pi 没记成本时才用可配置价格表补算）|
+| assistant 的 `toolCall` block | `ToolCall`（按 `toolCallId` 匹配对应的 `toolResult` 回填 output/status/duration）|
+| assistant 的 `thinking` block | 一条 reasoning step |
+| `user` 消息 | `input_prompt`（首条）/ 后续 reasoning |
+| `compaction` / `branch_summary` / `model_change` / `custom` … | `metadata` / reasoning |
+
+**设计要点**
+- **只取活跃分支**：默认从 session 当前 leaf 回溯到 root，被放弃的 fork 不进入评估；线性会话等价于文件顺序，异常时回退文件顺序（`active_branch_only=False` 可取全量）。
+- **成本优先用原生**：pi 的 `Usage` 自带美元成本，直接采用；缺失时才用 `calculate_cost` 补算。
+- **鲁棒**：坏行跳过、缺 header 抛 `PiSessionError`、孤儿 `toolResult` 也保留。
+- **零依赖**：纯 JSON 解析，不 import 任何 pi 包。
+
 ## 安装
 
 ```bash

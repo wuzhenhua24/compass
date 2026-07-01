@@ -9,8 +9,18 @@ from compass.integrations.openai_agents import (
     CompassTraceProcessor,
     install_openai_agents_processor,
 )
+from compass.integrations.pi_sessions import (
+    PiSessionError,
+    import_pi_session,
+    import_pi_sessions,
+    load_pi_session,
+)
 
 __all__ = [
     "CompassTraceProcessor",
     "install_openai_agents_processor",
+    "PiSessionError",
+    "import_pi_session",
+    "import_pi_sessions",
+    "load_pi_session",
 ]
