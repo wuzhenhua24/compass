@@ -1886,6 +1886,48 @@ script = f"# {marker}\npython grade.py"
 | `leak_patterns` | 评分器级别的额外检测模式 | `[]` |
 | `leak_markers` (YAML) | Scenario/Case 级别的标记列表 | `[]` |
 
+### 15. 接入外部 Agent 轨迹（无需写 Adapter）
+
+> 设计目标：评估一个在 Compass **之外**运行的 Agent，不用为它写专门的 Adapter——直接把它自带的 trace 桥接成 Compass `Transcript`，再用现有的 Transcript 评分器打分。
+
+Compass 的 Adapter 层适合"Compass 亲自驱动 Agent"的场景（图像/代码沙箱）。但现代 Agent SDK 大多**自带埋点**，为每个 Agent 写 Adapter 不现实。因此提供 `compass.integrations`——把外部 SDK 的原生轨迹**导入**为 Transcript。
+
+**首个集成：OpenAI Agents SDK**（`compass.integrations.openai_agents`）
+
+OpenAI Agents SDK 用类型化 span（`function`/`generation`/`response`/`agent`/`turn`/`handoff`…）记录执行，并开放可插拔的 `TracingProcessor`。Compass 实现了这样一个 processor，用户只加一行：
+
+```python
+from agents import Agent, Runner
+from compass.integrations import install_openai_agents_processor
+
+proc = install_openai_agents_processor()     # 注册到 SDK，仅此一行
+await Runner.run(agent, "今天天气如何？")
+transcript = proc.latest                      # 得到 Compass Transcript，可直接评分
+```
+
+拿到 `Transcript` 后走正常评分路径：
+
+```python
+from compass.graders import get_grader, GradeContext
+
+grader = get_grader("cost_budget")({"max_cost_usd": 0.5})
+result = await grader.grade(GradeContext(transcript=transcript, outcome=transcript.outcome))
+```
+
+**映射关系**
+
+| SDK span | → Compass |
+|---|---|
+| `function`（工具/MCP 调用）| `ToolCall`（`tool_type=function`/`mcp`）|
+| `generation` / `response`（LLM）| `ToolCall`（`tool_type=llm` + `tokens`；成本用可配置定价 `calculate_cost` 补算）|
+| `agent` / `turn` | 通过父链回溯，给每个 `ToolCall` 打上 `agent_name` / `turn_index` |
+| `handoff` / `guardrail` | 记入 `Transcript.metadata` |
+
+**设计要点**
+- **零硬依赖**：processor 是鸭子类型，Compass 不 import `agents`；只有 `install_openai_agents_processor()` 内部才惰性导入。
+- **成本协同**：SDK span 只带 token、不带美元 → 复用 Compass 的可配置价格表补算。
+- 其余框架（LangChain / LlamaIndex / CrewAI 等）后续通过离线 OTLP/OpenInference 导入或各自的 JSONL session 导入接入。
+
 ## 安装
 
 ```bash

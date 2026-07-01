@@ -529,6 +529,10 @@ class Transcript:
     input_prompt: str = ""
     input_params: dict[str, Any] = field(default_factory=dict)
 
+    # Free-form trace-level metadata (e.g. handoffs/guardrails from imported
+    # traces, or anything an adapter/importer wants to attach to the run).
+    metadata: dict[str, Any] = field(default_factory=dict)
+
     # Execution trace
     tool_calls: list[ToolCall] = field(default_factory=list)
     reasoning_steps: list[str] = field(default_factory=list)
@@ -726,6 +730,7 @@ class Transcript:
                 "prompt": self.input_prompt,
                 "params": self.input_params,
             },
+            "metadata": self.metadata,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "reasoning_steps": self.reasoning_steps,
             "outcome": self.outcome.to_dict(),
@@ -1045,6 +1050,7 @@ class Transcript:
             input_prompt=data["input"]["prompt"],
             input_params=data["input"]["params"],
         )
+        transcript.metadata = data.get("metadata", {})
 
         # Restore tool calls
         for tc_data in data.get("tool_calls", []):
