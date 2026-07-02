@@ -1958,6 +1958,37 @@ transcripts = import_pi_sessions("~/.pi/sessions/")
 - **鲁棒**：坏行跳过、缺 header 抛 `PiSessionError`、孤儿 `toolResult` 也保留。
 - **零依赖**：纯 JSON 解析，不 import 任何 pi 包。
 
+**第三个集成：OTLP / OpenInference 通用导入**（`compass.integrations.otlp`）
+
+前两个集成针对具体 SDK。**多数其它框架**（LangChain / LlamaIndex / CrewAI / Haystack / DSPy…）没有 Compass 友好的原生 trace，但都能用 **OpenInference** 语义约定埋点、经 **OpenTelemetry（OTLP）** 导出（如通过 Arize Phoenix）。这个导入器读一份导出的 trace 文件，**每条 trace 重建一个 Transcript**：
+
+```python
+from compass.integrations import import_otlp_file
+
+transcripts = import_otlp_file("phoenix_export.json")   # 一条 trace 一个 Transcript
+t = transcripts[0]
+```
+
+**兼容的输入形态**（自动识别）：OTLP/JSON 信封（`resourceSpans` + `[{key,value:{stringValue}}]` 列表属性）、扁平 span 列表 / OTel SDK `ReadableSpan.to_json()`（属性为扁平 dict）、以及 JSON 或 JSONL（逐行）。
+
+**映射关系**（由 `openinference.span.kind` 驱动）
+
+| span kind | → Compass |
+|---|---|
+| `LLM` / `EMBEDDING` | `ToolCall`（`tool_type=llm` + `tokens`；成本优先用原生 `llm.cost.*`，缺失才补算）|
+| `TOOL` | `ToolCall`（`tool_type=function`，`tool.parameters` 作为 input，JSON 自动解析）|
+| `RETRIEVER` | `ToolCall`（`tool_type=search`，`retrieval.documents.*` 还原为文档列表）|
+| `AGENT` / `CHAIN` | 结构性——父链回溯打 `agent_name`；root chain 的 `input.value`/`output.value` 作为 prompt/outcome |
+| `GUARDRAIL` / `RERANKER` / `EVALUATOR` | 记入 `Transcript.metadata` / reasoning |
+
+**设计要点**
+- **双属性编码**：同时兼容 OTLP 线格式（`[{key,value}]`，含 `intValue` 字符串编码）与 Phoenix/SDK 的扁平 dict。
+- **成本协同**：与前两者一致，原生 `llm.cost.total` 优先，否则用可配置价格表 `calculate_cost` 补算。
+- **鲁棒**：缺 id 的 span 跳过、空 payload / 全垃圾抛 `OTLPImportError`、时间戳兼容纳秒/微秒/毫秒/秒与 ISO 字符串。
+- **零依赖**：不 import 任何 opentelemetry / openinference 包，纯 JSON 解析。
+
+至此，三个集成覆盖了「实时 processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
+
 ## 安装
 
 ```bash
