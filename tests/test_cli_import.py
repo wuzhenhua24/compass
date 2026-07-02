@@ -50,6 +50,32 @@ def _pi_session() -> str:
     return "\n".join(json.dumps(x) for x in lines) + "\n"
 
 
+def _claude_stream_json() -> str:
+    events = [
+        {"type": "system", "subtype": "init", "session_id": "cc-1", "cwd": "/repo"},
+        {"type": "user", "session_id": "cc-1",
+         "message": {"role": "user", "content": "use bash"}},
+        {"type": "assistant", "session_id": "cc-1",
+         "message": {"role": "assistant", "id": "m1", "model": "claude-opus-4-8",
+                     "stop_reason": "tool_use",
+                     "usage": {"input_tokens": 100, "output_tokens": 5},
+                     "content": [{"type": "tool_use", "id": "tu1", "name": "Bash",
+                                  "input": {"command": "echo 4"}}]}},
+        {"type": "user", "session_id": "cc-1",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu1", "content": "4", "is_error": False}]}},
+        {"type": "assistant", "session_id": "cc-1",
+         "message": {"role": "assistant", "id": "m2", "model": "claude-opus-4-8",
+                     "stop_reason": "end_turn",
+                     "usage": {"input_tokens": 10, "output_tokens": 6},
+                     "content": [{"type": "text", "text": "It is 4."}]}},
+        {"type": "result", "subtype": "success", "session_id": "cc-1", "is_error": False,
+         "num_turns": 2, "duration_ms": 500, "duration_api_ms": 400,
+         "total_cost_usd": 0.02, "result": "It is 4."},
+    ]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
 def _otlp_two_traces() -> str:
     spans = []
     for tr in ("trA", "trB"):
@@ -84,6 +110,13 @@ def otlp_file(tmp_path):
     return p
 
 
+@pytest.fixture
+def claude_file(tmp_path):
+    p = tmp_path / "run.stream.jsonl"
+    p.write_text(_claude_stream_json(), encoding="utf-8")
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Format detection
 # ---------------------------------------------------------------------------
@@ -95,6 +128,9 @@ class TestDetect:
 
     def test_detect_otlp(self, otlp_file):
         assert _detect_trace_format(otlp_file) == "otlp"
+
+    def test_detect_claude(self, claude_file):
+        assert _detect_trace_format(claude_file) == "claude"
 
     def test_detect_directory_is_pi(self, tmp_path):
         assert _detect_trace_format(tmp_path) == "pi"
@@ -129,6 +165,23 @@ class TestImportCommand:
         result = CliRunner().invoke(cli, ["import", str(pi_file), "-f", "pi"])
         assert result.exit_code == 0
         assert "format: pi" in result.output
+
+    def test_auto_import_claude_stream_json(self, claude_file):
+        result = CliRunner().invoke(cli, ["import", str(claude_file)])
+        assert result.exit_code == 0
+        assert "format: claude" in result.output
+        assert "cc-1" in result.output
+        assert "It is 4." in result.output
+
+    def test_claude_save_and_reload(self, claude_file, tmp_path):
+        out = tmp_path / "t.json"
+        result = CliRunner().invoke(
+            cli, ["import", str(claude_file), "-f", "claude", "-o", str(out)]
+        )
+        assert result.exit_code == 0
+        loaded = Transcript.load(out)
+        assert loaded.trial_id == "cc-1"
+        assert any(tc.tool_name == "Bash" for tc in loaded.tool_calls)
 
     def test_save_single_file(self, pi_file, tmp_path):
         out = tmp_path / "t.json"
@@ -173,6 +226,7 @@ class TestImportCommand:
         result = CliRunner().invoke(cli, ["import", str(p)])
         assert result.exit_code == 1
         assert "auto-detect" in result.output
+        assert "claude" in result.output
 
     def test_missing_source_errors(self):
         result = CliRunner().invoke(cli, ["import", "/no/such/file.jsonl"])

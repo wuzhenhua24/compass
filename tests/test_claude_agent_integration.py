@@ -8,15 +8,18 @@ these fakes reproduce.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from compass.graders import GradeContext, get_grader
 from compass.integrations import (
+    import_claude_stream_json,
     reconstruct_transcript,
     reconstruct_transcript_from_stream,
 )
+from compass.integrations.claude_agent import reconstruct_transcript_from_wire
 
 # ---------------------------------------------------------------------------
 # Fake SDK messages / blocks (attribute-compatible with claude_agent_sdk)
@@ -241,4 +244,101 @@ class TestGradingIntegration:
         grader = get_grader("cost_budget")({"max_cost_usd": 1.0, "max_tokens": 100_000})
         result = await grader.grade(GradeContext(transcript=t, outcome=t.outcome))
         assert result.details["total_cost_usd"] == pytest.approx(0.0123)
+        assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# Offline stream-json (wire dict) path
+# ---------------------------------------------------------------------------
+
+
+def _wire_run():
+    """stream-json wire dicts: init -> prompt -> assistant(think+Bash) -> result -> assistant."""
+    return [
+        {"type": "system", "subtype": "init", "session_id": "cc-1", "cwd": "/repo"},
+        {"type": "user", "session_id": "cc-1",
+         "message": {"role": "user", "content": "What's 2+2? use bash"}},
+        {"type": "assistant", "session_id": "cc-1",
+         "message": {"role": "assistant", "id": "msg_1", "model": "claude-opus-4-8",
+                     "stop_reason": "tool_use",
+                     "usage": {"input_tokens": 1200, "output_tokens": 30},
+                     "content": [
+                         {"type": "thinking", "thinking": "I'll run echo.", "signature": "s"},
+                         {"type": "tool_use", "id": "tu1", "name": "Bash",
+                          "input": {"command": "echo 4"}},
+                     ]}},
+        {"type": "user", "session_id": "cc-1",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "tu1", "content": "4", "is_error": False}]}},
+        {"type": "assistant", "session_id": "cc-1",
+         "message": {"role": "assistant", "id": "msg_2", "model": "claude-opus-4-8",
+                     "stop_reason": "end_turn",
+                     "usage": {"input_tokens": 15, "output_tokens": 8},
+                     "content": [{"type": "text", "text": "The answer is 4."}]}},
+        {"type": "result", "subtype": "success", "session_id": "cc-1", "is_error": False,
+         "num_turns": 2, "duration_ms": 5300, "duration_api_ms": 5000,
+         "total_cost_usd": 0.0456, "result": "The answer is 4.",
+         "modelUsage": {"claude-opus-4-8": {"input_tokens": 1215}}, "permission_denials": []},
+    ]
+
+
+class TestWireStreamJson:
+    def test_from_wire_dicts(self):
+        t = reconstruct_transcript_from_wire(_wire_run())
+        assert t.trial_id == "cc-1"
+        bash = next(tc for tc in t.tool_calls if tc.tool_name == "Bash")
+        assert bash.input == {"command": "echo 4"}      # nested under message.content
+        assert bash.output == "4"                        # stitched from user tool_result
+        assert bash.turn_index == 1
+        llm = [tc for tc in t.tool_calls if tc.tool_type == "llm"]
+        assert llm[0].tokens.input_tokens == 1200
+        # CLI total attached to final llm call.
+        assert llm[-1].cost.total_usd == pytest.approx(0.0456)
+        assert t.sum_cost().total_usd == pytest.approx(0.0456)
+        assert t.outcome.output_data["final_output"] == "The answer is 4."
+        assert t.total_duration_ms == pytest.approx(5300.0)
+
+    def test_wire_thinking_becomes_reasoning(self):
+        t = reconstruct_transcript_from_wire(_wire_run())
+        assert any("I'll run echo" in s for s in t.reasoning_steps)
+
+    def test_import_from_jsonl_file(self, tmp_path):
+        p = tmp_path / "run.stream.jsonl"
+        p.write_text("\n".join(json.dumps(e) for e in _wire_run()) + "\n", encoding="utf-8")
+        t = import_claude_stream_json(p)
+        assert t.trial_id == "cc-1"
+        assert any(tc.tool_name == "Bash" for tc in t.tool_calls)
+
+    def test_import_from_json_array(self, tmp_path):
+        p = tmp_path / "run.json"
+        p.write_text(json.dumps(_wire_run()), encoding="utf-8")
+        t = import_claude_stream_json(p)
+        assert t.trial_id == "cc-1"
+
+    def test_malformed_line_skipped(self, tmp_path):
+        good = "\n".join(json.dumps(e) for e in _wire_run())
+        p = tmp_path / "run.stream.jsonl"
+        p.write_text(good + "\n{ not json }\n", encoding="utf-8")
+        t = import_claude_stream_json(p)  # must not raise
+        assert any(tc.tool_name == "Bash" for tc in t.tool_calls)
+
+    def test_stream_and_ratelimit_wire_events_skipped(self):
+        events = [
+            {"type": "stream_event", "uuid": "u", "session_id": "cc-2", "event": {"x": 1}},
+            {"type": "rate_limit_event", "uuid": "u2", "session_id": "cc-2",
+             "rate_limit_info": {"status": "allowed"}},
+            {"type": "assistant", "session_id": "cc-2",
+             "message": {"role": "assistant", "model": "claude-opus-4-8",
+                         "content": [{"type": "text", "text": "hi"}]}},
+        ]
+        t = reconstruct_transcript_from_wire(events)
+        assert len(t.tool_calls) == 1  # only the assistant llm call
+
+    def test_empty_content_returns_empty(self):
+        assert reconstruct_transcript_from_wire([]).tool_calls == []
+
+    async def test_grades_on_wire_transcript(self):
+        t = reconstruct_transcript_from_wire(_wire_run())
+        grader = get_grader("tool_usage")({"required_tools": ["Bash"]})
+        result = await grader.grade(GradeContext(transcript=t, outcome=t.outcome))
         assert result.passed is True

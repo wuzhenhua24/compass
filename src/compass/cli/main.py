@@ -639,7 +639,7 @@ def trace(trace_file: str, steps: bool, as_json: bool):
 @click.argument("source", type=click.Path(exists=True))
 @click.option(
     "--format", "-f", "fmt",
-    type=click.Choice(["auto", "pi", "otlp"]), default="auto",
+    type=click.Choice(["auto", "pi", "otlp", "claude"]), default="auto",
     help="Trace format (default: auto-detect)",
 )
 @click.option(
@@ -657,22 +657,24 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
     SOURCE is an offline trace file (or a directory of pi sessions):
 
     \b
-      pi    a pi (@earendil-works/pi-*) JSONL session file, or a directory of them
-      otlp  an OTLP / OpenInference trace JSON (LangChain / LlamaIndex / CrewAI …
-            exported via Arize Phoenix); a single file may hold many traces
+      pi      a pi (@earendil-works/pi-*) JSONL session file, or a directory of them
+      otlp    an OTLP / OpenInference trace JSON (LangChain / LlamaIndex / CrewAI …
+              exported via Arize Phoenix); a single file may hold many traces
+      claude  a Claude Code `--output-format stream-json` file
 
-    Format is auto-detected by default. The OpenAI Agents SDK and Claude Agent
-    SDK integrations are live/streaming (used programmatically via
-    ``compass.integrations``), so they are not file imports.
+    Format is auto-detected by default. The OpenAI Agents SDK integration is
+    live/streaming (used programmatically via ``compass.integrations``); the
+    Claude Agent SDK can be imported from its stream-json output.
 
     Examples:
         compass import session.jsonl                  # auto-detect + summarize
         compass import phoenix_export.json -o out/    # one saved file per trace
-        compass import run.jsonl -f pi -o t.json
+        compass import run.stream.jsonl -f claude -o t.json
     """
     import json as json_mod
 
     from compass.integrations import (
+        import_claude_stream_json,
         import_otlp_file,
         import_pi_session,
         import_pi_sessions,
@@ -683,7 +685,7 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
     if detected is None:
         console.print(
             "[red]Could not auto-detect trace format.[/red] "
-            "Pass [bold]--format pi|otlp[/bold]."
+            "Pass [bold]--format pi|otlp|claude[/bold]."
         )
         sys.exit(1)
 
@@ -692,6 +694,8 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
             transcripts = (
                 import_pi_sessions(src) if src.is_dir() else [import_pi_session(src)]
             )
+        elif detected == "claude":
+            transcripts = [import_claude_stream_json(src)]
         else:  # otlp
             transcripts = import_otlp_file(src)
     except Exception as e:
@@ -723,11 +727,18 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
         console.print(f"\n[dim]View with:[/dim] compass trace {saved[0]}")
 
 
-def _detect_trace_format(path: Path) -> str | None:
-    """Sniff pi vs otlp from a trace file (or directory) without full parsing.
+_CLAUDE_WIRE_TYPES = frozenset(
+    {"assistant", "user", "result", "system", "stream_event", "rate_limit_event"}
+)
 
-    A pi session file's first line is a ``{"type": "session", ...}`` header;
-    anything else that is JSON is treated as OTLP / OpenInference.
+
+def _detect_trace_format(path: Path) -> str | None:
+    """Sniff the trace format from a file (or directory) without full parsing.
+
+    Discriminate by each format's first-line invariant:
+      - pi:     a ``{"type": "session", ...}`` session header
+      - claude: a stream-json line whose ``type`` is a Claude Code message type
+      - otlp:   anything else that is JSON (OTLP / OpenInference)
     """
     import json as json_mod
 
@@ -748,8 +759,11 @@ def _detect_trace_format(path: Path) -> str | None:
         obj = json_mod.loads(first_line)
     except (ValueError, TypeError):
         obj = None
-    if isinstance(obj, dict) and obj.get("type") == "session":
-        return "pi"
+    if isinstance(obj, dict):
+        if obj.get("type") == "session":
+            return "pi"
+        if obj.get("type") in _CLAUDE_WIRE_TYPES:
+            return "claude"
     if first_line[:1] in ("{", "["):
         return "otlp"
     return None

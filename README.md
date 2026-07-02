@@ -1999,6 +1999,14 @@ messages = [m async for m in query(prompt="...")]
 transcript = reconstruct_transcript(messages)   # 也可用 reconstruct_transcript_from_stream 直接吃异步流
 ```
 
+也有**离线路径**：直接读 CLI 的 `--output-format stream-json` 落盘文件（每行一个 wire dict），无需 import SDK：
+
+```python
+from compass.integrations import import_claude_stream_json
+
+transcript = import_claude_stream_json("run.stream.jsonl")   # 复用同一套映射
+```
+
 **映射关系**
 
 | SDK 消息 | → Compass |
@@ -2020,16 +2028,16 @@ transcript = reconstruct_transcript(messages)   # 也可用 reconstruct_transcri
 
 **命令行统一入口：`compass import`**
 
-两个**文件型**导入器（pi、OTLP/OpenInference）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
+三个**文件型**导入器（pi、OTLP/OpenInference、Claude stream-json）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
 
 ```bash
-compass import session.jsonl                  # 自动识别 + 摘要
-compass import phoenix_export.json -o out/    # 多 trace：每条存一个文件
-compass import run.jsonl -f pi -o t.json      # 显式格式 + 存单文件
-compass import phoenix_export.json --json     # 打印重建后的 transcript JSON
+compass import session.jsonl                    # 自动识别 + 摘要
+compass import phoenix_export.json -o out/      # 多 trace：每条存一个文件
+compass import run.stream.jsonl -f claude -o t.json   # Claude stream-json + 存单文件
+compass import phoenix_export.json --json       # 打印重建后的 transcript JSON
 ```
 
-格式自动识别：pi 会话文件首行是 `{"type":"session"}`，其余 JSON 按 OTLP/OpenInference 处理。（OpenAI Agents SDK 与 Claude Agent SDK 是实时/流式集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
+格式自动识别（各用其首行不变量）：pi 会话首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；其余 JSON 按 OTLP/OpenInference 处理。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
 
 **多 Agent / 多轮上下文：一等字段**（ToolCall Protocol v1.2）
 

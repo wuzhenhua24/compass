@@ -18,6 +18,13 @@ adapter**::
     messages = [m async for m in query(prompt="...")]
     transcript = reconstruct_transcript(messages)   # ready to grade
 
+There is also an **offline** path for the CLI's ``--output-format stream-json``
+output (one JSON wire-dict per line), which needs no SDK import at all::
+
+    from compass.integrations import import_claude_stream_json
+
+    transcript = import_claude_stream_json("run.stream.jsonl")
+
 Mapping (SDK message -> Compass):
 - ``AssistantMessage``            -> an ``llm.generation`` ``ToolCall``
   (``TokenUsage`` from ``usage``; ``turn_index`` per assistant message)
@@ -42,8 +49,11 @@ their attributes, so this works on collected SDK objects without importing them.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterable, Iterable
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
@@ -97,6 +107,46 @@ async def reconstruct_transcript_from_stream(
     async for msg in stream:
         builder.consume(msg)
     return builder.finish()
+
+
+def reconstruct_transcript_from_wire(
+    events: Iterable[dict[str, Any]],
+    *,
+    task_id: str | None = None,
+) -> Transcript:
+    """Reconstruct a Transcript from Claude Code **stream-json** wire dicts.
+
+    Each event is a raw dict as emitted by
+    ``claude -p ... --output-format stream-json`` (one JSON object per line):
+    ``{"type": "assistant", "message": {...}, "session_id": ...}`` etc. This is
+    the *offline* counterpart to :func:`reconstruct_transcript` — the wire dicts
+    are adapted to the same shape and fed through the same mapping.
+    """
+    builder = _Builder(task_id=task_id)
+    for event in events:
+        obj = _wire_to_obj(event)
+        if obj is not None:
+            builder.consume(obj)
+    return builder.finish()
+
+
+def import_claude_stream_json(
+    path: str | Path,
+    *,
+    task_id: str | None = None,
+) -> Transcript:
+    """Import a Claude Code ``--output-format stream-json`` file into a Transcript.
+
+    Accepts JSON-lines (the stream-json default), or a single JSON array/object
+    (the ``--output-format json`` shape). Malformed lines are skipped.
+
+    Args:
+        path: Path to the saved stream-json output.
+        task_id: Optional task id; defaults to the run's session id.
+    """
+    path = Path(path).expanduser()
+    events = _load_wire_events(path.read_text(encoding="utf-8"))
+    return reconstruct_transcript_from_wire(events, task_id=task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +407,118 @@ def _tool_type(name: str) -> str:
     if name in _CODE_TOOLS:
         return "code"
     return "function"
+
+
+# ---------------------------------------------------------------------------
+# stream-json wire adapter (dict -> the duck-typed shape _Builder reads)
+# ---------------------------------------------------------------------------
+
+
+def _load_wire_events(content: str) -> list[dict[str, Any]]:
+    """Load stream-json events: JSON-lines, or a single JSON array/object."""
+    stripped = content.strip()
+    if not stripped:
+        return []
+    try:
+        whole = json.loads(stripped)
+    except (ValueError, TypeError):
+        whole = None
+    if isinstance(whole, list):
+        return [e for e in whole if isinstance(e, dict)]
+    if isinstance(whole, dict):
+        return [whole]
+    events: list[dict[str, Any]] = []
+    for line in stripped.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            logger.warning("claude stream-json: skipping non-JSON line")
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
+
+
+def _wire_to_obj(data: Any) -> Any:
+    """Adapt one stream-json wire dict to the attribute shape ``_Builder`` reads.
+
+    Returns ``None`` for events with no reconstruction value (stream deltas,
+    rate-limit events, unknown types).
+    """
+    if not isinstance(data, dict):
+        return None
+    kind = data.get("type")
+    if kind == "assistant":
+        m = data.get("message") or {}
+        blocks = [_wire_block(b) for b in (m.get("content") or []) if isinstance(b, dict)]
+        return SimpleNamespace(
+            content=blocks,
+            model=m.get("model"),
+            usage=m.get("usage"),
+            stop_reason=m.get("stop_reason"),
+            message_id=m.get("id"),
+            session_id=data.get("session_id"),
+            parent_tool_use_id=data.get("parent_tool_use_id"),
+            error=data.get("error"),
+        )
+    if kind == "user":
+        m = data.get("message") or {}
+        content = m.get("content")
+        if isinstance(content, list):
+            content = [_wire_block(b) for b in content if isinstance(b, dict)]
+        # No ``model`` attribute -> classified as a user message.
+        return SimpleNamespace(
+            content=content,
+            parent_tool_use_id=data.get("parent_tool_use_id"),
+            tool_use_result=data.get("tool_use_result"),
+        )
+    if kind == "result":
+        return SimpleNamespace(
+            total_cost_usd=data.get("total_cost_usd"),
+            num_turns=data.get("num_turns"),
+            duration_ms=data.get("duration_ms"),
+            result=data.get("result"),
+            session_id=data.get("session_id"),
+            usage=data.get("usage"),
+            model_usage=data.get("modelUsage"),
+            permission_denials=data.get("permission_denials"),
+            subtype=data.get("subtype"),
+            is_error=data.get("is_error"),
+        )
+    if kind == "system":
+        return SimpleNamespace(
+            subtype=data.get("subtype", ""),
+            data=data,
+            tool_use_id=data.get("tool_use_id"),
+            description=data.get("description"),
+            task_type=data.get("task_type"),
+            session_id=data.get("session_id"),
+        )
+    return None  # stream_event / rate_limit_event / unknown
+
+
+def _wire_block(block: dict[str, Any]) -> Any:
+    kind = block.get("type")
+    if kind == "text":
+        return SimpleNamespace(text=block.get("text", ""))
+    if kind == "thinking":
+        return SimpleNamespace(
+            thinking=block.get("thinking", ""), signature=block.get("signature", "")
+        )
+    if kind in ("tool_use", "server_tool_use"):
+        return SimpleNamespace(
+            id=block.get("id"), name=block.get("name"), input=block.get("input")
+        )
+    if kind in ("tool_result", "advisor_tool_result"):
+        return SimpleNamespace(
+            tool_use_id=block.get("tool_use_id"),
+            content=block.get("content"),
+            is_error=block.get("is_error"),
+        )
+    return SimpleNamespace()  # unknown block -> ignored by _block_kind
 
 
 # ---------------------------------------------------------------------------
