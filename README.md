@@ -2018,6 +2018,19 @@ transcript = reconstruct_transcript(messages)   # 也可用 reconstruct_transcri
 
 至此，四个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
 
+**命令行统一入口：`compass import`**
+
+两个**文件型**导入器（pi、OTLP/OpenInference）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
+
+```bash
+compass import session.jsonl                  # 自动识别 + 摘要
+compass import phoenix_export.json -o out/    # 多 trace：每条存一个文件
+compass import run.jsonl -f pi -o t.json      # 显式格式 + 存单文件
+compass import phoenix_export.json --json     # 打印重建后的 transcript JSON
+```
+
+格式自动识别：pi 会话文件首行是 `{"type":"session"}`，其余 JSON 按 OTLP/OpenInference 处理。（OpenAI Agents SDK 与 Claude Agent SDK 是实时/流式集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
+
 **多 Agent / 多轮上下文：一等字段**（ToolCall Protocol v1.2）
 
 `agent_name` / `turn_index` 已从 `metadata` 提升为 `ToolCall` 的一等字段——因为「哪个 Agent、第几轮发起的调用」是多 Agent 场景下的核心分析维度，不该埋在自由扩展字段里。三个集成都会填充它们（OpenAI/OTLP 走父链回溯，pi 按 assistant 消息计轮次）。向后兼容：`ToolCall.from_dict` 在顶层缺失时会回退读取旧的 `metadata` 位置，老的 transcript 仍能正确加载。
