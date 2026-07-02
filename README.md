@@ -1987,7 +1987,36 @@ t = transcripts[0]
 - **鲁棒**：缺 id 的 span 跳过、空 payload / 全垃圾抛 `OTLPImportError`、时间戳兼容纳秒/微秒/毫秒/秒与 ISO 字符串。
 - **零依赖**：不 import 任何 opentelemetry / openinference 包，纯 JSON 解析。
 
-至此，三个集成覆盖了「实时 processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
+**第四个集成：Claude Agent SDK 消息流**（`compass.integrations.claude_agent`）
+
+Claude Agent SDK（`claude_agent_sdk`）架构独特——它**自己不跑 agent loop**，而是把 Claude Code CLI 当子进程驱动，回吐一串类型化、Anthropic 原生形状的 `Message` 流（`query()` / `ClaudeSDKClient.receive_response()`）。这串消息是 SDK 的**稳定公开契约**，所以我们消费它（而非 CLI 那份刻意内部化的落盘 JSONL）：
+
+```python
+from claude_agent_sdk import query
+from compass.integrations import reconstruct_transcript
+
+messages = [m async for m in query(prompt="...")]
+transcript = reconstruct_transcript(messages)   # 也可用 reconstruct_transcript_from_stream 直接吃异步流
+```
+
+**映射关系**
+
+| SDK 消息 | → Compass |
+|---|---|
+| `AssistantMessage`（`usage`/`model`）| `llm.generation` ToolCall（`tokens`；`turn_index` 按 assistant 消息递增）|
+| 其中的 `ToolUseBlock` | `ToolCall`，按 `tool_use_id` 匹配结果 |
+| **`UserMessage` 携带的 `ToolResultBlock`** | 回填对应调用的 output/status ← **这就是特殊点：Claude Code 约定工具结果是 user 角色消息** |
+| `ServerToolUseBlock`/`ServerToolResultBlock`（web_search/web_fetch/advisor）| 服务端执行的 `ToolCall`（内联结果）|
+| `ResultMessage` | outcome(`result`) + duration + **CLI 已算好的 `total_cost_usd`** |
+| `parent_tool_use_id` + `Task` 调用 | 子 agent 归属 → 一等字段 `agent_name` |
+
+**设计要点**
+- **消费公开契约而非内部落盘**：SDK 明说磁盘 transcript 是"内部 discriminated union，当作不透明 blob"，所以走稳定的 `Message` 流。
+- **成本用 CLI 权威总额**：CLI 只报一个 `total_cost_usd`（比逐调用美元更准），挂到终局 llm 调用上，`sum_cost`/`cost_budget` 即得全程真实成本——**无需价格表**。
+- **子 agent 归属**：`Task` 工具的 `tool_use_id` 与后续消息的 `parent_tool_use_id` 对上，还原 `agent_name`。
+- **零依赖**：鸭子类型读属性，不 import `claude_agent_sdk`。
+
+至此，四个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
 
 **多 Agent / 多轮上下文：一等字段**（ToolCall Protocol v1.2）
 

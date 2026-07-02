@@ -5,6 +5,10 @@ Compass adapter, you bridge the agent framework's own trace/telemetry into a
 Compass ``Transcript`` and grade it with the normal transcript-scope graders.
 """
 
+from compass.integrations.claude_agent import (
+    reconstruct_transcript,
+    reconstruct_transcript_from_stream,
+)
 from compass.integrations.openai_agents import (
     CompassTraceProcessor,
     install_openai_agents_processor,
@@ -25,6 +29,8 @@ from compass.integrations.pi_sessions import (
 __all__ = [
     "CompassTraceProcessor",
     "install_openai_agents_processor",
+    "reconstruct_transcript",
+    "reconstruct_transcript_from_stream",
     "PiSessionError",
     "import_pi_session",
     "import_pi_sessions",
