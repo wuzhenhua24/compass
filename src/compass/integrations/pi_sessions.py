@@ -241,11 +241,15 @@ def _reconstruct(
     pending: dict[str, ToolCall] = {}
     last_assistant_text: str | None = None
     last_model: str | None = None
+    turn = 0  # each assistant message starts a new turn
 
     for entry in entries:
         etype = entry.get("type")
         if etype == "message":
-            text, model = _handle_message(transcript, entry.get("message") or {}, pending)
+            message = entry.get("message") or {}
+            if message.get("role") == "assistant":
+                turn += 1
+            text, model = _handle_message(transcript, message, pending, turn)
             if text is not None:
                 last_assistant_text = text
             if model:
@@ -286,6 +290,7 @@ def _handle_message(
     transcript: Transcript,
     message: dict[str, Any],
     pending: dict[str, ToolCall],
+    turn_index: int,
 ) -> tuple[str | None, str | None]:
     """Map one pi AgentMessage onto the transcript.
 
@@ -302,7 +307,7 @@ def _handle_message(
         return None, None
 
     if role == "assistant":
-        return _handle_assistant(transcript, message, pending)
+        return _handle_assistant(transcript, message, pending, turn_index)
 
     if role == "toolResult":
         _handle_tool_result(transcript, message, pending)
@@ -315,6 +320,7 @@ def _handle_assistant(
     transcript: Transcript,
     message: dict[str, Any],
     pending: dict[str, ToolCall],
+    turn_index: int,
 ) -> tuple[str | None, str | None]:
     ts = _ms_to_epoch(message.get("timestamp"))
     model = message.get("model")
@@ -365,6 +371,7 @@ def _handle_assistant(
             tokens=tokens,
             tool_type="llm",
             metadata=llm_meta,
+            turn_index=turn_index,
         )
     )
 
@@ -378,6 +385,7 @@ def _handle_assistant(
             timestamp=ts,
             tool_type="function",
             metadata={"call_ts": ts},
+            turn_index=turn_index,
         )
         if call_id:  # else let ToolCall generate one
             kwargs["call_id"] = call_id

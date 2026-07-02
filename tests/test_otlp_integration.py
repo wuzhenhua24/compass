@@ -166,8 +166,8 @@ class TestOtlpMapping:
     def test_agent_name_tagging_via_parent_walk(self):
         t = otlp_to_transcripts(_weather_trace())[0]
         # LLM/TOOL/RETRIEVER are children of the AGENT span "WeatherAgent"
-        tagged = [tc for tc in t.tool_calls if tc.metadata.get("agent_name")]
-        assert tagged and all(tc.metadata["agent_name"] == "WeatherAgent" for tc in tagged)
+        tagged = [tc for tc in t.tool_calls if tc.agent_name]
+        assert tagged and all(tc.agent_name == "WeatherAgent" for tc in tagged)
 
     def test_guardrail_recorded_in_metadata_not_tool_calls(self):
         t = otlp_to_transcripts(_weather_trace())[0]

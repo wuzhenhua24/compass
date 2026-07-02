@@ -1,4 +1,4 @@
-# ToolCall Protocol v1
+# ToolCall Protocol v1.2
 
 > 目标：统一不同类型 Agent 的工具调用记录格式，便于跨 Agent 的过程评估、成本分析、合规审计与问题诊断。
 
@@ -34,6 +34,8 @@
 | `trace` | object | 链路信息：`{span_id, parent_id}` |
 | `metadata` | object | 扩展字段 |
 | `redacted` | boolean | 是否已脱敏 |
+| `turn_index` | number \| null | 所属对话轮次（多轮/多 Agent 场景，v1.2 提升为一等字段） |
+| `agent_name` | string \| null | 发起该调用的 Agent 名称（多 Agent 场景，v1.2 提升为一等字段） |
 
 ## 3. 示例
 

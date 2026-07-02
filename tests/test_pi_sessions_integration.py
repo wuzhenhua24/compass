@@ -179,6 +179,17 @@ class TestReconstruction:
         # first turn's llm call precedes the get_weather it requested
         assert names.index("llm.generation") < names.index("get_weather")
 
+    def test_turn_index_is_first_class_field(self):
+        t = load_pi_session(_standard_session())
+        # Turn 1: llm.generation + get_weather; turn 2: final llm.generation.
+        weather = next(tc for tc in t.tool_calls if tc.tool_name == "get_weather")
+        assert weather.turn_index == 1
+        llm = [tc for tc in t.tool_calls if tc.tool_type == "llm"]
+        assert llm[0].turn_index == 1
+        assert llm[1].turn_index == 2
+        # Promoted to a field, not buried in metadata.
+        assert "turn_index" not in weather.metadata
+
 
 class TestBranching:
     def test_active_branch_only_drops_abandoned_fork(self):

@@ -215,7 +215,8 @@ class CompassTraceProcessor:
         duration_ms, timestamp = _timing(span)
         status, error = _status(span)
         tool_type = "mcp" if getattr(data, "mcp_data", None) else "function"
-        metadata = self._context_metadata(span)
+        turn_index, agent_name = self._context(span)
+        metadata: dict[str, Any] = {}
         mcp = getattr(data, "mcp_data", None)
         if mcp:
             metadata["mcp_data"] = mcp
@@ -231,6 +232,8 @@ class CompassTraceProcessor:
                 error=error,
                 tool_type=tool_type,
                 metadata=metadata,
+                turn_index=turn_index,
+                agent_name=agent_name,
             )
         )
 
@@ -254,7 +257,8 @@ class CompassTraceProcessor:
             if model:
                 cost = calculate_cost(model, in_tok, out_tok)
 
-        metadata = self._context_metadata(span)
+        turn_index, agent_name = self._context(span)
+        metadata: dict[str, Any] = {}
         if model:
             metadata["model"] = model
 
@@ -271,12 +275,15 @@ class CompassTraceProcessor:
                 tokens=tokens,
                 tool_type="llm",
                 metadata=metadata,
+                turn_index=turn_index,
+                agent_name=agent_name,
             )
         )
 
-    def _context_metadata(self, span: Any) -> dict[str, Any]:
-        """Walk parent spans to tag this call with agent_name / turn_index."""
-        meta: dict[str, Any] = {}
+    def _context(self, span: Any) -> tuple[int | None, str | None]:
+        """Walk parent spans to resolve the enclosing turn_index / agent_name."""
+        turn_index: int | None = None
+        agent_name: str | None = None
         seen: set[str] = set()
         parent_id = getattr(span, "parent_id", None)
         while parent_id and parent_id not in seen:
@@ -286,16 +293,14 @@ class CompassTraceProcessor:
                 break
             pdata = getattr(parent, "span_data", None)
             ptype = getattr(pdata, "type", None)
-            if ptype == "turn" and "turn_index" not in meta:
-                meta["turn_index"] = getattr(pdata, "turn", None)
-                if "agent_name" not in meta:
-                    agent = getattr(pdata, "agent_name", None)
-                    if agent:
-                        meta["agent_name"] = agent
-            elif ptype == "agent" and "agent_name" not in meta:
-                meta["agent_name"] = getattr(pdata, "name", None)
+            if ptype == "turn" and turn_index is None:
+                turn_index = getattr(pdata, "turn", None)
+                if agent_name is None:
+                    agent_name = getattr(pdata, "agent_name", None)
+            elif ptype == "agent" and agent_name is None:
+                agent_name = getattr(pdata, "name", None)
             parent_id = getattr(parent, "parent_id", None)
-        return meta
+        return turn_index, agent_name
 
     def _finalize(self, transcript: Transcript) -> None:
         """Compute wall-clock timing and a best-effort outcome."""

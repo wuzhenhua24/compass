@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Current protocol version
-TOOLCALL_PROTOCOL_VERSION = "1.1"
+# 1.2: promoted turn_index / agent_name to first-class ToolCall fields.
+TOOLCALL_PROTOCOL_VERSION = "1.2"
 
 
 def _normalize_error(error: dict[str, Any] | str | None) -> dict[str, Any] | None:
@@ -303,6 +304,11 @@ class ToolCall:
     metadata: dict[str, Any] = field(default_factory=dict)
     redacted: bool = False
 
+    # Multi-agent / multi-turn context (first-class; populated by adapters and
+    # by the trace importers in ``compass.integrations``).
+    turn_index: int | None = None
+    agent_name: str | None = None
+
     def __post_init__(self) -> None:
         # Normalize error to dict | None
         self.error = _normalize_error(self.error)  # type: ignore[assignment]
@@ -366,6 +372,8 @@ class ToolCall:
             "trace": self.trace,
             "metadata": self.metadata,
             "redacted": self.redacted,
+            "turn_index": self.turn_index,
+            "agent_name": self.agent_name,
             # Legacy aliases for backward compatibility
             "tool": self.tool_name,
             "args": self.input,
@@ -394,6 +402,12 @@ class ToolCall:
         tokens_data = data.get("tokens")
         tokens = TokenUsage.from_dict(tokens_data) if tokens_data else None
 
+        # turn_index / agent_name: first-class since protocol 1.2, but fall back
+        # to the legacy metadata location so older transcripts still populate them.
+        meta = data.get("metadata", {})
+        turn_index = data.get("turn_index", meta.get("turn_index"))
+        agent_name = data.get("agent_name", meta.get("agent_name"))
+
         return cls(
             tool_name=tool_name,
             input=input_data,
@@ -408,8 +422,10 @@ class ToolCall:
             tool_type=data.get("tool_type"),
             retry_count=data.get("retry_count", 0),
             trace=data.get("trace"),
-            metadata=data.get("metadata", {}),
+            metadata=meta,
             redacted=data.get("redacted", False),
+            turn_index=turn_index,
+            agent_name=agent_name,
         )
 
 
@@ -630,6 +646,8 @@ class Transcript:
         trace: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         redacted: bool = False,
+        turn_index: int | None = None,
+        agent_name: str | None = None,
         # Legacy aliases
         tool: str | None = None,
         args: dict[str, Any] | None = None,
@@ -656,6 +674,8 @@ class Transcript:
                 trace=trace,
                 metadata=metadata or {},
                 redacted=redacted,
+                turn_index=turn_index,
+                agent_name=agent_name,
             )
         )
 
@@ -792,14 +812,19 @@ class Transcript:
         for tc in self.tool_calls:
             # tool_call.started
             started_ts = tc.timestamp
-            events.append({
+            started_event: dict[str, Any] = {
                 "type": "tool_call.started",
                 "ts": started_ts,
                 "call_id": tc.call_id,
                 "tool_name": tc.tool_name,
                 "tool_type": tc.tool_type,
                 "input": tc.input,
-            })
+            }
+            if tc.turn_index is not None:
+                started_event["turn_index"] = tc.turn_index
+            if tc.agent_name is not None:
+                started_event["agent_name"] = tc.agent_name
+            events.append(started_event)
 
             # tool_call.completed
             completed_ts = started_ts + (tc.duration_ms / 1000.0)
@@ -973,6 +998,8 @@ class Transcript:
                     cost=CostInfo.from_dict(cost_data) if cost_data else None,
                     tokens=TokenUsage.from_dict(tokens_data) if tokens_data else None,
                     retry_count=e.get("retry_count", 0),
+                    turn_index=start_event.get("turn_index"),
+                    agent_name=start_event.get("agent_name"),
                 ))
 
         # Collect reasoning steps

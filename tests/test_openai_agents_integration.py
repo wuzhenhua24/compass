@@ -111,8 +111,8 @@ class TestSpanMapping:
         proc = CompassTraceProcessor()
         _run_agent_trace(proc)
         for tc in proc.latest.tool_calls:
-            assert tc.metadata.get("turn_index") == 2
-            assert tc.metadata.get("agent_name") == "WeatherAgent"
+            assert tc.turn_index == 2
+            assert tc.agent_name == "WeatherAgent"
 
     def test_handoff_recorded_in_metadata_not_tool_calls(self):
         proc = CompassTraceProcessor()

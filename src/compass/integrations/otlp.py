@@ -395,7 +395,7 @@ def _add_llm_call(
 
     cost = _cost(span.attrs, model, prompt_tok, completion_tok)
 
-    meta = _context_meta(span, by_id)
+    meta: dict[str, Any] = {}
     if model:
         meta["model"] = model
     if span.attrs.get(_LLM_PROVIDER):
@@ -419,6 +419,7 @@ def _add_llm_call(
             tokens=tokens,
             tool_type="llm",
             metadata=meta,
+            agent_name=_agent_name(span, by_id),
         )
     )
 
@@ -438,7 +439,7 @@ def _add_tool_call(transcript: Transcript, span: _Span, by_id: dict[str, _Span])
             timestamp=span.start_s,
             error={"message": span.status_msg or "error"} if span.is_error else None,
             tool_type="function",
-            metadata=_context_meta(span, by_id),
+            agent_name=_agent_name(span, by_id),
         )
     )
 
@@ -455,7 +456,8 @@ def _add_retriever_call(transcript: Transcript, span: _Span, by_id: dict[str, _S
             timestamp=span.start_s,
             error={"message": span.status_msg or "error"} if span.is_error else None,
             tool_type="search",
-            metadata={**_context_meta(span, by_id), "document_count": len(documents)},
+            metadata={"document_count": len(documents)},
+            agent_name=_agent_name(span, by_id),
         )
     )
 
@@ -543,16 +545,8 @@ def _retrieval_documents(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return [by_index[i] for i in sorted(by_index)]
 
 
-def _context_meta(span: _Span, by_id: dict[str, _Span]) -> dict[str, Any]:
-    """Walk ancestors to tag the call with the enclosing agent name."""
-    meta: dict[str, Any] = {}
-    agent = _agent_name(span, by_id)
-    if agent:
-        meta["agent_name"] = agent
-    return meta
-
-
 def _agent_name(span: _Span, by_id: dict[str, _Span]) -> str | None:
+    """Walk ancestors to resolve the enclosing AGENT span's name."""
     seen: set[str] = set()
     parent_id = span.parent_id
     while parent_id and parent_id not in seen and parent_id in by_id:

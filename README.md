@@ -1920,7 +1920,7 @@ result = await grader.grade(GradeContext(transcript=transcript, outcome=transcri
 |---|---|
 | `function`（工具/MCP 调用）| `ToolCall`（`tool_type=function`/`mcp`）|
 | `generation` / `response`（LLM）| `ToolCall`（`tool_type=llm` + `tokens`；成本用可配置定价 `calculate_cost` 补算）|
-| `agent` / `turn` | 通过父链回溯，给每个 `ToolCall` 打上 `agent_name` / `turn_index` |
+| `agent` / `turn` | 通过父链回溯，给每个 `ToolCall` 写入一等字段 `agent_name` / `turn_index` |
 | `handoff` / `guardrail` | 记入 `Transcript.metadata` |
 
 **设计要点**
@@ -1978,7 +1978,7 @@ t = transcripts[0]
 | `LLM` / `EMBEDDING` | `ToolCall`（`tool_type=llm` + `tokens`；成本优先用原生 `llm.cost.*`，缺失才补算）|
 | `TOOL` | `ToolCall`（`tool_type=function`，`tool.parameters` 作为 input，JSON 自动解析）|
 | `RETRIEVER` | `ToolCall`（`tool_type=search`，`retrieval.documents.*` 还原为文档列表）|
-| `AGENT` / `CHAIN` | 结构性——父链回溯打 `agent_name`；root chain 的 `input.value`/`output.value` 作为 prompt/outcome |
+| `AGENT` / `CHAIN` | 结构性——父链回溯写入一等字段 `agent_name`；root chain 的 `input.value`/`output.value` 作为 prompt/outcome |
 | `GUARDRAIL` / `RERANKER` / `EVALUATOR` | 记入 `Transcript.metadata` / reasoning |
 
 **设计要点**
@@ -1988,6 +1988,10 @@ t = transcripts[0]
 - **零依赖**：不 import 任何 opentelemetry / openinference 包，纯 JSON 解析。
 
 至此，三个集成覆盖了「实时 processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
+
+**多 Agent / 多轮上下文：一等字段**（ToolCall Protocol v1.2）
+
+`agent_name` / `turn_index` 已从 `metadata` 提升为 `ToolCall` 的一等字段——因为「哪个 Agent、第几轮发起的调用」是多 Agent 场景下的核心分析维度，不该埋在自由扩展字段里。三个集成都会填充它们（OpenAI/OTLP 走父链回溯，pi 按 assistant 消息计轮次）。向后兼容：`ToolCall.from_dict` 在顶层缺失时会回退读取旧的 `metadata` 位置，老的 transcript 仍能正确加载。
 
 ## 安装
 

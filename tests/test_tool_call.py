@@ -380,6 +380,44 @@ class TestToolCall:
         assert d["cost"] is None
         assert d["tokens"] is None
 
+    def test_turn_index_agent_name_defaults(self):
+        """New context fields default to None."""
+        tc = ToolCall(tool_name="test")
+        assert tc.turn_index is None
+        assert tc.agent_name is None
+
+    def test_turn_index_agent_name_roundtrip(self):
+        """turn_index / agent_name survive to_dict -> from_dict as first-class fields."""
+        original = ToolCall(tool_name="t", turn_index=3, agent_name="Planner")
+        d = original.to_dict()
+        assert d["turn_index"] == 3
+        assert d["agent_name"] == "Planner"
+        restored = ToolCall.from_dict(d)
+        assert restored.turn_index == 3
+        assert restored.agent_name == "Planner"
+
+    def test_from_dict_legacy_metadata_location(self):
+        """Old transcripts stored these in metadata -> still populate the fields."""
+        legacy = {
+            "tool_name": "t",
+            "metadata": {"turn_index": 2, "agent_name": "Weather"},
+        }
+        tc = ToolCall.from_dict(legacy)
+        assert tc.turn_index == 2
+        assert tc.agent_name == "Weather"
+
+    def test_from_dict_top_level_wins_over_metadata(self):
+        """First-class value takes precedence over a stale metadata copy."""
+        data = {
+            "tool_name": "t",
+            "turn_index": 5,
+            "agent_name": "New",
+            "metadata": {"turn_index": 2, "agent_name": "Old"},
+        }
+        tc = ToolCall.from_dict(data)
+        assert tc.turn_index == 5
+        assert tc.agent_name == "New"
+
 
 # ===================================================================
 # Transcript integration tests
@@ -1140,6 +1178,8 @@ class TestTranscriptJsonl:
             duration_ms=500.0,
             cost={"total_usd": 0.02, "input_cost_usd": 0.01, "output_cost_usd": 0.01},
             tokens={"input_tokens": 50, "output_tokens": 30},
+            turn_index=1,
+            agent_name="Planner",
         )
         original.add_tool_call(
             tool_name="sandbox.exec",
@@ -1180,6 +1220,8 @@ class TestTranscriptJsonl:
         assert restored.input_params == original.input_params
         assert len(restored.tool_calls) == 2
         assert restored.tool_calls[0].tool_name == "llm.chat.completion"
+        assert restored.tool_calls[0].turn_index == 1
+        assert restored.tool_calls[0].agent_name == "Planner"
         assert restored.tool_calls[1].tool_name == "sandbox.exec"
         assert restored.reasoning_steps == original.reasoning_steps
         assert restored.final_score == original.final_score
