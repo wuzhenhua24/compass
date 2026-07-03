@@ -32,10 +32,11 @@
 
 ```
 examples/ops_qa/
-├── dataset.yaml   # 四类样本的 golden 数据集模板（含字段说明）
-├── graders.py     # 四个领域 grader：key_facts / retrieval_hit / no_write_ops / abstention
-├── fixtures.py    # 每题的 canned 运行（Claude stream-json wire dict）→ 离线可跑
-├── eval.py        # 评估编排：跑 agent → 重建 → 按类型选 grader → 报告
+├── dataset.yaml               # 四类样本的通用模板（配 fixtures，可离线跑）
+├── dataset.ops-qa-bot.yaml    # 对着 ops-qa-bot 真实 docs 生成的起始数据集（跑真实 bot 用）
+├── graders.py                 # 四个领域 grader：key_facts / retrieval_hit / no_write_ops / abstention
+├── fixtures.py                # 每题的 canned 运行（Claude stream-json wire dict）→ 离线可跑
+├── eval.py                    # 评估编排：跑 agent → 重建 → 按类型选 grader → 报告
 └── README.md
 ```
 
@@ -45,7 +46,30 @@ examples/ops_qa/
 uv run python examples/ops_qa/eval.py
 ```
 
-用 `fixtures.py` 里预置的运行演示整条流水线，输出每题的 gate 通过情况与逐项得分。
+用 `dataset.yaml` + `fixtures.py` 里预置的运行演示整条流水线，输出每题的 gate 通过情况与逐项得分。
+
+## 对着真实 docs 的起始数据集
+
+`dataset.ops-qa-bot.yaml` 是照着 `ops-qa-bot/docs/` 的真实内容生成的 19 条起始样本
+（Redis 7.2.4 / MySQL 8.0.35+MHA / Kafka 3.6.1，`key_facts` 均可在文档里查到），覆盖：
+
+- **answerable**：redis/mysql/kafka 的版本拓扑、内存告警、慢查询、备份、消费延迟等；
+  外加 **nginx**——它的文档维护在飞书，所以检索走 `query_feishu_doc` 工具而非本地 `Read`
+  （`eval.py` 会据此对有 `expected_doc` 的用 `retrieval_hit`、对 `require_tools` 的用 `tool_usage`）。
+- **unanswerable** 两种弃答：完全越界（Elasticsearch → "未在文档范围内"）、组件内缺失
+  （Kafka `max.message.bytes` → "文档中未找到" + `<<ESCALATE:...:kafka>>`）。
+- **live**：redis 实时内存、kafka 实时 LAG（只读诊断）。
+- **forbidden_write**：`FLUSHDB` / `CONFIG SET` / kafka `reset-offsets --execute` / `DROP`
+  ——都是文档里点名的危险操作，`no_write_ops` 会拦（只提议不执行）。
+
+接上真实 bot（把 `eval.py` 的 `run_agent` 换成 live 调用）后：
+
+```bash
+uv run python examples/ops_qa/eval.py dataset.ops-qa-bot.yaml
+```
+
+> 这份数据集没有 fixtures（要跑真实 bot）。请按你的实际文档校订 `reference_answer`，
+> 并把负责人 `open_id` 等按 `docs/INDEX.md` 补全。
 
 ## 接你的真实 bot
 

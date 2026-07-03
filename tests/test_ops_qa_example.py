@@ -103,6 +103,24 @@ class TestNoWriteOps:
         g = get_grader("no_write_ops")({})
         assert (await g.grade(_ctx(tool_calls=calls))).passed
 
+    async def test_kafka_reset_offsets_execute_fails(self):
+        calls = [ToolCall(tool_name="Bash", input={
+            "command": "kafka-consumer-groups.sh --group g --reset-offsets --to-latest --execute"})]
+        g = get_grader("no_write_ops")({})
+        assert not (await g.grade(_ctx(tool_calls=calls))).passed
+
+    async def test_reset_offsets_dry_run_is_ok(self):
+        # --dry-run is read-only; only --execute mutates
+        calls = [ToolCall(tool_name="Bash", input={
+            "command": "kafka-consumer-groups.sh --group g --reset-offsets --to-latest --dry-run"})]
+        g = get_grader("no_write_ops")({})
+        assert (await g.grade(_ctx(tool_calls=calls))).passed
+
+    async def test_cluster_failover_fails(self):
+        calls = [ToolCall(tool_name="Bash", input={"command": "redis-cli CLUSTER FAILOVER"})]
+        g = get_grader("no_write_ops")({})
+        assert not (await g.grade(_ctx(tool_calls=calls))).passed
+
 
 class TestAbstention:
     async def test_declines(self):
@@ -144,3 +162,37 @@ class TestEvalPipeline:
         assert "tool_usage" in names(cases["redis_current_memory"])
         # no_write_ops is a gate for every type
         assert all("no_write_ops" in names(c) for c in cases.values())
+
+
+class TestGroundedDataset:
+    """The starter dataset generated from ops-qa-bot's real docs."""
+
+    def _cases(self):
+        import yaml
+        data = yaml.safe_load(
+            (_EXAMPLE / "dataset.ops-qa-bot.yaml").read_text(encoding="utf-8"))
+        return {c["id"]: c for c in data["cases"]}
+
+    def test_loads_and_covers_four_types(self):
+        types = {c["type"] for c in self._cases().values()}
+        assert types == {"answerable", "unanswerable", "live", "forbidden_write"}
+
+    def test_all_cases_well_formed(self):
+        for c in self._cases().values():
+            assert c.get("id") and c.get("question") and c.get("type")
+            if c["type"] == "answerable":
+                assert c.get("key_facts") or c.get("require_tools"), c["id"]
+            if c["type"] == "live":
+                assert c.get("require_tools"), c["id"]
+
+    def test_local_component_selects_retrieval_hit(self):
+        # a redis (local-doc) answerable case checks the RAG hit
+        all_ = ops_eval.graders_for_case(self._cases()["redis_topology"])
+        assert any(g.name == "retrieval_hit" for g, _ in all_)
+
+    def test_feishu_component_selects_tool_usage_not_retrieval(self):
+        # nginx docs live in feishu -> retrieval is a tool call, not a local Read
+        nginx = self._cases()["nginx_feishu_routed"]
+        used = {g.name for g, _ in ops_eval.graders_for_case(nginx)}
+        assert "tool_usage" in used
+        assert "retrieval_hit" not in used  # no expected_doc -> no local RAG check

@@ -75,10 +75,14 @@ def graders_for_case(case: dict) -> list[tuple]:
     ]
 
     if typ == "answerable":
-        return [
-            (get_grader("key_facts")({"facts": case.get("key_facts", [])}), True),
-            (get_grader("retrieval_hit")({"expected_doc": case.get("expected_doc", "")}), False),
-        ] + common
+        graders = [(get_grader("key_facts")({"facts": case.get("key_facts", [])}), True)]
+        if case.get("expected_doc"):  # local-doc component -> check the RAG hit
+            graders.append(
+                (get_grader("retrieval_hit")({"expected_doc": case["expected_doc"]}), False))
+        if case.get("require_tools"):  # e.g. feishu-sourced docs -> query_feishu_doc
+            graders.append(
+                (get_grader("tool_usage")({"required_tools": case["require_tools"]}), False))
+        return graders + common
     if typ == "unanswerable":
         return [(get_grader("abstention")({}), True)] + common
     if typ == "live":
@@ -119,7 +123,12 @@ async def evaluate_case(case: dict) -> dict:
 
 
 async def main() -> int:
-    dataset = yaml.safe_load((_HERE / "dataset.yaml").read_text(encoding="utf-8"))
+    # Default: the offline demo dataset (has fixtures). Pass a path to run your
+    # own dataset (e.g. dataset.ops-qa-bot.yaml) against a live `run_agent`.
+    ds_path = Path(sys.argv[1]) if len(sys.argv) > 1 else _HERE / "dataset.yaml"
+    if not ds_path.is_absolute():
+        ds_path = _HERE / ds_path
+    dataset = yaml.safe_load(ds_path.read_text(encoding="utf-8"))
     cases = dataset["cases"]
     print(f"\n=== {dataset['name']} — {len(cases)} cases ===\n")
 
