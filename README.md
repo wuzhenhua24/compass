@@ -12,7 +12,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
-- **可复用的过程评分器**：`cost_budget` / `latency_budget` / `loop_detection` / `tool_usage`——与领域无关，任何 Agent 都能用
+- **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage`，以及**过程侧的 LLM 判官** `trajectory_judge`（判调用链是否合理/遗漏关键步骤/过度探索——规则覆盖不了的定性维度；机器通用、criteria 由你配）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
@@ -419,6 +419,7 @@ class EfficiencyGrader(CodeGrader):
 | `integration_test` | Code | Outcome | 运行外部测试脚本，按通过比例计分（支持 pytest/rspec/go test/JSON 输出解析） |
 | `safety_check` | Model | Outcome | NSFW / 水印 / 版权检测 |
 | `rubric` | Model | Outcome | 多维度 Rubric 评审，结构化输出 |
+| `trajectory_judge` | Model | Transcript | **LLM 判官评"过程"**：调用链是否合理 / 是否遗漏关键步骤 / 是否过度探索 / 工具选择是否恰当——规则覆盖不了的定性维度 |
 | `human_review` | Human | Outcome | 人工评审任务创建 |
 
 #### Outcome vs Path 原则

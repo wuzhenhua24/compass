@@ -6,6 +6,7 @@ from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.model.rubric import RubricGrader
 from compass.graders.model.safety import SafetyCheckGrader
 from compass.graders.model.semantic import SemanticMatchGrader
+from compass.graders.model.trajectory import TrajectoryJudgeGrader
 from compass.graders.model.vlm import VLMJudgeGrader
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "SafetyCheckGrader",
     "RubricGrader",
     "EditCorrectnessGrader",
+    "TrajectoryJudgeGrader",
 ]
