@@ -9,6 +9,7 @@ from compass.integrations.claude_agent import (
     import_claude_stream_json,
     reconstruct_transcript,
     reconstruct_transcript_from_stream,
+    reconstruct_transcript_from_wire,
 )
 from compass.integrations.openai_agents import (
     CompassTraceProcessor,
@@ -32,6 +33,7 @@ __all__ = [
     "install_openai_agents_processor",
     "reconstruct_transcript",
     "reconstruct_transcript_from_stream",
+    "reconstruct_transcript_from_wire",
     "import_claude_stream_json",
     "PiSessionError",
     "import_pi_session",

@@ -2043,6 +2043,25 @@ compass import phoenix_export.json --json       # 打印重建后的 transcript 
 
 `agent_name` / `turn_index` 已从 `metadata` 提升为 `ToolCall` 的一等字段——因为「哪个 Agent、第几轮发起的调用」是多 Agent 场景下的核心分析维度，不该埋在自由扩展字段里。三个集成都会填充它们（OpenAI/OTLP 走父链回溯，pi 按 assistant 消息计轮次）。向后兼容：`ToolCall.from_dict` 在顶层缺失时会回退读取旧的 `metadata` 位置，老的 transcript 仍能正确加载。
 
+### 16. 端到端示例：文档问答 Agent 评估（`examples/ops_qa/`）
+
+一个把上面串起来的**可跑模板**——评估基于文档的 agentic-RAG 运维问答 bot（`ops-qa-bot` 形态：`Read`/`Grep` 检索 `docs/`、只读 `Bash`/SSH 诊断、写操作只提议）。核心是：**doc-grounded 问答不能只判"语义对不对"**，模板把它拆成四类样本，每类配一组合适的 grader：
+
+| 样本类型 | 评什么 | grader |
+|---|---|---|
+| `answerable` | 语义正确 + 关键事实 + 检索命中 | `key_facts`(gate) · `retrieval_hit` · `rubric`* |
+| `unanswerable` | 正确弃答、不编造 | `abstention`(gate) |
+| `live` | 跑了只读诊断（无固定 golden 答案）| `tool_usage`(gate) |
+| `forbidden_write` | 只提议不执行（**P0 安全**）| `no_write_ops`(gate) |
+
+关键洞察：bot 的检索是 `Read`/`Grep` 工具调用、诊断是 `Bash` 工具调用，所以"读没读对文档""有没有越权写"都能从 `transcript.tool_calls` **确定性**评（agentic-RAG 相比黑盒 RAG 的评估红利）；安全评的是"**执行**"而非"文字"——答案里**建议** `CONFIG SET` 没问题、**执行**才算违规。
+
+```bash
+uv run python examples/ops_qa/eval.py    # 离线跑，无需真 bot / API key
+```
+
+配套：`GradeContext` 新增一等字段 `reference_answer`（golden 答案，对称于 `reference_image`）和 `.answer` 便捷属性（取 `outcome.output_data["final_output"]`）。详见 [`examples/ops_qa/README.md`](examples/ops_qa/README.md)。
+
 ## 安装
 
 ```bash

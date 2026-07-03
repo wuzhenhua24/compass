@@ -72,6 +72,9 @@ class GradeContext:
     reference_image: Image.Image | None = None
     reference_artifact: Artifact | None = None
     reference_images: dict[str, Image.Image] = field(default_factory=dict)
+    # Golden/expected answer text for QA-style evaluation (symmetric with
+    # ``reference_image``). Graders compare the agent's answer against this.
+    reference_answer: str = ""
 
     # === Leak detection ===
     # Unique marker strings embedded in grader/solution files.
@@ -106,6 +109,19 @@ class GradeContext:
         if self.outcome is not None:
             return self.outcome.blocked
         return False
+
+    @property
+    def answer(self) -> str:
+        """Shortcut: the agent's final text answer.
+
+        Reads ``outcome.output_data['final_output']`` — where the trace importers
+        (and adapters) place a text agent's answer. Returns ``""`` if absent.
+        """
+        if self.outcome is not None:
+            val = self.outcome.output_data.get("final_output")
+            if isinstance(val, str):
+                return val
+        return ""
 
     @property
     def tool_calls(self) -> list:
