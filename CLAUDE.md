@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Compass is a universal Agent QA framework for testing and evaluating AI Agents. Design inspired by [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
+Compass is a **substrate for Agent evaluation** — not a "evals everything out of the box" framework. It provides the reusable spine (a standard Transcript/Outcome model + ToolCall protocol, trace ingestion, domain-agnostic *process* graders, and reliability metrics); domain *correctness* graders and datasets are user code that plugs in (like `tests/` using pytest). Design inspired by [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
+
+Positioning discipline (keep this in mind when extending): the core stays small. Process/reliability checks (TRANSCRIPT scope: cost, latency, loops, tool usage, dangerous-op execution) are reusable and belong in the framework; correctness checks (OUTCOME scope: is the answer/image/code right) are domain-specific and belong in user graders. Domain-specific fields (e.g. `expected_doc`, `key_facts`) go in grader config or a user harness, NOT the core Scenario/GradeContext models — resist adding them to core. See README "定位：是什么 / 不是什么".
 
 ## Common Commands
 
