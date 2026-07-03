@@ -15,6 +15,7 @@ LLM-judge for semantic correctness / groundedness.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -60,11 +61,30 @@ def run_agent(case: dict) -> Transcript:
 # ---------------------------------------------------------------------------
 
 
-def graders_for_case(case: dict) -> list[tuple]:
+def _key_steps_for(case: dict) -> list[str]:
+    """Expected process for the trajectory judge to verify, by sample type."""
+    typ = case["type"]
+    if typ == "answerable":
+        if case.get("expected_doc"):
+            return [
+                f"检索 {case['expected_doc']} 下的相关文档",
+                "基于检索到的文档内容作答，不凭空编造",
+            ]
+        if case.get("require_tools"):
+            return ["用对应工具查询文档来源（如 query_feishu_doc）", "基于查到的内容作答"]
+    if typ == "live":
+        return ["执行只读诊断命令获取实时状态", "结合实时数据与文档给出解读"]
+    return []
+
+
+def graders_for_case(case: dict, *, use_judge: bool = False) -> list[tuple]:
     """Return [(grader, is_gate)] for a case, chosen by its sample type.
 
     Gate graders must all pass for the case to pass; non-gate graders still
-    contribute detail/score (e.g. cost, retrieval quality).
+    contribute detail/score (e.g. cost, retrieval quality). ``use_judge`` adds
+    the LLM ``trajectory_judge`` (needs a provider key) as a non-gate process
+    check on answerable/live cases — it verifies "retrieved first, then answered"
+    rather than the countable stuff rules already cover.
     """
     typ = case["type"]
     # Always-on process checks (no_write_ops is a P0 gate for every type).
@@ -74,24 +94,30 @@ def graders_for_case(case: dict) -> list[tuple]:
         (get_grader("loop_detection")({}), False),
     ]
 
+    specific: list[tuple] = []
     if typ == "answerable":
-        graders = [(get_grader("key_facts")({"facts": case.get("key_facts", [])}), True)]
+        specific = [(get_grader("key_facts")({"facts": case.get("key_facts", [])}), True)]
         if case.get("expected_doc"):  # local-doc component -> check the RAG hit
-            graders.append(
+            specific.append(
                 (get_grader("retrieval_hit")({"expected_doc": case["expected_doc"]}), False))
         if case.get("require_tools"):  # e.g. feishu-sourced docs -> query_feishu_doc
-            graders.append(
+            specific.append(
                 (get_grader("tool_usage")({"required_tools": case["require_tools"]}), False))
-        return graders + common
-    if typ == "unanswerable":
-        return [(get_grader("abstention")({}), True)] + common
-    if typ == "live":
+    elif typ == "unanswerable":
+        specific = [(get_grader("abstention")({}), True)]
+    elif typ == "live":
         required = case.get("require_tools", ["Bash"])
-        return [(get_grader("tool_usage")({"required_tools": required}), True)] + common
-    if typ == "forbidden_write":
-        # no_write_ops (in `common`) is the P0 gate here.
-        return common
-    return common
+        specific = [(get_grader("tool_usage")({"required_tools": required}), True)]
+    # forbidden_write: no gate beyond no_write_ops (in `common`).
+
+    # LLM process judge (non-gate, soft signal; needs a provider key).
+    if use_judge:
+        steps = _key_steps_for(case)
+        if steps:
+            specific.append(
+                (get_grader("trajectory_judge")({"expected_key_steps": steps}), False))
+
+    return specific + common
 
 
 def build_context(case: dict, transcript: Transcript) -> GradeContext:
@@ -108,12 +134,12 @@ def build_context(case: dict, transcript: Transcript) -> GradeContext:
 # ---------------------------------------------------------------------------
 
 
-async def evaluate_case(case: dict) -> dict:
+async def evaluate_case(case: dict, *, use_judge: bool = False) -> dict:
     transcript = run_agent(case)
     ctx = build_context(case, transcript)
     rows = []
     gate_passed = True
-    for grader, is_gate in graders_for_case(case):
+    for grader, is_gate in graders_for_case(case, use_judge=use_judge):
         res = await grader.grade(ctx)
         rows.append((grader.name, is_gate, res))
         if is_gate and not res.passed:
@@ -130,11 +156,16 @@ async def main() -> int:
         ds_path = _HERE / ds_path
     dataset = yaml.safe_load(ds_path.read_text(encoding="utf-8"))
     cases = dataset["cases"]
-    print(f"\n=== {dataset['name']} — {len(cases)} cases ===\n")
+
+    # The LLM trajectory judge (process quality) auto-enables when a provider key
+    # is present; the offline fixture demo runs without it.
+    use_judge = bool(os.environ.get("OPENAI_API_KEY"))
+    judge_note = "on (trajectory_judge)" if use_judge else "off (no OPENAI_API_KEY)"
+    print(f"\n=== {dataset['name']} — {len(cases)} cases | LLM process judge: {judge_note} ===\n")
 
     n_pass = 0
     for case in cases:
-        report = await evaluate_case(case)
+        report = await evaluate_case(case, use_judge=use_judge)
         status = "PASS" if report["passed"] else "FAIL"
         n_pass += report["passed"]
         print(f"[{status}] {case['id']}  ({case['type']})")

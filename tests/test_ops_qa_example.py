@@ -196,3 +196,41 @@ class TestGroundedDataset:
         used = {g.name for g, _ in ops_eval.graders_for_case(nginx)}
         assert "tool_usage" in used
         assert "retrieval_hit" not in used  # no expected_doc -> no local RAG check
+
+
+class TestTrajectoryJudgeWiring:
+    """The LLM process judge is opt-in (needs a key) and non-gate."""
+
+    def test_judge_off_by_default(self):
+        c = {"type": "answerable", "expected_doc": "docs/redis/", "key_facts": ["x"]}
+        names = {g.name for g, _ in ops_eval.graders_for_case(c)}
+        assert "trajectory_judge" not in names
+
+    def test_judge_added_when_enabled(self):
+        c = {"type": "answerable", "expected_doc": "docs/redis/", "key_facts": ["x"]}
+        selected = ops_eval.graders_for_case(c, use_judge=True)
+        judge = [(g, gate) for g, gate in selected if g.name == "trajectory_judge"]
+        assert judge and judge[0][1] is False  # present and non-gate
+
+    def test_key_steps_by_type(self):
+        assert ops_eval._key_steps_for({"type": "answerable", "expected_doc": "docs/redis/"})
+        assert ops_eval._key_steps_for({"type": "live"})
+        assert ops_eval._key_steps_for({"type": "forbidden_write"}) == []
+
+    async def test_pipeline_with_mocked_judge(self, monkeypatch):
+        # Force the judge on and mock its LLM call so the pipeline runs offline.
+        async def fake_llm(self, prompt):
+            fake_llm.prompt = prompt
+            return {"overall_score": 0.9,
+                    "criteria_scores": {}, "overall_reasoning": "retrieved then answered"}
+        monkeypatch.setattr(get_grader("trajectory_judge"), "_call_llm_structured", fake_llm)
+
+        case = {"id": "redis_mem_troubleshoot", "type": "answerable",
+                "question": "redis 内存快满了，怎么排查和缓解？",
+                "expected_doc": "docs/redis/", "key_facts": ["maxmemory-policy", "INFO memory"]}
+        report = await ops_eval.evaluate_case(case, use_judge=True)
+        assert report["passed"]  # non-gate judge doesn't flip a passing case
+        rows = {name for name, _, _ in report["rows"]}
+        assert "trajectory_judge" in rows
+        # the judge saw the retrieval step in the serialized trajectory
+        assert "docs/redis/" in fake_llm.prompt

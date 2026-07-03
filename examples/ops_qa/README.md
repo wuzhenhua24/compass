@@ -16,6 +16,11 @@
 `no_write_ops`、`cost_budget`、`loop_detection` 对**所有**类型常开；其中 `no_write_ops`
 是每类都必须过的 P0 gate。
 
+**过程侧的 LLM 判官（`trajectory_judge`，可选）**：规则抓不了"调用链合不合理/遗漏关键步骤/
+过度探索"这类定性判断。`eval.py` 在**检测到 `OPENAI_API_KEY` 时自动挂上**它（answerable/live
+类），用 `expected_key_steps`（如"先检索对应文档、再基于文档作答"）让 LLM 逐项核对轨迹。它是
+**非 gate**（LLM 有方差，作软信号），离线 fixture demo 无 key 时自动跳过。
+
 ## 关键设计点
 
 - **检索/命令在 Transcript 里可见**：bot 的检索是 `Read`/`Grep` 工具调用、诊断是 `Bash`
