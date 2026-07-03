@@ -1,8 +1,53 @@
 # Compass - Agent QA Framework
 
-Compass 是一个通用的 Agent 质量保障框架，旨在为 AI Agent 产品提供系统化的测试、评估和可观测能力。
+Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执行轨迹模型、多来源轨迹接入、可复用的过程评分器与可靠性指标——领域相关的"答案对不对"由你用几十行自定义 grader 补齐。它之于 Agent 评测，就像 pytest 之于测试、OpenTelemetry 之于可观测：**框架给骨架和标准，业务判定你来写**。
 
 > 设计理念参考 [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+
+## 定位：是什么 / 不是什么
+
+面对市面上千差万别的 Agent 场景，Compass **不追求"开箱即评一切"**——那不现实，定制化必然存在。它的目标是把**所有 Agent 都需要的那层基座做厚**，让**每个 Agent 特有的定制层尽量薄**。定制不是缺陷，是产品留给你的插槽；框架的活是让它变小。
+
+**✅ 是什么**
+
+- **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
+- **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
+- **可复用的过程评分器**：`cost_budget` / `latency_budget` / `loop_detection` / `tool_usage`——与领域无关，任何 Agent 都能用
+- **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行
+- **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
+
+**🚫 不是什么**
+
+- 不是"开箱评测任意 Agent"的银弹——**领域正确性判定必然要你写**（这是设计，不是缺陷）
+- 不内置每个领域的正确性 grader（图像美学、代码功能、答案事实……天然定制）
+- 不强求"驱动任意 Agent 跑"——自跑的 Agent 走**导入轨迹**更合适（见下）
+
+### 核心 vs 领域：一条干净的分界线
+
+哪些评分通用、哪些必然定制，由 **GraderScope**（Transcript/Outcome 分离）直接预测：
+
+| | 域 | 例子 | 谁写 |
+|---|---|------|------|
+| **过程** | TRANSCRIPT | 成本 / 延迟 / 绕圈 / 工具使用 / 是否执行危险操作 | ✅ 框架内置，跨 Agent 复用 |
+| **正确性** | OUTCOME | 答案对不对 / 图美不美 / 代码能不能跑 | ✍️ 你写领域 grader（通常几十行） |
+
+> **纪律**：核心 schema 保持小。领域字段（如 ops_qa 里的 `expected_doc` / `key_facts`）放进 grader config 或用户 harness，**别塞进核心模型**——这是防止"定制爆炸"淹没框架的关键。（反例参照物：`reference_answer` 之所以能进 `GradeContext`，是因为它像 `reference_image` 一样是跨领域的"参考数据"通用概念，而非某个领域的字段。）
+
+### 两种接入方式（按 Agent 能否被外部驱动来选）
+
+- **驱动（Adapter）**：Compass 亲自跑 Agent——适合图像生成端点、代码沙箱这类可被外部调用的场景
+- **消费轨迹（Import）**：Agent 自己跑，Compass 消费它产出的轨迹——适合多数现代 LLM Agent（见「接入外部 Agent 轨迹」一节）
+
+### 何时用 Compass / 何时直接 DIY
+
+Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够了——框架不假装自己永远划算：
+
+| 用 Compass 划算 | DIY 就好 |
+|-----------------|----------|
+| 关心**过程**（成本/工具/安全/检索/绕圈），不只最终答案 | 只需"最终字符串 vs golden"比对 |
+| 有**多个** Agent / 框架，想要一套评测词汇 | 一次性的单个 Agent |
+| 要**可靠性指标**（pass^k）与趋势 | 一次性 check 就行 |
+| 评一个**你不驱动、只拿到轨迹**的 Agent | 你完全掌控 Agent 的进出 |
 
 ## 核心概念
 
@@ -62,6 +107,10 @@ Compass 是一个通用的 Agent 质量保障框架，旨在为 AI Agent 产品�
 │  └──────────┘  └──────────┘  └──────────────┘                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+> 第 4 层有**两种接入**：上图的 **Adapter**（Compass 亲自驱动 Agent，适合图像/代码沙箱），
+> 以及 **Integrations**（消费 Agent 自产的轨迹，适合自跑的 LLM Agent——见「接入外部 Agent 轨迹」一节）。
+> 二者产出的都是同一个 Transcript，下游评分/指标完全共用。
 
 ## 核心特性
 
