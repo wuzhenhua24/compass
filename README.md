@@ -2,7 +2,7 @@
 
 Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执行轨迹模型、多来源轨迹接入、可复用的过程评分器与可靠性指标——领域相关的"答案对不对"由你用几十行自定义 grader 补齐。它之于 Agent 评测，就像 pytest 之于测试、OpenTelemetry 之于可观测：**框架给骨架和标准，业务判定你来写**。
 
-> 设计理念参考 [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+> 设计理念参考 [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) 与 [Hidden Technical Debt of AI Systems: Agent Evaluation Infrastructure](https://leehanchung.github.io/blogs/2026/06/13/hidden-technical-debt-agent-evaluation-infra/)
 
 ## 定位：是什么 / 不是什么
 
@@ -21,6 +21,15 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - 不是"开箱评测任意 Agent"的银弹——**领域正确性判定必然要你写**（这是设计，不是缺陷）
 - 不内置每个领域的正确性 grader（图像美学、代码功能、答案事实……天然定制）
 - 不强求"驱动任意 Agent 跑"——自跑的 Agent 走**导入轨迹**更合适（见下）
+
+### 控制面 / 数据面：这条边界的专业名字
+
+[Hidden Technical Debt of AI Systems: Agent Evaluation Infrastructure](https://leehanchung.github.io/blogs/2026/06/13/hidden-technical-debt-agent-evaluation-infra/) 把 agent 评估基础设施拆成两层，恰好精确描述了 Compass 的边界：
+
+- **控制面（control plane）**：决定"跑什么、结果是否该改变发布决策"——任务集与验证器选择、评分聚合、回归追踪、报告与发布门禁
+- **数据面（data plane）**：真正跑 agent 并记录发生了什么——模型、harness、运行时、工具、记忆、环境状态、trace
+
+**Compass = 控制面 + 连接两层的 trace schema；数据面归你。** 对应到模块：Scenario / Grader / 聚合 / pass^k / 报告 / checkpoint 续跑是控制面；Transcript + ToolCall 协议是那份 trace schema（文章公式里的 τ）；而 agent 怎么跑、沙箱、世界状态属于数据面——Compass 只通过 Adapter 驱动或 Import 消费轨迹与之接触，不试图拥有它（文章说 "agents need worlds"，但造世界是运行时的活，不是评测框架的）。这也解释了上面的"不是什么"：**数据面千差万别、不可复用，控制面与 trace 标准才是可复用资产。**
 
 ### 核心 vs 领域：一条干净的分界线
 
