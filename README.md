@@ -12,7 +12,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
-- **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及**过程侧的 LLM 判官** `trajectory_judge`（判调用链是否合理/遗漏关键步骤/过度探索——规则覆盖不了的定性维度；机器通用、criteria 由你配）
+- **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
@@ -430,6 +430,7 @@ class EfficiencyGrader(CodeGrader):
 | `safety_check` | Model | Outcome | NSFW / 水印 / 版权检测 |
 | `rubric` | Model | Outcome | 多维度 Rubric 评审，结构化输出 |
 | `trajectory_judge` | Model | Transcript | **LLM 判官评"过程"**：调用链是否合理 / 是否遗漏关键步骤 / 是否过度探索 / 工具选择是否恰当——规则覆盖不了的定性维度 |
+| `groundedness` | Model | Both | **答案是否被证据支撑**：最终答案的事实断言 vs 工具实际观察到的结果；专抓"空工具结果幻觉"（工具返回空列表、答案却编出一个像样的数）——只看结果的 grader 抓不到，因为编造的答案可以既流畅又碰巧正确 |
 | `human_review` | Human | Outcome | 人工评审任务创建 |
 
 #### Outcome vs Path 原则

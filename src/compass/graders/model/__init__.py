@@ -2,6 +2,7 @@
 
 from compass.graders.model.aesthetic import AestheticScoreGrader
 from compass.graders.model.edit_correctness import EditCorrectnessGrader
+from compass.graders.model.groundedness import GroundednessGrader
 from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.model.rubric import RubricGrader
 from compass.graders.model.safety import SafetyCheckGrader
@@ -18,4 +19,5 @@ __all__ = [
     "RubricGrader",
     "EditCorrectnessGrader",
     "TrajectoryJudgeGrader",
+    "GroundednessGrader",
 ]
