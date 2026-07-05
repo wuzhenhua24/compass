@@ -138,6 +138,13 @@ class GradeContext:
         return []
 
     @property
+    def state_changes(self) -> list:
+        """Shortcut: state changes flattened across all tool calls."""
+        if self.transcript is not None:
+            return self.transcript.all_state_changes()
+        return []
+
+    @property
     def total_duration_ms(self) -> float:
         """Shortcut: total execution duration from the transcript."""
         if self.transcript is not None:

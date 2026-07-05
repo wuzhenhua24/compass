@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 # Current protocol version
 # 1.2: promoted turn_index / agent_name to first-class ToolCall fields.
-TOOLCALL_PROTOCOL_VERSION = "1.2"
+# 1.3: added state_delta (list[StateChange]) to ToolCall — what the call
+#      changed in the environment, as opposed to what it returned.
+TOOLCALL_PROTOCOL_VERSION = "1.3"
 
 
 def _normalize_error(error: dict[str, Any] | str | None) -> dict[str, Any] | None:
@@ -273,6 +275,63 @@ class TokenUsage:
         )
 
 
+# Suggested vocabularies for StateChange.kind / StateChange.op.
+# Open sets — any string is accepted; these exist so independent producers
+# converge on the same words for the same things.
+KNOWN_STATE_KINDS = frozenset({
+    "file", "db", "env", "git", "http", "browser", "memory", "process",
+})
+KNOWN_STATE_OPS = frozenset({"create", "update", "delete", "move", "execute"})
+
+
+@dataclass
+class StateChange:
+    """A single observed change to the environment (ToolCall Protocol v1.3).
+
+    Captures the *state delta* a tool call produced — what the action changed
+    in the world, as opposed to what the tool returned in its output. Final
+    output and state delta can disagree ("scheduled the meeting" vs. a
+    duplicate invite in the calendar), and stateful tasks can only be graded
+    on the latter.
+
+    Compass defines the slot and vocabulary; *capturing* deltas (snapshotting,
+    diffing) is adapter / harness / importer code. An empty ``state_delta``
+    therefore means "nothing recorded", not "nothing changed".
+
+    Fields are domain-agnostic; anything domain-specific goes in ``metadata``.
+    """
+
+    kind: str  # Resource type: "file" | "db" | "env" | "git" | ... (open vocabulary)
+    op: str  # Operation: "create" | "update" | "delete" | "move" | "execute" | ... (open)
+    target: str = ""  # What changed: path, table/row id, env key, URL, git ref
+    before: str | None = None  # Hash / pointer / small repr of prior state
+    after: str | None = None  # Hash / pointer / small repr of new state
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "kind": self.kind,
+            "op": self.op,
+            "target": self.target,
+            "before": self.before,
+            "after": self.after,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "StateChange":
+        """Create from dictionary."""
+        return cls(
+            kind=data.get("kind", ""),
+            op=data.get("op", ""),
+            target=data.get("target", ""),
+            before=data.get("before"),
+            after=data.get("after"),
+            metadata=data.get("metadata", {}),
+        )
+
+
 @dataclass
 class ToolCall:
     """Record of a single tool call (ToolCall Protocol v1).
@@ -309,9 +368,19 @@ class ToolCall:
     turn_index: int | None = None
     agent_name: str | None = None
 
+    # State delta (first-class since protocol 1.3): what this call changed in
+    # the environment. Empty means "nothing recorded", not "nothing changed".
+    state_delta: list[StateChange] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         # Normalize error to dict | None
         self.error = _normalize_error(self.error)  # type: ignore[assignment]
+
+        # Auto-convert dict entries to StateChange
+        self.state_delta = [
+            sc if isinstance(sc, StateChange) else StateChange.from_dict(sc)
+            for sc in self.state_delta
+        ]
 
         # Status correction
         if self.status == "ok" and self.error:
@@ -374,6 +443,7 @@ class ToolCall:
             "redacted": self.redacted,
             "turn_index": self.turn_index,
             "agent_name": self.agent_name,
+            "state_delta": [sc.to_dict() for sc in self.state_delta],
             # Legacy aliases for backward compatibility
             "tool": self.tool_name,
             "args": self.input,
@@ -426,6 +496,9 @@ class ToolCall:
             redacted=data.get("redacted", False),
             turn_index=turn_index,
             agent_name=agent_name,
+            state_delta=[
+                StateChange.from_dict(sc) for sc in data.get("state_delta") or []
+            ],
         )
 
 
@@ -648,6 +721,7 @@ class Transcript:
         redacted: bool = False,
         turn_index: int | None = None,
         agent_name: str | None = None,
+        state_delta: list[StateChange | dict[str, Any]] | None = None,
         # Legacy aliases
         tool: str | None = None,
         args: dict[str, Any] | None = None,
@@ -676,12 +750,17 @@ class Transcript:
                 redacted=redacted,
                 turn_index=turn_index,
                 agent_name=agent_name,
+                state_delta=list(state_delta) if state_delta else [],  # type: ignore[arg-type]
             )
         )
 
     def add_reasoning_step(self, step: str) -> None:
         """Add a reasoning step to the transcript."""
         self.reasoning_steps.append(step)
+
+    def all_state_changes(self) -> list[StateChange]:
+        """Flatten state deltas across all tool calls (chronological order)."""
+        return [sc for tc in self.tool_calls for sc in tc.state_delta]
 
     def set_outcome(
         self,
@@ -857,6 +936,10 @@ class Transcript:
             if tc.retry_count > 0:
                 completed_event["retry_count"] = tc.retry_count
 
+            # Include state delta if recorded
+            if tc.state_delta:
+                completed_event["state_delta"] = [sc.to_dict() for sc in tc.state_delta]
+
             events.append(completed_event)
 
         # Events: reasoning.step (interleaved based on order)
@@ -1000,6 +1083,10 @@ class Transcript:
                     retry_count=e.get("retry_count", 0),
                     turn_index=start_event.get("turn_index"),
                     agent_name=start_event.get("agent_name"),
+                    state_delta=[
+                        StateChange.from_dict(sc)
+                        for sc in e.get("state_delta") or []
+                    ],
                 ))
 
         # Collect reasoning steps

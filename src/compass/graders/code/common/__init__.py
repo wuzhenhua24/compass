@@ -14,6 +14,7 @@ from compass.graders.code.common.transcript_graders import (
     LatencyBudgetGrader,
     LeakDetectionGrader,
     LoopDetectionGrader,
+    StateDeltaGrader,
     ToolUsageGrader,
     TurnCountGrader,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "LatencyBudgetGrader",
     "LeakDetectionGrader",
     "LoopDetectionGrader",
+    "StateDeltaGrader",
     "ToolUsageGrader",
     "TurnCountGrader",
 ]

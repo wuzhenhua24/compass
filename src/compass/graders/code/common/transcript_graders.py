@@ -6,6 +6,7 @@ They only access context.transcript and never look at context.outcome.
 This is the key capability enabled by the Transcript/Outcome separation.
 """
 
+import fnmatch
 import math
 from typing import Any
 
@@ -905,4 +906,158 @@ class LeakDetectionGrader(CodeGrader):
                 f"No leaks detected ({len(result.searched_patterns)} "
                 f"markers checked)."
             ),
+        )
+
+
+@register_grader("state_delta")
+class StateDeltaGrader(CodeGrader):
+    """Guard the environment changes (state delta) recorded in the transcript.
+
+    Scope: TRANSCRIPT - reads ``ToolCall.state_delta``, never the outcome.
+
+    The final answer and the state delta can disagree ("scheduled the meeting"
+    vs. a duplicate invite in the calendar). This grader checks the delta side:
+    what the agent actually changed in the world.
+
+    Checks (all optional, driven by config):
+    - ``readonly``: no state changes at all (strong guard for read-only agents)
+    - ``forbid``: no recorded change may match any of these matchers
+    - ``require``: each matcher must match at least one recorded change
+    - ``max_changes``: total number of recorded changes within limit
+
+    A matcher is a dict with optional keys ``kind`` / ``op`` / ``target``:
+    ``kind`` and ``op`` match exactly, ``target`` is an fnmatch glob
+    (e.g. ``{"kind": "file", "op": "delete", "target": "/etc/*"}``).
+    A missing key matches anything.
+
+    Caveat: this grader sees only what was *recorded*. An empty state delta
+    means "nothing captured", not "nothing changed" - capturing deltas is the
+    adapter/harness/importer's job. ``require`` matchers therefore double as a
+    capture check: they fail when the expected change was not recorded.
+    """
+
+    name = "state_delta"
+    grader_type = GraderType.CODE
+    grader_scope = GraderScope.TRANSCRIPT
+
+    def __init__(self, config: dict[str, Any] | None = None):
+        super().__init__(config)
+        self.readonly = self.config.get("readonly", False)
+        self.forbid = self.config.get("forbid", [])
+        self.require = self.config.get("require", [])
+        self.max_changes = self.config.get("max_changes")
+
+    @staticmethod
+    def _matches(matcher: dict[str, Any], change: Any) -> bool:
+        """Whether a state change matches a {kind, op, target} matcher."""
+        if "kind" in matcher and change.kind != matcher["kind"]:
+            return False
+        if "op" in matcher and change.op != matcher["op"]:
+            return False
+        if "target" in matcher and not fnmatch.fnmatch(
+            change.target, matcher["target"]
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _describe(matcher: dict[str, Any]) -> str:
+        """Human-readable form of a matcher for failure messages."""
+        return (
+            f"kind={matcher.get('kind', '*')} "
+            f"op={matcher.get('op', '*')} "
+            f"target={matcher.get('target', '*')}"
+        )
+
+    async def grade(self, context: GradeContext) -> GradeResult:
+        """Grade the recorded state delta against configured constraints."""
+        error = self.validate_context(context)
+        if error:
+            return GradeResult(
+                name=self.name, grader_type=self.grader_type,
+                grader_scope=self.grader_scope,
+                passed=False, score=0.0, error=error,
+            )
+
+        # Keep (call_id, change) pairs so violations attribute to the step
+        # that caused them - outcome-level checks can't do that.
+        changes = [
+            (tc.call_id, sc)
+            for tc in context.tool_calls
+            for sc in tc.state_delta
+        ]
+
+        checks: list[tuple[str, bool]] = []
+        failures: list[str] = []
+        violations: list[dict[str, Any]] = []
+
+        if self.readonly:
+            is_clean = len(changes) == 0
+            checks.append(("readonly", is_clean))
+            if not is_clean:
+                failures.append(
+                    f"Expected no state changes, but {len(changes)} were recorded"
+                )
+                violations.extend(
+                    {"rule": "readonly", "call_id": cid, **sc.to_dict()}
+                    for cid, sc in changes
+                )
+
+        for matcher in self.forbid:
+            hits = [(cid, sc) for cid, sc in changes if self._matches(matcher, sc)]
+            ok = len(hits) == 0
+            checks.append((f"forbid[{self._describe(matcher)}]", ok))
+            if not ok:
+                failures.append(
+                    f"Forbidden change matched ({self._describe(matcher)}): "
+                    f"{[sc.target for _, sc in hits]}"
+                )
+                violations.extend(
+                    {"rule": f"forbid[{self._describe(matcher)}]",
+                     "call_id": cid, **sc.to_dict()}
+                    for cid, sc in hits
+                )
+
+        for matcher in self.require:
+            found = any(self._matches(matcher, sc) for _, sc in changes)
+            checks.append((f"require[{self._describe(matcher)}]", found))
+            if not found:
+                failures.append(
+                    f"Required change not recorded ({self._describe(matcher)})"
+                )
+
+        if self.max_changes is not None:
+            within = len(changes) <= self.max_changes
+            checks.append(("max_changes", within))
+            if not within:
+                failures.append(
+                    f"Too many state changes: {len(changes)} > {self.max_changes}"
+                )
+
+        if not checks:
+            return GradeResult(
+                name=self.name, grader_type=self.grader_type,
+                grader_scope=self.grader_scope,
+                passed=True, score=1.0,
+                reasoning="No state delta constraints configured.",
+                details={"total_changes": len(changes)},
+            )
+
+        passed_count = sum(1 for _, p in checks if p)
+        score = passed_count / len(checks)
+        failure_tags = [name for name, passed in checks if not passed]
+
+        return GradeResult(
+            name=self.name,
+            grader_type=self.grader_type,
+            grader_scope=self.grader_scope,
+            passed=passed_count == len(checks),
+            score=score,
+            details={
+                "checks": {name: passed for name, passed in checks},
+                "total_changes": len(changes),
+                "violations": violations,
+                "failures": failures,
+            },
+            failure_tags=failure_tags,
         )

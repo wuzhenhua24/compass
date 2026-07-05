@@ -12,7 +12,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
-- **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage`，以及**过程侧的 LLM 判官** `trajectory_judge`（判调用链是否合理/遗漏关键步骤/过度探索——规则覆盖不了的定性维度；机器通用、criteria 由你配）
+- **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及**过程侧的 LLM 判官** `trajectory_judge`（判调用链是否合理/遗漏关键步骤/过度探索——规则覆盖不了的定性维度；机器通用、criteria 由你配）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
@@ -421,6 +421,7 @@ class EfficiencyGrader(CodeGrader):
 | `loop_detection` | Code | Transcript | 循环检测、浪费行为识别、序列模式检测 |
 | `turn_count` | Code | Transcript | 交互轮次评分，支持 budget/linear/log 三种评分模式 |
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
+| `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3） |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
 | `semantic_match` | Model | Outcome | CLIP 图文语义相似度 |
 | `vlm_judge` | Model | Outcome | VLM 多维度评审 |
@@ -2101,6 +2102,42 @@ compass import phoenix_export.json --json       # 打印重建后的 transcript 
 **多 Agent / 多轮上下文：一等字段**（ToolCall Protocol v1.2）
 
 `agent_name` / `turn_index` 已从 `metadata` 提升为 `ToolCall` 的一等字段——因为「哪个 Agent、第几轮发起的调用」是多 Agent 场景下的核心分析维度，不该埋在自由扩展字段里。三个集成都会填充它们（OpenAI/OTLP 走父链回溯，pi 按 assistant 消息计轮次）。向后兼容：`ToolCall.from_dict` 在顶层缺失时会回退读取旧的 `metadata` 位置，老的 transcript 仍能正确加载。
+
+**State Delta：环境状态变更是一等评估面**（ToolCall Protocol v1.3）
+
+Agent 靠**改变环境**完成任务，最终输出和状态变更可能不一致——日历 agent 说"约好了"，但 state delta 里是错误时区或重复邀请；coding agent 交了能过测试的 patch，但顺手删了不相关的文件。"Hidden Technical Debt" 一文的判断是：*"如果你的 eval 不捕获 state delta，它就不足以评估有状态的任务。"* 因此协议 1.3 给 `ToolCall` 增加了 `state_delta: list[StateChange]` 槽位：
+
+```python
+from compass.core import StateChange
+
+transcript.add_tool_call(
+    tool_name="sandbox.bash",
+    input={"command": "rm /etc/nginx/nginx.conf"},
+    state_delta=[
+        StateChange(kind="file", op="delete", target="/etc/nginx/nginx.conf",
+                    before="sha256:ab12...", after=None),
+    ],
+)
+```
+
+`StateChange` 是领域无关的：`kind`（file/db/env/git/http/browser/memory/process，开放词汇）、`op`（create/update/delete/move/execute）、`target`（路径/表/键/ref）、`before`/`after`（哈希或指针）、`metadata`（自由扩展）。配套的 `state_delta` 过程守卫 grader：
+
+```yaml
+graders:
+  - name: state_delta
+    config:
+      readonly: true                    # 只读 agent：任何状态变更即违规
+  # 或细粒度规则：
+  - name: state_delta
+    config:
+      forbid:
+        - { op: delete, target: "/etc/*" }   # kind/op 精确匹配，target 是 glob
+      require:
+        - { kind: db, op: update }           # 任务预期的变更必须被记录到
+      max_changes: 10
+```
+
+**边界纪律（控制面/数据面）**：Compass 定义槽位、词汇和守卫——**捕获** delta（快照、diff、覆盖文件系统）是数据面的活，由 adapter / harness / importer 填充。所以空 `state_delta` 意味着"没记录"而非"没变更"；`require` 规则因此兼作捕获检查——预期的变更没被记录也会失败。违规会带上肇事调用的 `call_id`，这正是 outcome 级检查给不了的**失败归因**（哪一步搞坏的）。向后兼容：1.3 之前的 transcript 加载后 `state_delta` 为空列表。
 
 ### 16. 端到端示例：文档问答 Agent 评估（`examples/ops_qa/`）
 

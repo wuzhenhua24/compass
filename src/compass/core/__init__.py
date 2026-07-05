@@ -25,6 +25,7 @@ from compass.core.transcript import (
     Transcript,
     TranscriptRecorder,
     ToolCall,
+    StateChange,
     Outcome,
     Environment,
     CostInfo,
@@ -37,6 +38,8 @@ from compass.core.transcript import (
     validate_tool_name,
     KNOWN_ADAPTERS,
     KNOWN_TOOL_TYPES,
+    KNOWN_STATE_KINDS,
+    KNOWN_STATE_OPS,
 )
 from compass.core.sweep import SweepConfig, expand_sweeps, SweepSummary, group_sweep_results
 from compass.core.artifacts import (
@@ -80,6 +83,7 @@ __all__ = [
     "Transcript",
     "TranscriptRecorder",
     "ToolCall",
+    "StateChange",
     "Outcome",
     "Environment",
     "CostInfo",
@@ -92,6 +96,8 @@ __all__ = [
     "validate_tool_name",
     "KNOWN_ADAPTERS",
     "KNOWN_TOOL_TYPES",
+    "KNOWN_STATE_KINDS",
+    "KNOWN_STATE_OPS",
     # Sweep
     "SweepConfig",
     "expand_sweeps",
