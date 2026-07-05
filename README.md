@@ -13,7 +13,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及**过程侧的 LLM 判官** `trajectory_judge`（判调用链是否合理/遗漏关键步骤/过度探索——规则覆盖不了的定性维度；机器通用、criteria 由你配）
-- **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行
+- **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
 **🚫 不是什么**
@@ -1205,6 +1205,31 @@ json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
 
 每条 `grade_results` 中的 `grader_scope` 字段（`outcome` / `transcript` / `both`）决定该评分结果归入哪个分析维度。
 
+#### 配对比较（`compass compare`）：把对比当测量，不当读数
+
+`analyze` 看一次运行，`compare` 回答控制面最常见的问题：**改了一个变量（换模型/改 prompt/加工具）之后，B 比 A 真的好了吗？** 平均分涨 2.4 个点可能是真提升、也可能纯是噪声——均值本身分不出来。
+
+```bash
+compass compare results_a/ results_b.json        # 输入格式与 analyze 相同（文件或目录）
+compass compare a.json b.json --json             # 机器可读输出
+compass compare a.json b.json -o cmp.json        # 保存报告
+```
+
+按 case id 配对后输出三层证据：
+
+1. **配对差值 + 95% 置信区间**：pass rate 与平均分的 B−A 差值都带 CI；CI 跨 0 就是"在噪声带内"，同时报告当前样本量下的**最小可检测效应（MDE）**——把"没有显著差异"和"样本太少测不出来"区分开
+2. **Case 翻转清单**：`pass → fail`（回归）与 `fail → pass`（改进）逐个列出——平均分不动不代表没有翻转，一个回归 + 一个改进在均值上完全抵消
+3. **Verdict**：显著提升 / 显著回归 / 噪声带内（pass rate 为主轴，分数 CI 补充"没翻转但分数系统性变好"的情形）
+
+```
+│ Pass rate  │ 83.3% │ 87.5% │  +4.2% │ [-10.2%, +18.5%] │   ← 看似涨了，CI 跨 0
+│ Mean score │ 0.614 │ 0.634 │ +0.021 │ [+0.002, +0.039] │   ← 小但显著
+...
+Verdict: pass rate within noise band, but significant score improvement
+```
+
+细节：只在一侧出现的 case 会**明确列出并排除出统计**（覆盖范围变了要可见，不静默丢弃）；多 trial 的 case 用 `passed_trials/total_trials` 作为该 case 的通过分数，比布尔更细。Python 侧 `from compass.report import compare_paths, compare_results, paired_stats` 可编程使用。
+
 ### 8. Data Agent 评估
 
 > 设计理念参考 [OpenAI: Inside Our In-house Data Agent](https://openai.com/index/inside-our-in-house-data-agent/)
@@ -2227,6 +2252,11 @@ compass analyze results/ --output analysis_report.json
 ```
 
 输出包含：汇总统计、Transcript/Outcome 分维度分析、Scope 对比诊断、失败模式排名和改进建议。
+
+```bash
+# 配对比较两次运行（A = 基线，B = 候选）：case 翻转 + 置信区间
+compass compare results_a/ results_b/
+```
 
 ### 4. 查看结果
 

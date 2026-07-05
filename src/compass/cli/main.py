@@ -448,6 +448,125 @@ def analyze(results_path: str, output: Optional[str]):
 
 
 @cli.command()
+@click.argument("results_a", type=click.Path(exists=True))
+@click.argument("results_b", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="Save comparison report as JSON")
+@click.option("--json", "as_json", is_flag=True, help="Print raw JSON instead of tables")
+def compare(results_a: str, results_b: str, output: Optional[str], as_json: bool):
+    """Paired comparison of two evaluation runs (A = baseline, B = candidate).
+
+    Pairs cases by id, lists pass/fail flips in both directions, and reports
+    the paired difference with a 95% confidence interval — so a moved average
+    that sits inside the noise band is not mistaken for a real change.
+
+    RESULTS_A / RESULTS_B accept the same inputs as `compass analyze`:
+    a results JSON file or a directory of result files.
+    """
+    import json
+
+    from compass.report.compare import compare_paths
+
+    report = compare_paths(results_a, results_b)
+
+    if as_json:
+        console.print_json(json.dumps(report.to_dict(), ensure_ascii=False))
+        return
+
+    console.print(Panel(
+        f"[bold]Compass Paired Comparison[/bold]\n"
+        f"A (baseline):  {report.label_a}\n"
+        f"B (candidate): {report.label_b}\n"
+        f"{report.n_paired} paired case(s)",
+    ))
+
+    if report.n_paired == 0:
+        console.print("[red]No paired cases between the two runs[/red]")
+        if report.only_in_a:
+            console.print(f"[yellow]Only in A:[/yellow] {', '.join(report.only_in_a)}")
+        if report.only_in_b:
+            console.print(f"[yellow]Only in B:[/yellow] {', '.join(report.only_in_b)}")
+        sys.exit(1)
+
+    # Summary table: point estimates + paired diff with uncertainty
+    summary = Table(title="Summary (paired cases only)")
+    summary.add_column("Metric")
+    summary.add_column("A", justify="right")
+    summary.add_column("B", justify="right")
+    summary.add_column("Diff (B−A)", justify="right")
+    summary.add_column("95% CI", justify="right")
+
+    ps, ss = report.pass_stats, report.score_stats
+    summary.add_row(
+        "Pass rate",
+        f"{report.pass_rate_a:.1%}",
+        f"{report.pass_rate_b:.1%}",
+        f"{ps.mean_diff:+.1%}",
+        f"[{ps.ci_low:+.1%}, {ps.ci_high:+.1%}]",
+    )
+    summary.add_row(
+        "Mean score",
+        f"{report.mean_score_a:.3f}",
+        f"{report.mean_score_b:.3f}",
+        f"{ss.mean_diff:+.3f}",
+        f"[{ss.ci_low:+.3f}, {ss.ci_high:+.3f}]",
+    )
+    console.print(summary)
+
+    # Flips: the per-case evidence behind (or against) the aggregate
+    if report.improved or report.regressed:
+        flips = Table(title="Case flips")
+        flips.add_column("Case")
+        flips.add_column("A → B")
+        flips.add_column("Score A", justify="right")
+        flips.add_column("Score B", justify="right")
+        for f in report.regressed:
+            flips.add_row(
+                f.case_id, "[red]pass → fail[/red]",
+                f"{f.score_a:.3f}", f"{f.score_b:.3f}",
+            )
+        for f in report.improved:
+            flips.add_row(
+                f.case_id, "[green]fail → pass[/green]",
+                f"{f.score_a:.3f}", f"{f.score_b:.3f}",
+            )
+        console.print(flips)
+
+    console.print(
+        f"Unchanged: {report.both_pass} both-pass, {report.both_fail} both-fail  |  "
+        f"Flips: [green]{len(report.improved)} improved[/green], "
+        f"[red]{len(report.regressed)} regressed[/red]"
+    )
+
+    # Coverage changes are reported, never silently dropped
+    if report.only_in_a:
+        console.print(
+            f"[yellow]⚠ {len(report.only_in_a)} case(s) only in A "
+            f"(dropped from stats):[/yellow] {', '.join(report.only_in_a[:10])}"
+            + (" …" if len(report.only_in_a) > 10 else "")
+        )
+    if report.only_in_b:
+        console.print(
+            f"[yellow]⚠ {len(report.only_in_b)} case(s) only in B "
+            f"(dropped from stats):[/yellow] {', '.join(report.only_in_b[:10])}"
+            + (" …" if len(report.only_in_b) > 10 else "")
+        )
+
+    style = (
+        "green" if ps.significant and ps.mean_diff > 0
+        else "red" if (ps.significant and ps.mean_diff < 0)
+        or (ss.significant and ss.mean_diff < 0)
+        else "yellow"
+    )
+    console.print(Panel(f"[{style}]{report.verdict}[/{style}]", title="Verdict"))
+
+    if output:
+        output_path = Path(output)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
+        console.print(f"\n[green]Comparison saved to:[/green] {output_path}")
+
+
+@cli.command()
 @click.argument("trace_file", type=click.Path(exists=True))
 @click.option("--steps", "-s", is_flag=True, help="Show tool call input/output details")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
