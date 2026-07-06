@@ -13,7 +13,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见「接入外部 Agent 轨迹」一节）
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
-- **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）
+- **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
 **🚫 不是什么**
@@ -120,6 +120,24 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 > 第 4 层有**两种接入**：上图的 **Adapter**（Compass 亲自驱动 Agent，适合图像/代码沙箱），
 > 以及 **Integrations**（消费 Agent 自产的轨迹，适合自跑的 LLM Agent——见「接入外部 Agent 轨迹」一节）。
 > 二者产出的都是同一个 Transcript，下游评分/指标完全共用。
+>
+> 图中 ComfyUI / SD WebUI / Midjourney / DALL-E 为可对接的目标示意；当前内置注册的 adapter 是
+> `image` / `coding` / `environment`，其余通过 `@register_adapter` 自定义接入。
+
+### CLI 命令总览
+
+| 命令 | 用途 |
+|------|------|
+| `compass test <scenario.yaml \| 目录>` | 运行测试场景（`--parallel` / `--trace-dir` / `--resume` / `--stage` / `--category`） |
+| `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
+| `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE |
+| `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
+| `compass import <trace 文件>` | 导入外部轨迹（pi / OTLP·OpenInference / Claude stream-json，自动识别） |
+| `compass eval <image>` | 单张图像快速评估（不写 scenario） |
+| `compass init [output.yaml]` | 生成场景模板 |
+| `compass list` | 列出已注册的 grader 和 adapter |
+| `compass baseline set/list` | 回归基线管理：把某 case 的产物存为基线 |
+| `compass checkpoint list` | 列出 trace 目录下的运行断点（配合 `compass test --resume`） |
 
 ## 核心特性
 
@@ -409,12 +427,16 @@ class EfficiencyGrader(CodeGrader):
 
 #### 内置评分器的 Scope 分布
 
+全部 39 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
+
+**通用 + 过程（common / transcript）**
+
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
-| `image_assertions` | Code | Outcome | 图像尺寸、格式、是否空白 |
-| `technical_quality` | Code | Outcome | 分辨率、清晰度、噪点、对比度 |
 | `json_schema` | Code | Outcome | JSON Schema 校验，支持部分合规评分 |
+| `structure_check` | Code | Outcome | 结构化格式校验（JSON/YAML/XML/TOML） |
 | `style_convention` | Code | Outcome | 输出风格校验：模板段落、必需/禁止短语、正则模式、命名规范 |
+| `sql_syntax` | Code | Outcome | SQL 语法正确性校验 |
 | `tool_usage` | Code | Transcript | 必需/禁止工具、调用次数、重试行为 |
 | `cost_budget` | Code | Transcript | 成本预算、token 用量 |
 | `latency_budget` | Code | Transcript | 总耗时、单工具耗时上限 |
@@ -423,15 +445,53 @@ class EfficiencyGrader(CodeGrader):
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
 | `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3） |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
+
+**Coding Agent**
+
+| 评分器 | 类型 | 作用域 | 说明 |
+|--------|------|--------|------|
+| `exit_code_check` | Code | Outcome | 代码执行退出码检查 |
+| `test_runner` | Code | Outcome | 沙箱内运行测试命令，按通过比例计分 |
+| `integration_test` | Code | Outcome | 运行外部测试脚本，按通过比例计分（支持 pytest/rspec/go test/JSON 输出解析） |
+| `lint` | Code | Outcome | 运行 lint 命令（ruff/flake8/eslint...），按违规数计分 |
+| `type_check` | Code | Outcome | 运行类型检查器（mypy/tsc...），按错误数计分 |
+| `security_scan` | Code | Outcome | 两层安全扫描：内置正则模式 + 外部扫描器（bandit 等） |
+| `diff_accuracy` | Code | Outcome | 生成代码与参考实现逐文件比对 |
+| `diff_size` | Code | Outcome | 变更规模守卫（diff 行数 / 文件数上限） |
+
+**Data Agent**
+
+| 评分器 | 类型 | 作用域 | 说明 |
+|--------|------|--------|------|
+| `sql_equivalence` | Code | Outcome | 生成 SQL 与期望 SQL 的执行结果等价性 |
+| `data_correctness` | Code | Outcome | 查询/分析结果与期望数据比对 |
+| `query_quality` | Code | Outcome | SQL 查询质量与反模式检测 |
+| `reasoning_trace` | Code | Both | 分析型推理过程检查（是否探索了数据、验证了假设） |
+| `self_correction` | Code | Both | 错误检测与自我修复能力评估 |
+
+**图像生成 / 编辑**
+
+| 评分器 | 类型 | 作用域 | 说明 |
+|--------|------|--------|------|
+| `image_assertions` | Code | Outcome | 图像尺寸、格式、是否空白 |
+| `technical_quality` | Code | Outcome | 分辨率、清晰度、噪点、对比度 |
+| `edit_locality` | Code | Outcome | 图像编辑局部性：改动是否限于目标区域 |
+| `edit_preservation` | Code | Outcome | 非目标区域保留度：编辑没有破坏不该动的部分 |
+| `edit_correctness` | Model | Outcome | VLM 评审编辑指令是否被正确执行 |
+
+**Model / Human**
+
+| 评分器 | 类型 | 作用域 | 说明 |
+|--------|------|--------|------|
 | `semantic_match` | Model | Outcome | CLIP 图文语义相似度 |
 | `vlm_judge` | Model | Outcome | VLM 多维度评审 |
 | `aesthetic_score` | Model | Outcome | 美学评分 |
-| `integration_test` | Code | Outcome | 运行外部测试脚本，按通过比例计分（支持 pytest/rspec/go test/JSON 输出解析） |
 | `safety_check` | Model | Outcome | NSFW / 水印 / 版权检测 |
 | `rubric` | Model | Outcome | 多维度 Rubric 评审，结构化输出 |
 | `trajectory_judge` | Model | Transcript | **LLM 判官评"过程"**：调用链是否合理 / 是否遗漏关键步骤 / 是否过度探索 / 工具选择是否恰当——规则覆盖不了的定性维度 |
 | `groundedness` | Model | Both | **答案是否被证据支撑**：最终答案的事实断言 vs 工具实际观察到的结果；专抓"空工具结果幻觉"（工具返回空列表、答案却编出一个像样的数）——只看结果的 grader 抓不到，因为编造的答案可以既流畅又碰巧正确 |
 | `human_review` | Human | Outcome | 人工评审任务创建 |
+| `pairwise_comparison` | Human | Outcome | 人工 A/B 成对比较任务 |
 
 #### Outcome vs Path 原则
 
@@ -1421,9 +1481,10 @@ name: "图像生成质量评估"
 description: "测试 AIGC 图像生成的质量、安全性和一致性"
 
 agent:
-  adapter: comfyui
+  adapter: image                # 内置 adapter：image / coding / environment
   endpoint: "http://localhost:8188"
   workflow: "workflows/sdxl_txt2img.json"
+  # 对接 ComfyUI 等自有服务：用 @register_adapter("comfyui") 注册自定义 adapter 后填其名称
 
 # 全局默认配置
 defaults:
@@ -1524,7 +1585,7 @@ cases:
     expect_reason: "Safety filter should block this request"
 
     graders:
-      - type: code
+      - type: model
         name: "safety_check"
         config:
           checks: [nsfw]
@@ -2164,6 +2225,43 @@ graders:
 ```
 
 **边界纪律（控制面/数据面）**：Compass 定义槽位、词汇和守卫——**捕获** delta（快照、diff、覆盖文件系统）是数据面的活，由 adapter / harness / importer 填充。所以空 `state_delta` 意味着"没记录"而非"没变更"；`require` 规则因此兼作捕获检查——预期的变更没被记录也会失败。违规会带上肇事调用的 `call_id`，这正是 outcome 级检查给不了的**失败归因**（哪一步搞坏的）。向后兼容：1.3 之前的 transcript 加载后 `state_delta` 为空列表。
+
+**审计溯源：run_id / config_hash / grader_version**（ToolCall Protocol v1.4）
+
+《Hidden Technical Debt》给出的**最小 trace 记录**要求包含 run id、prompt/config hash、verifier 版本——*"少于这些，就难以 replay、比较、审计。"* 否则就会掉进它描述的 cargo cult 评估：仪表盘的数字变好了，但没人能回答"这是同一份配置吗？判分器换过没有？"——数字上涨可能只是因为**测量本身变了**。协议 1.4 把这三样落成一等字段，runner 自动盖章，用户零配置：
+
+```jsonc
+// trace 文件（compass test --trace-dir 产出）
+{
+  "task_id": "case_1",
+  "run_id": "9f3c2a1b04de",     // 本次 run 的唯一标识（与 checkpoint 共用同一 id）
+  "config_hash": "5b1e8c...",   // scenario 指纹（agent 配置 + grader 配置 + 判分参数）
+  "grading": {
+    "results": [
+      { "name": "exit_code_check", "score": 1.0, "grader_version": "1.0", ... }
+    ]
+  }
+}
+```
+
+三个字段各答一个审计问题：
+
+| 字段 | 位置 | 回答的问题 |
+|---|---|---|
+| `run_id` | `Transcript` / `EvalResult` | 这条 trace 是**哪次运行**产出的？（同 run 的所有 case/trial 共享一个 id，跨文件可关联） |
+| `config_hash` | `Transcript` / `EvalResult` | 两次运行**可比吗**？hash 不同 = 配置变了，分数差异不能归因于 agent。复用 checkpoint 的 `scenario_fingerprint`——同一个 hash 同时守护 resume 和审计 |
+| `grader_version` | 每条评分结果 | 分数差异是 **agent 变了还是判分器变了**？自定义 grader 改判分逻辑（阈值、judge prompt、rubric）时 bump `version` 类属性，历史分数即刻标记为不可直接比较 |
+
+```python
+@register_grader("my_grader")
+class MyGrader(CodeGrader):
+    version = "2.0"  # 判分逻辑变更时 bump：2.0 的分数不能和 1.x 直接对比
+
+    async def grade(self, context: GradeContext) -> GradeResult:
+        ...
+```
+
+**边界纪律**：这里记录的是**评测控制面自己的**溯源（哪次 run、哪份配置、哪个版本的判分器）——Compass 能自证的部分自动盖章；被测 agent 侧的 model/harness 版本属于数据面事实，槽位在 `Environment.model_version` / `adapter_version`，由数据面填充（pi / Claude 两个 importer 已填 `model_version`，内置 adapter 尚未填——这是已知缺口，见 docs/todos.md）。向后兼容：1.4 之前的 transcript 加载后两字段为空字符串（"未记录"），导入的外部 trace 同理；JSONL 事件流只在字段非空时写入。
 
 ### 16. 端到端示例：文档问答 Agent 评估（`examples/ops_qa/`）
 

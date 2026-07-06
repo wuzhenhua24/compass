@@ -156,6 +156,7 @@ def _dict_to_case_result(data: dict[str, Any]) -> CaseResult:
                 gate=er.get("gate", False),
                 grader_type=er.get("grader_type", "code"),
                 grader_scope=er.get("grader_scope", "outcome"),
+                grader_version=er.get("grader_version", ""),
                 metadata=er.get("metadata", {}),
                 failure_tags=er.get("failure_tags", []),
                 error=er.get("error"),

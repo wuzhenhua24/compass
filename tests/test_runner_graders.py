@@ -1095,3 +1095,101 @@ class TestFailureTags:
         er = result.case_results[0].evaluator_results[0]
         assert er.passed is False
         assert "grader_error" in er.failure_tags
+
+
+# ===================================================================
+# Short-circuit phase classification (registry-derived grader type)
+# ===================================================================
+
+_sc_registered = False
+
+
+def _ensure_sc_graders():
+    """Register a failing Code grader and a passing Model grader for tests."""
+    global _sc_registered
+    if _sc_registered:
+        return
+
+    from compass.graders import (
+        CodeGrader,
+        GradeContext,
+        GradeResult,
+        GraderScope,
+        ModelGrader,
+        register_grader,
+    )
+
+    @register_grader("_sc_code_fail")
+    class _ScCodeFail(CodeGrader):
+        grader_scope = GraderScope.OUTCOME
+
+        async def grade(self, context: GradeContext) -> GradeResult:
+            return GradeResult(
+                name=self.name, grader_type=self.grader_type,
+                grader_scope=self.grader_scope, passed=False, score=0.0,
+            )
+
+    @register_grader("_sc_model_pass")
+    class _ScModelPass(ModelGrader):
+        grader_scope = GraderScope.OUTCOME
+
+        async def grade(self, context: GradeContext) -> GradeResult:
+            return GradeResult(
+                name=self.name, grader_type=self.grader_type,
+                grader_scope=self.grader_scope, passed=True, score=1.0,
+            )
+
+    _sc_registered = True
+
+
+class TestShortCircuitTypeResolution:
+    """Phase split must follow the *registered* grader type, not the YAML
+    ``type:`` declaration (which defaults to model when omitted)."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_type_still_classified_as_code(self):
+        """A code grader with no explicit type still short-circuits models."""
+        from compass.core.scenario import ShortCircuitMode
+        from compass.core.transcript import Outcome
+        from compass.graders import GradeContext
+
+        _ensure_sc_graders()
+        runner = Compass()
+        configs = [
+            GraderConfig(name="_sc_code_fail"),   # type omitted → defaults model
+            GraderConfig(name="_sc_model_pass"),
+        ]
+        aggregation = AggregationConfig(short_circuit=ShortCircuitMode.CODE_FAIL)
+        context = GradeContext(outcome=Outcome())
+
+        results = await runner._run_graders(configs, context, aggregation)
+
+        by_name = {r.name: r for r in results}
+        assert by_name["_sc_code_fail"].passed is False
+        # Model grader must have been skipped by the short-circuit — this only
+        # happens if _sc_code_fail was classified as code despite the omitted type.
+        assert by_name["_sc_model_pass"].metadata.get("skipped") is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_wrong_type_warns_and_is_corrected(self, caplog):
+        """An explicitly wrong type declaration is corrected with a warning."""
+        import logging
+
+        from compass.core.scenario import GraderType, ShortCircuitMode
+        from compass.core.transcript import Outcome
+        from compass.graders import GradeContext
+
+        _ensure_sc_graders()
+        runner = Compass()
+        configs = [
+            # Explicitly (and wrongly) declared as model
+            GraderConfig(name="_sc_code_fail", type=GraderType.MODEL),
+        ]
+        aggregation = AggregationConfig(short_circuit=ShortCircuitMode.CODE_FAIL)
+        context = GradeContext(outcome=Outcome())
+
+        with caplog.at_level(logging.WARNING, logger="compass.core.runner"):
+            results = await runner._run_graders(configs, context, aggregation)
+
+        assert results[0].grader_type == "code"
+        assert any("_sc_code_fail" in r.message for r in caplog.records)

@@ -288,6 +288,10 @@ class GradeResult:
     name: str = ""
     grader_type: GraderType = GraderType.MODEL
     grader_scope: GraderScope = GraderScope.OUTCOME
+    # Version of the grader that produced this result (audit provenance).
+    # Stamped by the runner from Grader.version; a score is only comparable
+    # across runs when the verifier version matches.
+    grader_version: str = ""
     passed: bool = False
     score: float = 0.0
     weight: float = 1.0
@@ -311,6 +315,7 @@ class GradeResult:
             "name": self.name,
             "grader_type": self.grader_type.value,
             "grader_scope": self.grader_scope.value,
+            "grader_version": self.grader_version,
             "passed": self.passed,
             "score": self.score,
             "weight": self.weight,
@@ -328,6 +333,11 @@ class Grader(ABC):
     name: str = "base"
     grader_type: GraderType = GraderType.MODEL
     grader_scope: GraderScope = GraderScope.OUTCOME
+    # Verifier version. Bump whenever scoring logic changes in a way that can
+    # move scores (new thresholds, reworded judge prompt, changed rubric), so
+    # historical results remain auditable: a score delta between two runs can
+    # be attributed to the agent only if the grader_version is unchanged.
+    version: str = "1.0"
 
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize grader with config."""

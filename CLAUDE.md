@@ -37,7 +37,10 @@ mypy src/compass
 compass test <scenario.yaml>              # Run tests
 compass test scenarios/ --parallel -w 4   # Parallel execution
 compass analyze results/                  # Analyze results
+compass compare a.json b.json             # Paired run comparison (flips + CI)
 compass trace results/case.json           # View transcript
+compass import session.jsonl              # Import external trace (pi/OTLP/Claude)
+compass list                              # List registered graders/adapters
 ```
 
 ## Architecture
@@ -48,7 +51,8 @@ compass trace results/case.json           # View transcript
 1. Interface Layer      → CLI (compass.cli.main), Python SDK
 2. Test Orchestration   → Scenario Engine, Trial Manager, Parallel Executor
 3. Core Engine          → Grader System (3-tier), Transcript Collector, Report Gen
-4. Agent Adapter Layer  → image, llm, coding adapters (registry-based)
+4. Agent Adapter Layer  → image, coding, environment adapters (registry-based;
+                          adapters/llm.py provides LLM mixins/pricing, not a registered adapter)
 ```
 
 ### Core Concepts

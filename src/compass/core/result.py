@@ -27,6 +27,7 @@ class EvaluatorResult:
     gate: bool = False  # Hard gate: must pass, excluded from score
     grader_type: str = "code"  # "code", "model", or "human"
     grader_scope: str = "outcome"  # "outcome", "transcript", or "both"
+    grader_version: str = ""  # Verifier version that produced this score
     metadata: dict[str, Any] = field(default_factory=dict)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     error: str | None = None
@@ -48,6 +49,7 @@ class EvaluatorResult:
             "gate": self.gate,
             "grader_type": self.grader_type,
             "grader_scope": self.grader_scope,
+            "grader_version": self.grader_version,
             "metadata": self.metadata,
             "failure_tags": self.failure_tags,
             "error": self.error,
@@ -110,6 +112,10 @@ class EvalResult:
     case_results: list[CaseResult] = field(default_factory=list)
     duration_ms: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
+    # Audit provenance: the run that produced this result and the scenario
+    # fingerprint it executed under (matches Transcript.run_id/config_hash).
+    run_id: str = ""
+    config_hash: str = ""
 
     @property
     def pass_rate(self) -> float:
@@ -136,6 +142,8 @@ class EvalResult:
         """Convert to dictionary for serialization."""
         return {
             "scenario_name": self.scenario_name,
+            "run_id": self.run_id,
+            "config_hash": self.config_hash,
             "total_cases": self.total_cases,
             "passed_cases": self.passed_cases,
             "failed_cases": self.failed_cases,

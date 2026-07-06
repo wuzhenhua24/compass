@@ -123,6 +123,16 @@ class TestSerialization:
         # Timestamp is preserved too (not reset to "now").
         assert restored.timestamp == original.timestamp
 
+    def test_case_result_round_trip_preserves_grader_version(self):
+        """Regression: grader_version must survive the checkpoint round-trip so
+        resumed runs keep the verifier-version audit trail intact."""
+        original = _make_case_result(case_id="rt_ver", passed=True, score=0.9)
+        original.evaluator_results[0].grader_version = "2.1"
+
+        restored = _dict_to_case_result(_case_result_to_dict(original))
+
+        assert restored.evaluator_results[0].grader_version == "2.1"
+
     def test_case_result_round_trip_with_error(self):
         """CaseResult with error survives round-trip."""
         original = CaseResult(

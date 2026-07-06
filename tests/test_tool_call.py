@@ -1269,3 +1269,69 @@ class TestTranscriptJsonl:
 
         completed = next(e for e in events if e["type"] == "tool_call.completed")
         assert "retry_count" not in completed
+
+
+# ===================================================================
+# JSON save/load fidelity: timing + environment
+# ===================================================================
+
+
+class TestJsonLoadFidelity:
+    """Regression tests: Transcript.load() must restore timing and environment.
+
+    Before the fix, a loaded transcript reported the *load* time as start_time
+    and 0ms duration, and dropped environment.model_version filled by trace
+    importers — breaking `compass trace` and TRANSCRIPT graders re-run on
+    saved traces.
+    """
+
+    def test_load_restores_timing(self, tmp_path):
+        transcript = Transcript(task_id="t", trial_id="tr")
+        transcript.add_tool_call(tool_name="a.b", input={}, output=1, duration_ms=5.0)
+        transcript.finalize([], 0.9, True)
+
+        loaded = Transcript.load(transcript.save(tmp_path / "trace.json"))
+
+        assert loaded.start_time == transcript.start_time
+        assert loaded.end_time == transcript.end_time
+        assert loaded.total_duration_ms == transcript.total_duration_ms
+        assert loaded.total_duration_ms > 0
+
+    def test_load_restores_environment(self, tmp_path):
+        transcript = Transcript(task_id="t", trial_id="tr")
+        transcript.environment.model_version = "claude-sonnet-5"
+        transcript.environment.adapter_version = "1.2.3"
+        transcript.environment.random_seed = 42
+        transcript.environment.attributes = {"region": "us-east-1"}
+
+        loaded = Transcript.load(transcript.save(tmp_path / "trace.json"))
+
+        assert loaded.environment.model_version == "claude-sonnet-5"
+        assert loaded.environment.adapter_version == "1.2.3"
+        assert loaded.environment.random_seed == 42
+        assert loaded.environment.attributes == {"region": "us-east-1"}
+
+    def test_load_tolerates_missing_timing_and_environment(self, tmp_path):
+        """Old/minimal trace files without timing/environment still load."""
+        transcript = Transcript(task_id="t", trial_id="tr")
+        path = transcript.save(tmp_path / "trace.json")
+        data = json.loads(path.read_text())
+        del data["timing"]
+        del data["environment"]
+        path.write_text(json.dumps(data))
+
+        loaded = Transcript.load(path)
+        assert loaded.total_duration_ms == 0.0
+        assert loaded.environment.model_version == ""
+
+    def test_save_serializes_non_json_types(self, tmp_path):
+        """save() degrades non-JSON values (datetime, Path) to strings."""
+        from datetime import datetime as dt
+
+        transcript = Transcript(task_id="t", trial_id="tr")
+        transcript.set_outcome(
+            output_data={"when": dt(2026, 1, 1), "where": Path("/tmp/x")},
+        )
+        path = transcript.save(tmp_path / "trace.json")
+        data = json.loads(path.read_text())
+        assert "2026" in data["outcome"]["output_data"]["when"]

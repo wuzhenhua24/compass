@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 # 1.2: promoted turn_index / agent_name to first-class ToolCall fields.
 # 1.3: added state_delta (list[StateChange]) to ToolCall — what the call
 #      changed in the environment, as opposed to what it returned.
-TOOLCALL_PROTOCOL_VERSION = "1.3"
+# 1.4: added run_id / config_hash to Transcript (audit provenance — which run
+#      produced this trace, under which scenario configuration).
+TOOLCALL_PROTOCOL_VERSION = "1.4"
 
 
 def _normalize_error(error: dict[str, Any] | str | None) -> dict[str, Any] | None:
@@ -603,6 +605,18 @@ class Environment:
             "attributes": self.attributes,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Environment":
+        """Create from dictionary."""
+        return cls(
+            model_version=data.get("model_version", ""),
+            adapter_version=data.get("adapter_version", ""),
+            random_seed=data.get("random_seed"),
+            gpu_memory_mb=data.get("gpu_memory_mb"),
+            cpu_percent=data.get("cpu_percent"),
+            attributes=data.get("attributes", {}),
+        )
+
 
 @dataclass
 class Transcript:
@@ -613,6 +627,12 @@ class Transcript:
 
     # Protocol version
     protocol_version: str = TOOLCALL_PROTOCOL_VERSION
+
+    # Audit provenance (protocol 1.4). run_id ties every trace back to the
+    # run that produced it; config_hash is the scenario fingerprint the run
+    # executed under. Empty string means "not recorded" (e.g. imported traces).
+    run_id: str = ""
+    config_hash: str = ""
 
     # Input
     input_prompt: str = ""
@@ -825,6 +845,8 @@ class Transcript:
             "protocol_version": self.protocol_version,
             "task_id": self.task_id,
             "trial_id": self.trial_id,
+            "run_id": self.run_id,
+            "config_hash": self.config_hash,
             "input": {
                 "prompt": self.input_prompt,
                 "params": self.input_params,
@@ -875,7 +897,7 @@ class Transcript:
         start_ts = self.start_time.timestamp()
 
         # Event 1: transcript.started
-        events.append({
+        transcript_started: dict[str, Any] = {
             "type": "transcript.started",
             "ts": start_ts,
             "task_id": self.task_id,
@@ -885,7 +907,12 @@ class Transcript:
                 "prompt": self.input_prompt,
                 "params": self.input_params,
             },
-        })
+        }
+        if self.run_id:
+            transcript_started["run_id"] = self.run_id
+        if self.config_hash:
+            transcript_started["config_hash"] = self.config_hash
+        events.append(transcript_started)
 
         # Events 2-N: tool_call.started + tool_call.completed pairs
         for tc in self.tool_calls:
@@ -1030,7 +1057,7 @@ class Transcript:
         Note:
             Some information may be lost in the round-trip as JSONL format
             is optimized for event streaming, not full fidelity storage.
-            For full fidelity, use to_dict()/from_dict() or save()/load().
+            For full fidelity, use save()/load() (JSON format).
         """
         events = [
             json.loads(line)
@@ -1050,6 +1077,8 @@ class Transcript:
             task_id=started["task_id"],
             trial_id=started["trial_id"],
             protocol_version=started.get("protocol_version", TOOLCALL_PROTOCOL_VERSION),
+            run_id=started.get("run_id", ""),
+            config_hash=started.get("config_hash", ""),
             input_prompt=started.get("input", {}).get("prompt", ""),
             input_params=started.get("input", {}).get("params", {}),
         )
@@ -1135,7 +1164,9 @@ class Transcript:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+            # default=str: outcome/output_data may carry non-JSON types
+            # (datetime, Path, ...) — degrade to strings rather than crash.
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False, default=str)
 
         return path
 
@@ -1161,6 +1192,8 @@ class Transcript:
             task_id=data["task_id"],
             trial_id=data["trial_id"],
             protocol_version=file_version,
+            run_id=data.get("run_id", ""),
+            config_hash=data.get("config_hash", ""),
             input_prompt=data["input"]["prompt"],
             input_params=data["input"]["params"],
         )
@@ -1171,6 +1204,24 @@ class Transcript:
             transcript.tool_calls.append(ToolCall.from_dict(tc_data))
 
         transcript.reasoning_steps = data.get("reasoning_steps", [])
+
+        # Restore environment (model_version etc. — importers fill these)
+        env_data = data.get("environment")
+        if env_data:
+            transcript.environment = Environment.from_dict(env_data)
+
+        # Restore timing — without this, a loaded transcript reports the load
+        # time as start_time and 0ms duration, breaking `compass trace` and
+        # any TRANSCRIPT grader re-run on saved traces.
+        timing = data.get("timing", {})
+        for attr, key in (("start_time", "start_time"), ("end_time", "end_time")):
+            raw = timing.get(key)
+            if raw:
+                try:
+                    setattr(transcript, attr, datetime.fromisoformat(raw))
+                except (ValueError, TypeError):
+                    logger.warning("Ignoring unparseable %s in trace file: %r", key, raw)
+        transcript.total_duration_ms = timing.get("total_duration_ms", 0.0)
 
         # Restore outcome
         outcome_data = data.get("outcome", {})

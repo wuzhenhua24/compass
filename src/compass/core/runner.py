@@ -21,7 +21,7 @@ from compass.core.scenario import (
     ShortCircuitMode,
     TestCase,
 )
-from compass.core.transcript import TranscriptRecorder
+from compass.core.transcript import Transcript, TranscriptRecorder
 from compass.core.trial import TrialManager, TaskResult, TrialResult
 from compass.graders import get_grader, GradeContext, GradeResult
 
@@ -141,11 +141,13 @@ class Compass:
                 new_results = await self._run_parallel(
                     scenario, remaining_cases, max_workers, trace_path, trace_format,
                     checkpoint_store=store,
+                    run_id=run_id, config_hash=fingerprint,
                 )
             else:
                 new_results = await self._run_sequential(
                     scenario, remaining_cases, trace_path, trace_format,
                     checkpoint_store=store,
+                    run_id=run_id, config_hash=fingerprint,
                 )
         else:
             new_results = []
@@ -173,6 +175,8 @@ class Compass:
 
         result = EvalResult(
             scenario_name=scenario.name,
+            run_id=run_id,
+            config_hash=fingerprint,
             total_cases=len(case_results),
             passed_cases=passed,
             failed_cases=failed,
@@ -192,11 +196,16 @@ class Compass:
         trace_dir: Path | None = None,
         trace_format: str = "json",
         checkpoint_store: CheckpointStore | None = None,
+        run_id: str = "",
+        config_hash: str = "",
     ) -> list[CaseResult]:
         """Run test cases sequentially."""
         results = []
         for case in cases:
-            result = await self._run_case(scenario, case, trace_dir, trace_format)
+            result = await self._run_case(
+                scenario, case, trace_dir, trace_format,
+                run_id=run_id, config_hash=config_hash,
+            )
             if checkpoint_store is not None:
                 checkpoint_store.save_case_result(case.id, result)
             results.append(result)
@@ -210,13 +219,18 @@ class Compass:
         trace_dir: Path | None = None,
         trace_format: str = "json",
         checkpoint_store: CheckpointStore | None = None,
+        run_id: str = "",
+        config_hash: str = "",
     ) -> list[CaseResult]:
         """Run test cases in parallel."""
         semaphore = asyncio.Semaphore(max_workers)
 
         async def run_with_semaphore(case: TestCase) -> CaseResult:
             async with semaphore:
-                result = await self._run_case(scenario, case, trace_dir, trace_format)
+                result = await self._run_case(
+                    scenario, case, trace_dir, trace_format,
+                    run_id=run_id, config_hash=config_hash,
+                )
                 if checkpoint_store is not None:
                     checkpoint_store.save_case_result(case.id, result)
                 return result
@@ -230,6 +244,8 @@ class Compass:
         case: TestCase,
         trace_dir: Path | None = None,
         trace_format: str = "json",
+        run_id: str = "",
+        config_hash: str = "",
     ) -> CaseResult:
         """Run a single test case (supports multiple trials)."""
         num_trials = scenario.get_trials_for_case(case)
@@ -239,7 +255,7 @@ class Compass:
             # Single trial: execute directly, maintaining existing behavior
             try:
                 passed, score, evaluator_results, output_data, _, transcript = await self._run_single_trial(
-                    scenario, case
+                    scenario, case, run_id=run_id, config_hash=config_hash
                 )
 
                 # Save trace if trace_dir is specified
@@ -284,7 +300,9 @@ class Compass:
         trial_transcripts: list = []
 
         async def run_trial_with_trace():
-            result = await self._run_single_trial(scenario, case)
+            result = await self._run_single_trial(
+                scenario, case, run_id=run_id, config_hash=config_hash
+            )
             # result is (passed, score, evaluator_results, output_data, env, transcript)
             if len(result) >= 6 and result[5] is not None:
                 trial_transcripts.append(result[5])
@@ -313,7 +331,9 @@ class Compass:
         self,
         scenario: Scenario,
         case: TestCase,
-    ) -> tuple[bool, float, list[EvaluatorResult], dict[str, Any], dict[str, Any], "TranscriptRecorder | None"]:
+        run_id: str = "",
+        config_hash: str = "",
+    ) -> tuple[bool, float, list[EvaluatorResult], dict[str, Any], dict[str, Any], Transcript]:
         """Execute a single trial.
 
         Returns:
@@ -324,6 +344,8 @@ class Compass:
         with TranscriptRecorder(task_id=case.id, trial_id=trial_id) as transcript:
             transcript.input_prompt = case.input.prompt
             transcript.input_params = case.input.params
+            transcript.run_id = run_id
+            transcript.config_hash = config_hash
 
             try:
                 # Get adapter and run agent
@@ -419,6 +441,7 @@ class Compass:
                             "gate": r.gate,
                             "grader_type": r.grader_type,
                             "grader_scope": r.grader_scope,
+                            "grader_version": r.grader_version,
                             "metadata": r.metadata,
                             "failure_tags": r.failure_tags,
                             "error": r.error,
@@ -591,16 +614,20 @@ class Compass:
         if short_circuit_mode == ShortCircuitMode.DISABLED:
             return await self._run_graders_sequential(grader_configs, context)
 
-        # Split graders into Code and Model phases
-        code_graders = [
-            c for c in grader_configs if c.type == GraderType.CODE
-        ]
-        model_graders = [
-            c for c in grader_configs if c.type == GraderType.MODEL
-        ]
-        other_graders = [
-            c for c in grader_configs if c.type not in (GraderType.CODE, GraderType.MODEL)
-        ]
+        # Split graders into Code and Model phases by their *actual* registered
+        # type — YAML `type:` defaults to model and is easy to get wrong, and a
+        # miscategorized grader silently lands in the wrong short-circuit phase.
+        code_graders = []
+        model_graders = []
+        other_graders = []
+        for c in grader_configs:
+            actual = self._resolve_grader_type(c)
+            if actual == GraderType.CODE.value:
+                code_graders.append(c)
+            elif actual == GraderType.MODEL.value:
+                model_graders.append(c)
+            else:
+                other_graders.append(c)
 
         # Phase 1: Run Code Graders
         results = await self._run_graders_sequential(code_graders, context)
@@ -653,6 +680,37 @@ class Compass:
             results.extend(other_results)
 
         return results
+
+    @staticmethod
+    def _resolve_grader_type(config: GraderConfig) -> str:
+        """Resolve a grader config's effective type ("code"/"model"/"human").
+
+        Prefers the registered grader class's ``grader_type`` over the YAML
+        ``type:`` declaration; warns when the two disagree. Falls back to the
+        declared type for graders not present in the registry.
+        """
+        try:
+            grader_cls = get_grader(config.name)
+        except Exception:
+            return config.type.value
+
+        actual = getattr(grader_cls, "grader_type", None)
+        actual_value = getattr(actual, "value", None) or (
+            actual if isinstance(actual, str) else None
+        )
+        if actual_value is None:
+            return config.type.value
+
+        # Only warn on an *explicit* wrong declaration — an omitted `type:`
+        # falls back to the model default and is not a user mistake.
+        explicitly_set = "type" in getattr(config, "model_fields_set", set())
+        if explicitly_set and actual_value != config.type.value:
+            logger.warning(
+                "Grader '%s' is declared as type '%s' in the scenario but is "
+                "registered as '%s' — using '%s' for phase classification.",
+                config.name, config.type.value, actual_value, actual_value,
+            )
+        return actual_value
 
     def _check_short_circuit(
         self,
@@ -748,6 +806,10 @@ class Compass:
                         gate=config.gate,
                         grader_type=grader_type_value,
                         grader_scope=grader_scope_value,
+                        grader_version=(
+                            grade_result.grader_version
+                            or getattr(grader, "version", "")
+                        ),
                         metadata=grade_result.details,
                         failure_tags=grade_result.failure_tags,
                         error=grade_result.error,
