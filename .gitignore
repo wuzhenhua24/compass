@@ -92,8 +92,15 @@ output/
 # Top-level run outputs only — keep nested fixtures like examples/results/.
 /results/
 
-# Personal
-docs/
+# Personal notes & saved reference articles (docs/*.md guides ARE tracked)
+docs/*.html
+docs/*_files/
+docs/*.txt
+docs/Promptfoo*/
+docs/idea.md
+docs/interview.md
+docs/todos.md
+docs/*-insights.md
 
 # UV
 .uv/

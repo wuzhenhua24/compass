@@ -164,4 +164,6 @@ cases:
 - Run specific grader tests: `pytest tests/test_*_graders.py`
 
 ## document
- - 每次增加新功能特性，请更新到 README.md 和 interview.md 文件中。
+ - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
+ - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
+ - docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 等是本地参考资料（gitignore），专题 *.md 文档是版本库的一部分。
