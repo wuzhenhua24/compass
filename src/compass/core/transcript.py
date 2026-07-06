@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 #      changed in the environment, as opposed to what it returned.
 # 1.4: added run_id / config_hash to Transcript (audit provenance — which run
 #      produced this trace, under which scenario configuration).
-TOOLCALL_PROTOCOL_VERSION = "1.4"
+# 2.0: ToolCall.to_dict() no longer emits the legacy tool/args/result aliases
+#      (they duplicated tool_name/input/output and nearly doubled trace size
+#      for large outputs). Read-side compatibility is unchanged: from_dict()
+#      still accepts legacy keys and the tool/args/result properties remain.
+TOOLCALL_PROTOCOL_VERSION = "2.0"
 
 
 def _normalize_error(error: dict[str, Any] | str | None) -> dict[str, Any] | None:
@@ -446,10 +450,6 @@ class ToolCall:
             "turn_index": self.turn_index,
             "agent_name": self.agent_name,
             "state_delta": [sc.to_dict() for sc in self.state_delta],
-            # Legacy aliases for backward compatibility
-            "tool": self.tool_name,
-            "args": self.input,
-            "result": self.output,
         }
 
     @classmethod

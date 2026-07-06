@@ -1335,3 +1335,45 @@ class TestJsonLoadFidelity:
         path = transcript.save(tmp_path / "trace.json")
         data = json.loads(path.read_text())
         assert "2026" in data["outcome"]["output_data"]["when"]
+
+
+# ===================================================================
+# Protocol 2.0: write-side legacy aliases removed
+# ===================================================================
+
+
+class TestProtocol2AliasRemoval:
+    """to_dict() no longer duplicates tool_name/input/output as
+    tool/args/result — trace files shrink; read-side compat is unchanged."""
+
+    def test_to_dict_omits_legacy_aliases(self):
+        tc = ToolCall(tool_name="a.b", input={"x": 1}, output="big payload")
+        d = tc.to_dict()
+        assert "tool" not in d
+        assert "args" not in d
+        assert "result" not in d
+        # Protocol fields still present
+        assert d["tool_name"] == "a.b"
+        assert d["input"] == {"x": 1}
+        assert d["output"] == "big payload"
+
+    def test_from_dict_still_reads_legacy_keys(self):
+        """Old trace files written with aliases keep loading."""
+        tc = ToolCall.from_dict({"tool": "t", "args": {"a": 1}, "result": "r"})
+        assert tc.tool_name == "t"
+        assert tc.input == {"a": 1}
+        assert tc.output == "r"
+
+    def test_property_aliases_survive(self):
+        """The Python-level tool/args/result properties are unaffected."""
+        tc = ToolCall(tool_name="a.b", input={"x": 1}, output="out")
+        assert tc.tool == "a.b"
+        assert tc.args == {"x": 1}
+        assert tc.result == "out"
+
+    def test_round_trip_via_new_format(self):
+        original = ToolCall(tool_name="a.b", input={"x": 1}, output="out")
+        restored = ToolCall.from_dict(original.to_dict())
+        assert restored.tool_name == original.tool_name
+        assert restored.input == original.input
+        assert restored.output == original.output

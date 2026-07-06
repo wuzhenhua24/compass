@@ -2263,6 +2263,10 @@ class MyGrader(CodeGrader):
 
 **边界纪律**：这里记录的是**评测控制面自己的**溯源（哪次 run、哪份配置、哪个版本的判分器）——Compass 能自证的部分自动盖章；被测 agent 侧的 model/harness 版本属于数据面事实，槽位在 `Environment.model_version` / `adapter_version`，由数据面填充（pi / Claude 两个 importer 已填 `model_version`，内置 adapter 尚未填——这是已知缺口，见 docs/todos.md）。向后兼容：1.4 之前的 transcript 加载后两字段为空字符串（"未记录"），导入的外部 trace 同理；JSONL 事件流只在字段非空时写入。
 
+**trace 写侧瘦身**（ToolCall Protocol v2.0）
+
+`ToolCall.to_dict()` 不再输出 legacy 别名键 `tool` / `args` / `result`——它们完整复制 `tool_name` / `input` / `output`，工具输出大时 trace 文件体积近乎翻倍。这是纯写侧变更，读侧兼容不变：`from_dict()` 仍接受老键（老 trace 文件照常加载），Python 层的 `tc.tool` / `tc.args` / `tc.result` 属性别名照常可用。若有外部脚本直接读 trace JSON 里的这三个键，请改读 `tool_name` / `input` / `output`。
+
 ### 16. 端到端示例：文档问答 Agent 评估（`examples/ops_qa/`）
 
 一个把上面串起来的**可跑模板**——评估基于文档的 agentic-RAG 运维问答 bot（`ops-qa-bot` 形态：`Read`/`Grep` 检索 `docs/`、只读 `Bash`/SSH 诊断、写操作只提议）。核心是：**doc-grounded 问答不能只判"语义对不对"**，模板把它拆成四类样本，每类配一组合适的 grader：

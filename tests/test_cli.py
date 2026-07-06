@@ -1,7 +1,6 @@
 """Tests for CLI functionality."""
 
 import tempfile
-import warnings
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -319,24 +318,7 @@ class TestListCommand:
             assert g not in model_graders
 
 
-class TestEvalModuleDeprecation:
-    """Tests for deprecated eval module."""
-
-    def test_eval_module_shows_deprecation_warning(self):
-        """Importing compass.eval should show a deprecation warning."""
-        # Clear any cached imports
-        import sys
-        if "compass.eval" in sys.modules:
-            del sys.modules["compass.eval"]
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            import compass.eval  # noqa: F401
-
-            # Check that a deprecation warning was issued
-            deprecation_warnings = [
-                warning for warning in w
-                if issubclass(warning.category, DeprecationWarning)
-            ]
-            assert len(deprecation_warnings) >= 1
-            assert "deprecated" in str(deprecation_warnings[0].message).lower()
+def test_eval_legacy_stack_removed():
+    """The deprecated compass.eval stack is gone — importing it must fail."""
+    with pytest.raises(ModuleNotFoundError):
+        import compass.eval  # noqa: F401
