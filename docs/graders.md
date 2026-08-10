@@ -91,6 +91,89 @@ traces/
 
 `compass grade` 的证据落在 `grades/<set>/<trace>/`，并在评分记录的 `evidence` 字段里列出文件名。Python 侧：`ArtifactStore(trace_dir).list_grade_evidence(case_id)`。没有任何 grader 写入时，空目录会被自动清理。
 
+## 子进程 Checker：任何可执行文件都能当 grader
+
+内置 grader 是 Python 类，这对框架自带的那些是对的。但它给"谁能扩展 Compass"设了一道门槛：领域检查必须用 Python 写、必须 import Compass。
+
+`external_checker` 把这道门槛拆掉——**任何可执行文件都是 grader**：`rsvg-convert`、`pytest`、`npm test`、一个 Go 二进制、一行 grep 日志的 shell。契约是进程边界，checker 除了几个环境变量之外不需要知道 Compass 的任何东西。
+
+```yaml
+graders:
+  - name: external_checker
+    type: code
+    required: true
+    creates: extracted.svg          # `creates:` 契约照常生效
+    config:
+      command: ./checkers/extract-svg
+
+  - name: external_checker
+    type: code
+    config:
+      command: ./checkers/render     # 消费上一步的产物
+      input: extracted.svg           # → COMPASS_CONFIG_INPUT
+      timeout: 30
+```
+
+### Checker 契约
+
+程序**不带参数**执行，工作目录是**共享的 grade workspace**——所以它天然融入评分流水线：能读前序 grader 的产物，也能给后续 grader 留文件。
+
+**环境变量：**
+
+| 变量 | 内容 |
+|---|---|
+| `COMPASS_WORKSPACE` | 共享 workspace 的绝对路径（== cwd） |
+| `COMPASS_TRANSCRIPT` | 执行轨迹 JSON 文件的路径 |
+| `COMPASS_OUTCOME` | 最终产物 JSON 文件的路径 |
+| `COMPASS_PROMPT` | case 的 prompt |
+| `COMPASS_ANSWER` | agent 的最终文本答案（有的话） |
+| `COMPASS_REFERENCE_ANSWER` | golden 答案（case 提供的话） |
+| `COMPASS_CONFIG` | grader 的完整 config，JSON——结构化值走这里 |
+| `COMPASS_CONFIG_<KEY>` | 每个**标量** config 键，大写——给 shell 脚本用 |
+
+**输出：**
+
+- **exit code 决定通过与否**（0 = 通过）
+- **stdout** 可以是一个 JSON 对象，含 `score` / `tags` / `metrics` / `notes` / `details`；**其它键一律折进 `details`**，checker 无法覆写 Compass 的核心字段
+- **stderr** 在失败时作为错误信息保留
+
+不打印 JSON 完全没问题——很多有用的 checker 就是 exit 0/1；非 JSON 的 stdout 会被当成 `notes` 保留，不算错误。
+
+```python
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+
+outcome = json.loads(pathlib.Path(os.environ["COMPASS_OUTCOME"]).read_text())
+text = "".join(a.get("content", "") for a in outcome["artifacts"])
+if "<svg" not in text:
+    sys.exit("no <svg> found in the answer")        # stderr → 错误信息，exit 1 → 失败
+
+pathlib.Path("extracted.svg").write_text(...)        # cwd 就是 workspace
+print(json.dumps({"notes": "extracted ok", "tags": ["has_svg"]}))
+```
+
+### 分数语义：与 smevals 的一处刻意偏离
+
+smevals 里，一个失败但没给分的 check 会让整个 Grade **unscored**。Compass 给"未打分"赋予了更强的含义——**移出计分分母、并且判负**（见 [analysis.md](analysis.md) 的"未打分 ≠ 0 分"）。而 checker 退出非零是一次**测量**（"这项检查没过"），不是"测不出来"。所以：
+
+| 情况 | score | 含义 |
+|---|---|---|
+| exit 0 | JSON 里的 `score`，否则 `1.0` | 通过 |
+| exit 非 0 | JSON 里的 `score`，否则 `0.0` | 测出来了，没过（可给部分分） |
+| 程序不存在 / 没有执行权限 / 超时 / 被信号杀死 | `None` | **Compass 什么都没测到** |
+
+最后一行才是 `score=None` 该出现的地方：那是 harness 故障，不是关于 agent 的证据。
+
+### 命令解析与几点约定
+
+- `command` 可以是字符串（单个程序）或列表（argv）。**不走 shell**——scenario 是配置文件，不是写 shell 的地方。
+- 带路径分隔符或以 `.` 开头 → 按路径解析（相对于 Compass 启动时的工作目录）；裸名字 → 在 `PATH` 里查找。
+- `timeout` 默认 60 秒。
+- scope 固定为 `BOTH`（transcript 和 outcome 都交给它，Compass 无法知道它实际读哪个）——这也意味着 JSONL 这类有损轨迹会被**拒绝重评**而不是拿空 outcome 去评。
+- transcript / outcome 的 JSON 落在临时目录而非 workspace：workspace 是**判分证据**，不该被 Compass 自己的输入污染。
+
+> **安全**：这会执行 scenario 里写的任何命令——和一个 Python grader 模块能做的事一样。**scenario 文件是可信输入**。
+
 ## 观察标签（Observed Tags）：从"失败统计"到"行为画像"
 
 `failure_tags` 回答「为什么挂了」。**观察标签**回答「看见了什么」——**通过的样本也打**，于是报告能给出行为分布，而不只是失败清单：

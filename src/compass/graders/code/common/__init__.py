@@ -1,5 +1,8 @@
 """Common graders shared across different agent types."""
 
+from compass.graders.code.common.external import (
+    ExternalCheckerGrader,
+)
 from compass.graders.code.common.structure import (
     JsonSchemaGrader,
     SqlSyntaxGrader,
@@ -20,6 +23,8 @@ from compass.graders.code.common.transcript_graders import (
 )
 
 __all__ = [
+    # External process graders
+    "ExternalCheckerGrader",
     # Structure graders
     "JsonSchemaGrader",
     "SqlSyntaxGrader",
