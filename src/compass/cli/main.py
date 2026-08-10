@@ -117,9 +117,15 @@ def test(
                 )
                 all_results.append(result)
 
-                # Print summary
-                status = "[green]PASS[/green]" if result.pass_rate == 1.0 else "[red]FAIL[/red]"
-                progress.update(task, description=f"{scn.name}: {status} ({result.passed_cases}/{result.total_cases})")
+                # Print summary. pass_rate excludes harness errors, so a run
+                # with errors is not "all green" even at pass_rate == 1.0.
+                if result.error_cases:
+                    status = "[yellow]ERROR[/yellow]"
+                elif result.pass_rate == 1.0:
+                    status = "[green]PASS[/green]"
+                else:
+                    status = "[red]FAIL[/red]"
+                progress.update(task, description=f"{scn.name}: {status} ({result.passed_cases}/{result.evaluated_cases})")
 
                 if verbose:
                     _print_result_details(result)
@@ -688,6 +694,15 @@ def compare(results_a: str, results_b: str, output: Optional[str], as_json: bool
         f"[red]{len(report.regressed)} regressed[/red]"
     )
 
+    # A case scored under two different grading contracts is not a clean A/B
+    if report.regraded:
+        console.print(
+            f"[yellow]⚠ {len(report.regraded)} case(s) were graded by a different "
+            f"grader spec in B than in A — their diff is not attributable to the "
+            f"agent:[/yellow] {', '.join(report.regraded[:10])}"
+            + (" …" if len(report.regraded) > 10 else "")
+        )
+
     # Coverage changes are reported, never silently dropped
     if report.only_in_a:
         console.print(
@@ -1124,11 +1139,17 @@ def _print_summary_table(results):
         for r in results for cr in r.case_results
     )
 
+    # Harness errors are excluded from pass rate, so show the column that
+    # explains the denominator rather than letting the number look wrong.
+    has_errors = any(r.error_cases for r in results)
+
     table = Table(title="Test Summary")
     table.add_column("Scenario", style="cyan")
     table.add_column("Cases", justify="right")
     table.add_column("Passed", justify="right", style="green")
     table.add_column("Failed", justify="right", style="red")
+    if has_errors:
+        table.add_column("Error", justify="right", style="yellow")
     table.add_column("Pass Rate", justify="right")
     table.add_column("Avg Score", justify="right")
     if has_trials:
@@ -1145,9 +1166,10 @@ def _print_summary_table(results):
             str(r.total_cases),
             str(r.passed_cases),
             str(r.failed_cases),
-            pass_rate,
-            avg_score,
         ]
+        if has_errors:
+            row.append(str(r.error_cases))
+        row += [pass_rate, avg_score]
         if has_trials:
             row.append(f"{r.best_of_k_score:.3f}")
         row.append(duration)
@@ -1156,6 +1178,13 @@ def _print_summary_table(results):
 
     console.print()
     console.print(table)
+
+    if has_errors:
+        total_errors = sum(r.error_cases for r in results)
+        console.print(
+            f"[yellow]⚠ {total_errors} case(s) failed in the harness "
+            f"(not the agent) and are excluded from pass rate / avg score[/yellow]"
+        )
 
 
 @cli.group()

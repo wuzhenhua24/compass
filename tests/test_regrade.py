@@ -533,3 +533,41 @@ async def test_single_trace_file_can_be_graded(tmp_path):
 
     assert report.graded == 1
     assert report.grade_dir == trace_dir / "grades" / "default"
+
+
+async def test_grade_output_carries_the_same_fingerprint_as_a_live_run(tmp_path):
+    """A re-graded CaseResult must be comparable with a freshly-run one."""
+    from compass.core.regrade import grader_fingerprint
+
+    trace_dir = tmp_path / "traces"
+    scenario = _make_scenario()
+    live = await Compass().run(scenario, trace_dir=trace_dir)
+
+    report = await grade_traces(scenario, trace_dir, grade_set="default")
+
+    expected = grader_fingerprint(scenario, scenario.cases[0])
+    assert live.case_results[0].grader_fingerprint == expected
+    assert report.result.case_results[0].grader_fingerprint == expected
+
+
+async def test_compare_flags_a_regrade_under_a_changed_contract(tmp_path):
+    """The payoff: two grade sets over one trace set are detectably different."""
+    from compass.report.compare import compare_results, load_case_records
+
+    trace_dir = tmp_path / "traces"
+    _write_transcript(trace_dir)
+
+    strict = await grade_traces(
+        _make_scenario(needle="42"), trace_dir, grade_set="strict"
+    )
+    relaxed = await grade_traces(
+        _make_scenario(needle="the answer"), trace_dir, grade_set="relaxed"
+    )
+    (tmp_path / "a.json").write_text(json.dumps(strict.result.to_dict()))
+    (tmp_path / "b.json").write_text(json.dumps(relaxed.result.to_dict()))
+
+    report = compare_results(
+        load_case_records(tmp_path / "a.json"),
+        load_case_records(tmp_path / "b.json"),
+    )
+    assert report.regraded == ["case_a"]

@@ -92,6 +92,16 @@ def spec_fingerprint(spec: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def grader_fingerprint(scenario: Scenario, case: TestCase) -> str:
+    """Fingerprint of the grading contract for one case.
+
+    Stamped onto every CaseResult by both the live runner and ``compass
+    grade``, so two results are known to be comparable — or known not to be —
+    without trusting a hand-maintained version string.
+    """
+    return spec_fingerprint(case_grader_spec(scenario, case))
+
+
 # ----------------------------------------------------------------------
 # Trace discovery + loading
 # ----------------------------------------------------------------------
@@ -484,6 +494,9 @@ async def grade_traces(
         case_result = runner._task_result_to_case_result(task_result, case.metrics)
         case_result.tags = case.tags
         case_result.category = scenario.get_category_for_case(case)
+        # Same fingerprint the live runner stamps, so `compass compare` can tell
+        # a re-grade under a changed contract from an agent-side change.
+        case_result.grader_fingerprint = fingerprint
         case_results.append(case_result)
 
     if specs:

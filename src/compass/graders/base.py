@@ -283,7 +283,14 @@ def generate_leak_marker(prefix: str = "COMPASS_LEAK") -> str:
 
 @dataclass
 class GradeResult:
-    """Result from a grader."""
+    """Result from a grader.
+
+    ``score=None`` means **not measured** — the grader could not produce a
+    number (an LLM judge timed out, a required input was missing). That is not
+    the same as ``score=0.0`` ("measured, and it is bad"), and the aggregate
+    keeps them apart: an unscored grader is left out of the score denominator
+    instead of silently dragging the mean toward zero.
+    """
 
     name: str = ""
     grader_type: GraderType = GraderType.MODEL
@@ -293,7 +300,7 @@ class GradeResult:
     # across runs when the verifier version matches.
     grader_version: str = ""
     passed: bool = False
-    score: float = 0.0
+    score: float | None = 0.0
     weight: float = 1.0
 
     # Detailed results
@@ -305,8 +312,15 @@ class GradeResult:
     error: str | None = None
 
     @property
+    def scored(self) -> bool:
+        """Whether this grader produced an actual measurement."""
+        return self.score is not None
+
+    @property
     def weighted_score(self) -> float:
-        """Calculate weighted score."""
+        """Weighted score; 0.0 when unscored (callers should filter on ``scored``)."""
+        if self.score is None:
+            return 0.0
         return self.score * self.weight
 
     def to_dict(self) -> dict[str, Any]:
@@ -318,6 +332,7 @@ class GradeResult:
             "grader_version": self.grader_version,
             "passed": self.passed,
             "score": self.score,
+            "scored": self.scored,
             "weight": self.weight,
             "weighted_score": self.weighted_score,
             "details": self.details,

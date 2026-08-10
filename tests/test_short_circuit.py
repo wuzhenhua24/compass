@@ -255,10 +255,14 @@ class TestShortCircuitCodeFail:
 
         # Model grader should be marked as skipped
         model_result = next(r for r in results if r.name == "_test_model_pass")
+        assert model_result.skipped is True
+        assert model_result.skip_reason == "short_circuit"
         assert model_result.metadata.get("skipped") is True
         assert model_result.metadata.get("reason") == "short_circuit"
         assert not model_result.passed
-        assert model_result.score == 0.0
+        # It never ran, so it measured nothing — unscored, not zero
+        assert model_result.score is None
+        assert model_result.scored is False
 
     @pytest.mark.asyncio
     async def test_multiple_model_graders_all_skipped(self, compass):

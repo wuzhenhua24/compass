@@ -105,6 +105,60 @@ print(report.unmatched, report.missing_traces, report.unreadable)
 
 > **实现纪律**：`compass test` 与 `compass grade` 共用同一条评分路径（`Compass.grade_transcript`）——重评一条轨迹得到的分数，就是实跑时面对同样证据会给出的分数，两者不会漂移。
 
+## 评测卫生：什么算进数字，什么不算
+
+评测框架最容易犯的错，是把**不知道**渲染成一个看起来很合理的数字。Compass 在聚合层守住四条区分。
+
+### 1. Harness 失败 ≠ 模型失败
+
+网络抖动、API 限流、adapter 崩溃说明不了模型任何事。这类 case 记为 `ERROR`，并**移出分母**：
+
+```
+pass_rate = passed_cases / evaluated_cases        # evaluated = total − error
+```
+
+否则一次限流就能把 pass rate 压下去，还和"模型确实做错了"混成同一个数——发布门禁会因为机房抖动而拦下一个好版本。`average_score` / `best_of_k_score` 同样排除 ERROR case。被排除的数量始终显式上报（`compass test` 的 Error 列 + 一行说明），沉默地剔除数据比不剔除更糟。
+
+同一条规则在 trial 级生效：死于 harness 的试验是**缺失的样本**而非失败的尝试，不进 pass@k / pass^k 的分母（见 [scenario-config.md](scenario-config.md) 的"采样纪律"）。
+
+### 2. 未打分 ≠ 0 分
+
+`GradeResult.score = None` 表示**没测出来**（判官超时、依赖缺失），与 `score = 0.0`（测了，很差）是两件事：
+
+- 未打分的 grader **不进加权平均的分母**——一次 LLM judge 超时不会把 0.9 拉成 0.45
+- 但它**会让这个 case 判负**：一次没跑完的评估无权签发"通过"
+
+```python
+# 两个 grader：一个给 1.0，一个崩了
+case.overall_score == 1.0      # 分数诚实：只报测到的
+case.passed is False           # 判定诚实：没测全就不能算过
+```
+
+短路跳过（`skipped=True`）是另一回事：那是聚合层**主动决定**不跑，所以既不计分也不拖累判定。
+
+| | 计入分数 | 影响判定 |
+|---|---|---|
+| 正常打分 | ✅ | ✅ |
+| 未打分（崩溃/超时） | ❌ | ❌ 判负 |
+| 短路跳过 | ❌ | ✅ 放行 |
+
+### 3. 核心字段不可被用户 grader 覆写
+
+控制标志（`skipped` / `skip_reason`）是 `EvaluatorResult` 上的**一等字段**，聚合只读它们。用户 grader 返回的 `details` 落在 `metadata` 里，永远不参与控制流——一个自定义 grader 在 `details` 里写 `{"skipped": True}` 只是普通数据，不会把自己悄悄摘出计分。
+
+### 4. 分数只在同一份判分契约下可比
+
+每个 CaseResult 带 `grader_fingerprint`：该 case 的判分契约（解析后的 grader 列表 + aggregation + leak_markers + expect）的内容哈希。它是自动的，改了阈值就变，不依赖手工 bump `Grader.version`；实跑（`compass test`）与重评（`compass grade`）用的是同一个函数，所以两边的结果直接可比。
+
+`compass compare` 因此能给出归因警告：
+
+```
+⚠ 3 case(s) were graded by a different grader spec in B than in A —
+  their diff is not attributable to the agent
+```
+
+没有这条，"B 比 A 涨了 5 个点"里混着判分器改动和 agent 改动，而你分不出来。旧结果文件没有指纹时不会误报——**缺失不等于不匹配**。
+
 ## 评估结果分析与可视化
 
 Compass 提供内置的结果分析引擎，延续 Transcript / Outcome 分离思想，从**过程**和**结果**两个维度深度剖析评估数据。

@@ -138,6 +138,32 @@ pass^k = P(k次尝试全部成功)       → 适用于可靠性要求高的场�
 └─────────┴─────────┴─────────┘
 ```
 
+### 采样纪律：为什么轮转 + 补齐
+
+pass^k 是对**样本**的统计量，样本歪了，指标就不是它宣称的东西。Compass 因此对多试验采取两条纪律：
+
+**均衡轮转。** 试验按「轮次」跑：先给每个 case 各跑第 1 次，再各跑第 2 次……而不是「把 case A 的 k 次跑完再跑 case B」。中途 Ctrl-C 时，每个 case 的样本数是**相当**的，而不是前几个 case 满额、后几个 0 次——后者算出的 pass^k 是拿一个偏样本冒充总体。
+
+```
+轮转（Compass）:  A₁ B₁ C₁ │ A₂ B₂ C₂ │ A₃ B₃ C₃
+                          ↑ 在这里中断，三个 case 各有 2 个样本
+
+case-major:      A₁ A₂ A₃ │ B₁ B₂ B₃ │ C₁ C₂ C₃
+                          ↑ 在这里中断，A 有 3 个、B 和 C 各 0 个
+```
+
+**补齐而非重跑。** 目标是「**拥有** N 个有效试验」，不是「**执行** N 次」。`--resume` 时只补差额，全部达标就是 no-op——命令天然幂等，中断后重跑同一条命令即续跑（trial 级 checkpoint，已经花钱跑出来的样本不会被丢弃重来）。
+
+**基础设施失败不占名额。** 网络抖动、adapter 崩溃产生的试验是**缺失的样本**，不是失败的尝试：不计入 pass^k 的分母，也不消耗目标名额。但差额**每次调用只补一轮**——一个持续崩溃的 adapter 会让这次运行失败，而不是陷入重试循环。
+
+| 字段 | 含义 |
+|---|---|
+| `total_trials` | 实际执行的尝试次数 |
+| `error_trials` | 其中死于 harness 错误、被排除出指标的次数 |
+| `trial_metrics.total_trials` | 真正进入 pass@k / pass^k 计算的样本数 |
+
+同一条纪律在 case 级也成立：`EvalResult.pass_rate = passed_cases / evaluated_cases`，其中 `evaluated_cases = total_cases - error_cases`。详见 [docs/analysis.md](analysis.md) 的"评测卫生"。
+
 ## 分类聚合分析（Category & Tags）
 
 受 Stripe 将评测任务分为 **Backend / Full-stack / Gym** 三类的启发，Compass 在 Scenario 和 TestCase 上增加了 `category` 和 `tags` 字段，支持在报告中按类别和标签聚合分析，而非只看整体得分。

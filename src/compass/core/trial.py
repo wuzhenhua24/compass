@@ -17,7 +17,8 @@ class TrialResult:
     trial_id: str
     trial_number: int
     passed: bool
-    score: float
+    #: None when the trial produced no measurement (harness error).
+    score: float | None
     grader_results: list[Any] = field(default_factory=list)
     duration_ms: float = 0.0
     error: str | None = None
@@ -68,17 +69,34 @@ class TaskResult:
         return len(self.trials)
 
     @property
+    def evaluated_trials(self) -> list["TrialResult"]:
+        """Trials that produced evidence about the agent.
+
+        A trial whose harness blew up (network drop, crashed adapter) says
+        nothing about the model, so it is not a failed attempt — it is a
+        missing sample. Counting it as a failure would let infrastructure
+        flakiness depress pass^k, the very metric meant to measure the agent.
+        """
+        return [t for t in self.trials if t.error is None]
+
+    @property
+    def error_trials(self) -> int:
+        """Number of trials lost to harness errors."""
+        return len(self.trials) - len(self.evaluated_trials)
+
+    @property
     def passed_trials(self) -> int:
         """Number of trials that passed."""
-        return sum(1 for t in self.trials if t.passed)
+        return sum(1 for t in self.evaluated_trials if t.passed)
 
     @property
     def metrics(self) -> TrialMetrics:
-        """Get or calculate metrics."""
+        """Get or calculate metrics (over evaluated trials only)."""
         if self._metrics is None:
+            evaluated = self.evaluated_trials
             self._metrics = calculate_metrics(
-                passed_list=[t.passed for t in self.trials],
-                scores=[t.score for t in self.trials],
+                passed_list=[t.passed for t in evaluated],
+                scores=[t.score or 0.0 for t in evaluated],
             )
         return self._metrics
 
@@ -93,6 +111,10 @@ class TaskResult:
         therefore uniform across positive and negative tests; re-inverting here
         would double-negate and flip the verdict for negative tests.
         """
+        if not self.evaluated_trials:
+            # Every attempt was lost to a harness error: no evidence either way,
+            # so fail closed rather than vacuously pass on an empty sample.
+            return False
         return self.metrics.pass_rate >= 0.5
 
     @property
@@ -123,6 +145,7 @@ class TaskResult:
             "is_positive_test": self.is_positive_test,
             "total_trials": self.total_trials,
             "passed_trials": self.passed_trials,
+            "error_trials": self.error_trials,
             "metrics": self.metrics.to_dict(),
             "trials": [t.to_dict() for t in self.trials],
         }
@@ -188,7 +211,7 @@ class TrialManager:
         """Run trials sequentially."""
         results = []
         for i in range(self.num_trials):
-            trial = await self._execute_trial(task_id, i + 1, run_fn)
+            trial = await self.execute_trial(task_id, i + 1, run_fn)
             results.append(trial)
         return results
 
@@ -198,12 +221,12 @@ class TrialManager:
 
         async def run_with_semaphore(trial_num: int) -> TrialResult:
             async with semaphore:
-                return await self._execute_trial(task_id, trial_num, run_fn)
+                return await self.execute_trial(task_id, trial_num, run_fn)
 
         tasks = [run_with_semaphore(i + 1) for i in range(self.num_trials)]
         return await asyncio.gather(*tasks)
 
-    async def _execute_trial(
+    async def execute_trial(
         self,
         task_id: str,
         trial_number: int,
@@ -266,7 +289,8 @@ class TrialManager:
                 trial_id=trial_id,
                 trial_number=trial_number,
                 passed=False,
-                score=0.0,
+                # A harness error measured nothing — not a zero score.
+                score=None,
                 duration_ms=duration_ms,
                 error=str(e),
             )

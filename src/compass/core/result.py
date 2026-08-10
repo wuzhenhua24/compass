@@ -17,10 +17,24 @@ class TestStatus(Enum):
 
 @dataclass
 class EvaluatorResult:
-    """Result from a single evaluator."""
+    """Result from a single evaluator.
+
+    Two distinctions the aggregate depends on, both core-owned:
+
+    - ``skipped``: the grader never ran (short-circuit). It contributes nothing
+      and does not hold the case back.
+    - ``score is None``: the grader ran but produced no measurement (it crashed,
+      timed out, ...). "Not measured" is not "measured as zero", so an unscored
+      grader is excluded from the score denominator — but it *does* fail the
+      case, because a pass cannot be certified from an incomplete evaluation.
+
+    Both live in dedicated fields rather than inside ``metadata``: ``metadata``
+    carries the grader's own ``details`` payload, so anything the core reads
+    from it could be clobbered by a user grader.
+    """
 
     name: str
-    score: float
+    score: float | None
     passed: bool
     weight: float = 1.0
     required: bool = False  # Whether this grader must pass for overall pass
@@ -28,13 +42,23 @@ class EvaluatorResult:
     grader_type: str = "code"  # "code", "model", or "human"
     grader_scope: str = "outcome"  # "outcome", "transcript", or "both"
     grader_version: str = ""  # Verifier version that produced this score
+    # Core-owned control flags — never read these from `metadata`
+    skipped: bool = False
+    skip_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     error: str | None = None
 
     @property
+    def scored(self) -> bool:
+        """Whether this grader produced an actual measurement."""
+        return self.score is not None
+
+    @property
     def weighted_score(self) -> float:
-        """Calculate weighted score."""
+        """Weighted score; 0.0 when unscored (callers should filter on ``scored``)."""
+        if self.score is None:
+            return 0.0
         return self.score * self.weight
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +74,9 @@ class EvaluatorResult:
             "grader_type": self.grader_type,
             "grader_scope": self.grader_scope,
             "grader_version": self.grader_version,
+            "scored": self.scored,
+            "skipped": self.skipped,
+            "skip_reason": self.skip_reason,
             "metadata": self.metadata,
             "failure_tags": self.failure_tags,
             "error": self.error,
@@ -89,7 +116,14 @@ class CaseResult:
     # Trials-related fields
     total_trials: int = 1
     passed_trials: int = 0
+    error_trials: int = 0  # Trials lost to harness errors, excluded from metrics
     trial_metrics: dict[str, Any] | None = None  # pass@k, pass^k, pass_rate, etc.
+
+    # Audit provenance: content hash of the grading contract applied to this
+    # case (graders + aggregation + leak markers + expect). Automatic, so a
+    # score is only comparable across runs when this matches — no reliance on a
+    # hand-maintained Grader.version.
+    grader_fingerprint: str = ""
 
     @property
     def best_score(self) -> float:
@@ -107,8 +141,12 @@ class CaseResult:
 
     @property
     def breakdown(self) -> dict[str, float]:
-        """Get score breakdown by evaluator."""
-        return {r.name: r.weighted_score for r in self.evaluator_results}
+        """Score breakdown by evaluator (unscored/skipped graders omitted)."""
+        return {
+            r.name: r.weighted_score
+            for r in self.evaluator_results
+            if r.scored and not r.skipped
+        }
 
 
 @dataclass
@@ -129,25 +167,41 @@ class EvalResult:
     config_hash: str = ""
 
     @property
+    def evaluated_cases(self) -> int:
+        """Cases that produced evidence about the agent.
+
+        Excludes ERROR cases: a network drop or a crashed adapter is a harness
+        failure, not the agent getting it wrong. Counting them as failures
+        would let infrastructure flakiness masquerade as a quality regression.
+        """
+        return self.total_cases - self.error_cases
+
+    @property
+    def _evaluated_results(self) -> list[CaseResult]:
+        return [r for r in self.case_results if r.status != TestStatus.ERROR]
+
+    @property
     def pass_rate(self) -> float:
-        """Calculate pass rate."""
-        if self.total_cases == 0:
+        """Pass rate over evaluated cases (harness errors excluded)."""
+        if self.evaluated_cases <= 0:
             return 0.0
-        return self.passed_cases / self.total_cases
+        return self.passed_cases / self.evaluated_cases
 
     @property
     def average_score(self) -> float:
-        """Calculate average score across all cases."""
-        if not self.case_results:
+        """Mean case score over evaluated cases (harness errors excluded)."""
+        evaluated = self._evaluated_results
+        if not evaluated:
             return 0.0
-        return sum(r.overall_score for r in self.case_results) / len(self.case_results)
+        return sum(r.overall_score for r in evaluated) / len(evaluated)
 
     @property
     def best_of_k_score(self) -> float:
-        """Average of per-case best scores (best-of-k across trials)."""
-        if not self.case_results:
+        """Mean per-case best score over evaluated cases (best-of-k across trials)."""
+        evaluated = self._evaluated_results
+        if not evaluated:
             return 0.0
-        return sum(r.best_score for r in self.case_results) / len(self.case_results)
+        return sum(r.best_score for r in evaluated) / len(evaluated)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -159,6 +213,8 @@ class EvalResult:
             "passed_cases": self.passed_cases,
             "failed_cases": self.failed_cases,
             "error_cases": self.error_cases,
+            # Denominator behind pass_rate — harness errors are excluded
+            "evaluated_cases": self.evaluated_cases,
             "pass_rate": self.pass_rate,
             "average_score": self.average_score,
             "best_of_k_score": self.best_of_k_score,
@@ -177,6 +233,7 @@ class EvalResult:
                     "tags": r.tags,
                     "category": r.category,
                     "error": r.error,
+                    "grader_fingerprint": r.grader_fingerprint,
                     # Full evaluator results for compass analyze
                     "evaluator_results": [er.to_dict() for er in r.evaluator_results],
                     # Alias for compass analyze compatibility
@@ -184,6 +241,7 @@ class EvalResult:
                     # Trials information
                     "total_trials": r.total_trials,
                     "passed_trials": r.passed_trials,
+                    "error_trials": r.error_trials,
                     "trial_metrics": r.trial_metrics,
                 }
                 for r in self.case_results

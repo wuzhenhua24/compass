@@ -14,6 +14,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见 [docs/integrations.md](docs/integrations.md)）
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
 - **执行与评分解耦**：轨迹是不可变证据，`compass grade` 给已落盘的轨迹打分——改判分器不用重跑 Agent，多套 grader 可并排评同一批样本；判分器指纹自动标记过期评分（见 [docs/analysis.md](docs/analysis.md)）
+- **评测卫生**：harness 失败不算模型失败（移出 pass rate 分母）、未打分 ≠ 0 分（判官超时不会伪装成低分，但也不许签发"通过"）、多试验轮转采样 + 补齐语义（中断后样本均衡，pass^k 不被偏样本污染）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from compass.adapters import get_adapter, AgentInput, AgentOutput
 from compass.core.checkpoint import CheckpointStore, scenario_fingerprint
+from compass.core.regrade import grader_fingerprint
 from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
 from compass.core.sweep import expand_sweeps
 from compass.core.scenario import (
@@ -101,6 +102,7 @@ class Compass:
         fingerprint = scenario_fingerprint(scenario)
         run_id = uuid.uuid4().hex[:12]
         completed_results: dict[str, CaseResult] = {}
+        existing_trials: dict[str, list[TrialResult]] = {}
         store: CheckpointStore | None = None
 
         if trace_path is not None:
@@ -109,6 +111,9 @@ class Compass:
                 if store is not None and store.validate_scenario(fingerprint):
                     cp = store.get_checkpoint()
                     completed_results = store.load_completed_results()
+                    # Partially-sampled multi-trial cases resume from the
+                    # attempts already paid for, rather than starting over.
+                    existing_trials = store.load_trials()
                     run_id = cp.run_id
                     logger.info(
                         "Resuming run %s — %s completed, %d remaining",
@@ -136,21 +141,39 @@ class Compass:
 
         start_time = time.time()
 
-        if remaining_cases:
+        # Multi-trial cases go through the round-major executor so samples stay
+        # balanced under interruption; single-trial cases have nothing to
+        # balance and keep the simpler per-case path.
+        multi_trial_cases = [
+            c for c in remaining_cases if scenario.get_trials_for_case(c) > 1
+        ]
+        single_trial_cases = [
+            c for c in remaining_cases if scenario.get_trials_for_case(c) <= 1
+        ]
+
+        new_results: list[CaseResult] = []
+        if single_trial_cases:
             if parallel:
-                new_results = await self._run_parallel(
-                    scenario, remaining_cases, max_workers, trace_path, trace_format,
+                new_results += await self._run_parallel(
+                    scenario, single_trial_cases, max_workers, trace_path, trace_format,
                     checkpoint_store=store,
                     run_id=run_id, config_hash=fingerprint,
                 )
             else:
-                new_results = await self._run_sequential(
-                    scenario, remaining_cases, trace_path, trace_format,
+                new_results += await self._run_sequential(
+                    scenario, single_trial_cases, trace_path, trace_format,
                     checkpoint_store=store,
                     run_id=run_id, config_hash=fingerprint,
                 )
-        else:
-            new_results = []
+        if multi_trial_cases:
+            new_results += await self._run_trial_rounds(
+                scenario, multi_trial_cases,
+                trace_dir=trace_path, trace_format=trace_format,
+                checkpoint_store=store,
+                run_id=run_id, config_hash=fingerprint,
+                parallel=parallel, max_workers=max_workers,
+                existing_trials=existing_trials,
+            )
 
         duration_ms = (time.time() - start_time) * 1000
 
@@ -247,85 +270,194 @@ class Compass:
         run_id: str = "",
         config_hash: str = "",
     ) -> CaseResult:
-        """Run a single test case (supports multiple trials)."""
-        num_trials = scenario.get_trials_for_case(case)
+        """Run a single-trial test case.
+
+        Cases configured for multiple trials go through
+        :meth:`_run_trial_rounds` instead, which samples round-major so an
+        interrupted run leaves balanced samples.
+        """
         start_time = time.time()
+        # Content hash of the grading contract applied here — the same
+        # fingerprint `compass grade` writes, so a live result and a re-graded
+        # one are directly comparable (and `compass compare` can tell when a
+        # score delta is the grader moving rather than the agent).
+        fingerprint = grader_fingerprint(scenario, case)
 
-        if num_trials <= 1:
-            # Single trial: execute directly, maintaining existing behavior
-            try:
-                passed, score, evaluator_results, output_data, _, transcript = await self._run_single_trial(
-                    scenario, case, run_id=run_id, config_hash=config_hash
-                )
+        try:
+            passed, score, evaluator_results, output_data, _, transcript = await self._run_single_trial(
+                scenario, case, run_id=run_id, config_hash=config_hash
+            )
 
-                # Save trace if trace_dir is specified
-                if trace_dir and transcript:
-                    self._save_trace(transcript, trace_dir, case.id, trace_format)
-                duration_ms = (time.time() - start_time) * 1000
+            # Save trace if trace_dir is specified
+            if trace_dir and transcript:
+                self._save_trace(transcript, trace_dir, case.id, trace_format)
+            duration_ms = (time.time() - start_time) * 1000
 
-                return CaseResult(
-                    case_id=case.id,
-                    status=TestStatus.PASSED if passed else TestStatus.FAILED,
-                    passed=passed,
-                    overall_score=score,
-                    evaluator_results=evaluator_results,
-                    input_data=case.input.model_dump(),
-                    output_data=output_data,
-                    duration_ms=duration_ms,
-                    tags=case.tags,
-                    category=scenario.get_category_for_case(case),
-                    total_trials=1,
-                    passed_trials=1 if passed else 0,
-                )
-            except Exception as e:
-                duration_ms = (time.time() - start_time) * 1000
-                return CaseResult(
-                    case_id=case.id,
-                    status=TestStatus.ERROR,
-                    passed=False,
-                    overall_score=0.0,
-                    input_data=case.input.model_dump(),
-                    duration_ms=duration_ms,
-                    tags=case.tags,
-                    category=scenario.get_category_for_case(case),
-                    error=str(e),
-                    total_trials=1,
-                    passed_trials=0,
-                )
+            return CaseResult(
+                case_id=case.id,
+                status=TestStatus.PASSED if passed else TestStatus.FAILED,
+                passed=passed,
+                overall_score=score,
+                evaluator_results=evaluator_results,
+                input_data=case.input.model_dump(),
+                output_data=output_data,
+                duration_ms=duration_ms,
+                tags=case.tags,
+                category=scenario.get_category_for_case(case),
+                total_trials=1,
+                passed_trials=1 if passed else 0,
+                grader_fingerprint=fingerprint,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            return CaseResult(
+                case_id=case.id,
+                status=TestStatus.ERROR,
+                passed=False,
+                overall_score=0.0,
+                input_data=case.input.model_dump(),
+                duration_ms=duration_ms,
+                tags=case.tags,
+                category=scenario.get_category_for_case(case),
+                error=str(e),
+                total_trials=1,
+                passed_trials=0,
+                error_trials=1,
+                grader_fingerprint=fingerprint,
+            )
 
-        # Multiple trials: use TrialManager
-        trial_manager = TrialManager(num_trials=num_trials, parallel=False)
+    async def _run_trial_rounds(
+        self,
+        scenario: Scenario,
+        cases: list[TestCase],
+        *,
+        trace_dir: Path | None = None,
+        trace_format: str = "json",
+        checkpoint_store: CheckpointStore | None = None,
+        run_id: str = "",
+        config_hash: str = "",
+        parallel: bool = False,
+        max_workers: int = 4,
+        existing_trials: dict[str, list[TrialResult]] | None = None,
+    ) -> list[CaseResult]:
+        """Execute multi-trial cases round-major, topping up to the target.
 
-        # Collect transcripts from all trials
-        trial_transcripts: list = []
+        Two properties the naive "finish case A's k trials, then case B's" loop
+        cannot give you:
 
-        async def run_trial_with_trace():
+        **Balanced samples.** Trials run in full passes over every case, so an
+        interrupted run leaves each case with a comparable number of attempts
+        instead of the first cases fully sampled and the last ones untouched.
+        pass^k computed over a lopsided sample is not the metric it claims to be.
+
+        **Top-up, not re-run.** The target is "have N evaluated trials", not
+        "execute N trials", so re-running the same command after an interruption
+        executes only the shortfall and is a no-op once every case is complete.
+        Trials lost to harness errors do not count toward the target — but the
+        shortfall is attempted only once per invocation, so a persistently
+        broken adapter fails the run instead of spinning in a retry loop.
+        """
+        existing_trials = existing_trials or {}
+        trials: dict[str, list[TrialResult]] = {
+            case.id: list(existing_trials.get(case.id, [])) for case in cases
+        }
+        shortfall = {
+            case.id: max(
+                0,
+                scenario.get_trials_for_case(case)
+                - sum(1 for t in trials[case.id] if t.error is None),
+            )
+            for case in cases
+        }
+        # Trial numbers continue past whatever a previous invocation recorded
+        next_number = {
+            case.id: max((t.trial_number for t in trials[case.id]), default=0) + 1
+            for case in cases
+        }
+
+        max_rounds = max(shortfall.values(), default=0)
+        semaphore = asyncio.Semaphore(max_workers) if parallel else None
+
+        for round_index in range(1, max_rounds + 1):
+            round_cases = [c for c in cases if shortfall[c.id] >= round_index]
+            if not round_cases:
+                continue
+
+            async def run_one(case: TestCase) -> tuple[str, TrialResult]:
+                number = next_number[case.id]
+                next_number[case.id] = number + 1
+                if semaphore is not None:
+                    async with semaphore:
+                        trial = await self._execute_one_trial(
+                            scenario, case, number,
+                            trace_dir, trace_format, run_id, config_hash,
+                        )
+                else:
+                    trial = await self._execute_one_trial(
+                        scenario, case, number,
+                        trace_dir, trace_format, run_id, config_hash,
+                    )
+                return case.id, trial
+
+            if parallel:
+                completed = await asyncio.gather(*(run_one(c) for c in round_cases))
+            else:
+                completed = [await run_one(c) for c in round_cases]
+
+            for case_id, trial in completed:
+                trials[case_id].append(trial)
+                if checkpoint_store is not None:
+                    checkpoint_store.save_trial_result(case_id, trial)
+
+        # Fold each case's trials into a CaseResult
+        results: list[CaseResult] = []
+        for case in cases:
+            task_result = TaskResult(
+                task_id=case.id,
+                expect=case.expect,
+                expect_reason=case.expect_reason,
+                trials=trials[case.id],
+                input_data=case.input.model_dump(),
+            )
+            case_result = self._task_result_to_case_result(task_result, case.metrics)
+            case_result.tags = case.tags
+            case_result.category = scenario.get_category_for_case(case)
+            case_result.grader_fingerprint = grader_fingerprint(scenario, case)
+            results.append(case_result)
+            if checkpoint_store is not None:
+                checkpoint_store.save_case_result(case.id, case_result)
+
+        return results
+
+    async def _execute_one_trial(
+        self,
+        scenario: Scenario,
+        case: TestCase,
+        trial_number: int,
+        trace_dir: Path | None,
+        trace_format: str,
+        run_id: str,
+        config_hash: str,
+    ) -> TrialResult:
+        """Run one attempt, capturing harness errors as an unscored trial."""
+        captured: list[Transcript] = []
+
+        async def run_fn():
             result = await self._run_single_trial(
                 scenario, case, run_id=run_id, config_hash=config_hash
             )
-            # result is (passed, score, evaluator_results, output_data, env, transcript)
             if len(result) >= 6 and result[5] is not None:
-                trial_transcripts.append(result[5])
+                captured.append(result[5])
             return result
 
-        task_result = await trial_manager.run_trials(
-            task_id=case.id,
-            run_fn=run_trial_with_trace,
-            expect=case.expect,
-            expect_reason=case.expect_reason,
-            input_data=case.input.model_dump(),
+        trial = await TrialManager(num_trials=1).execute_trial(
+            case.id, trial_number, run_fn
         )
-
-        # Save traces for all trials
-        if trace_dir:
-            for i, transcript in enumerate(trial_transcripts):
-                trial_suffix = f"_trial{i+1}" if len(trial_transcripts) > 1 else ""
-                self._save_trace(transcript, trace_dir, f"{case.id}{trial_suffix}", trace_format)
-
-        case_result = self._task_result_to_case_result(task_result, case.metrics)
-        case_result.tags = case.tags
-        case_result.category = scenario.get_category_for_case(case)
-        return case_result
+        if trace_dir and captured:
+            self._save_trace(
+                captured[0], trace_dir, f"{case.id}_trial{trial_number}", trace_format
+            )
+        return trial
 
     async def _run_single_trial(
         self,
@@ -578,18 +710,25 @@ class Compass:
         """
         metrics = task_result.metrics
         last_trial = task_result.trials[-1]
+        # Grader detail comes from the last trial that actually graded something:
+        # if the final attempt died in the harness it carries no grader results,
+        # and reporting an empty breakdown would hide the earlier evidence.
+        evaluated = task_result.evaluated_trials
+        detail_trial = evaluated[-1] if evaluated else last_trial
 
         # Extract evaluator_results from grader_results
         evaluator_results: list[EvaluatorResult] = []
-        if last_trial.grader_results:
-            for r in last_trial.grader_results:
+        if detail_trial.grader_results:
+            for r in detail_trial.grader_results:
                 if isinstance(r, EvaluatorResult):
                     evaluator_results.append(r)
                 elif isinstance(r, dict):
-                    evaluator_results.append(EvaluatorResult(**r))
+                    evaluator_results.append(EvaluatorResult.from_dict(r))
 
-        # Determine status based on error or pass/fail
-        if last_trial.error:
+        # Determine status. A case is ERROR only when *no* attempt produced
+        # evidence — if some trials survived, the harness noise is reported via
+        # error_trials and the surviving samples still decide pass/fail.
+        if not task_result.evaluated_trials:
             status = TestStatus.ERROR
         elif task_result.overall_passed:
             status = TestStatus.PASSED
@@ -603,11 +742,12 @@ class Compass:
             overall_score=metrics.score_mean,
             evaluator_results=evaluator_results,
             input_data=task_result.input_data,
-            output_data=last_trial.outcome,
+            output_data=detail_trial.outcome,
             duration_ms=sum(t.duration_ms for t in task_result.trials),
             error=last_trial.error,
             total_trials=task_result.total_trials,
             passed_trials=task_result.passed_trials,
+            error_trials=task_result.error_trials,
             trial_metrics=metrics.to_dict(
                 pass_at_k=metrics_config.pass_at_k if metrics_config else None,
                 include_consistency=(
@@ -670,34 +810,23 @@ class Compass:
         )
 
         if should_short_circuit:
-            # Mark skipped Model Graders
-            for config in model_graders:
+            # Mark the Model Graders — and any others (e.g. Human) — as skipped
+            for config in model_graders + other_graders:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
-                        score=0.0,
+                        # Never ran, so never measured: unscored, not zero.
+                        score=None,
                         passed=False,
                         weight=config.weight,
                         required=config.required,
                         gate=config.gate,
                         grader_type=config.type.value,
                         grader_scope="outcome",
-                        metadata={"skipped": True, "reason": "short_circuit"},
-                        error="Skipped due to Code-First short-circuit",
-                    )
-                )
-            # Also mark other graders as skipped
-            for config in other_graders:
-                results.append(
-                    EvaluatorResult(
-                        name=config.name,
-                        score=0.0,
-                        passed=False,
-                        weight=config.weight,
-                        required=config.required,
-                        gate=config.gate,
-                        grader_type=config.type.value,
-                        grader_scope="outcome",
+                        skipped=True,
+                        skip_reason="short_circuit",
+                        # Informational copy; the aggregate reads the field above,
+                        # never this dict (which a user grader can populate).
                         metadata={"skipped": True, "reason": "short_circuit"},
                         error="Skipped due to Code-First short-circuit",
                     )
@@ -851,7 +980,10 @@ class Compass:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
-                        score=0.0,
+                        # The grader blew up, so it measured nothing. Recording
+                        # 0.0 here would make an LLM-judge timeout look exactly
+                        # like an agent that genuinely scored zero.
+                        score=None,
                         passed=False,
                         weight=config.weight,
                         required=config.required,
@@ -873,10 +1005,21 @@ class Compass:
     ) -> tuple[float, bool]:
         """Aggregate evaluator results into an overall score.
 
-        Gate graders (``gate=True``) are hard pass/fail checks:
-        - They must ALL pass for the case to pass.
-        - They are **excluded** from the weighted score calculation so
-          they cannot drag down the aggregate number.
+        Three populations, deliberately kept apart:
+
+        - **Skipped** (``skipped=True``, short-circuited): never ran. Excluded
+          from everything, and does not hold the case back — skipping is a
+          decision the aggregate already made.
+        - **Unscored** (``score is None``): ran but measured nothing (crash,
+          timeout). Excluded from the score denominator, because averaging in a
+          zero would let a judge outage read as a bad answer. But it **does**
+          fail the case: a pass cannot be certified from an evaluation that did
+          not finish.
+        - **Scored**: contributes to the weighted mean as usual.
+
+        Gate graders (``gate=True``) are hard pass/fail checks: all must pass,
+        and they are excluded from the weighted score so they cannot drag the
+        aggregate number down.
 
         Args:
             results: Evaluator results.
@@ -891,11 +1034,10 @@ class Compass:
 
         required_graders = required_graders or []
 
-        # Filter out skipped graders (short-circuited) from all checks
-        active_results = [
-            r for r in results
-            if not (r.metadata and r.metadata.get("skipped"))
-        ]
+        # Skipped graders drop out of every check. Read the core-owned field,
+        # never `metadata` — that dict is the grader's own `details` payload and
+        # a user grader could otherwise silently exclude itself from scoring.
+        active_results = [r for r in results if not r.skipped]
 
         # Separate gate graders from graded (scored) graders
         gate_results = [r for r in active_results if r.gate]
@@ -909,23 +1051,32 @@ class Compass:
         # Gate check: every gate grader must pass
         gates_passed = all(r.passed for r in gate_results)
 
-        # Calculate weighted score from graded (non-gate) graders only
-        total_weight = sum(r.weight for r in graded_results if r.weight > 0)
+        # An evaluation that did not finish cannot certify a pass.
+        all_scored = all(r.scored for r in active_results)
+
+        # Only actual measurements enter the mean
+        scored_results = [r for r in graded_results if r.scored]
+
+        # Calculate weighted score from graded (non-gate), scored graders only
+        total_weight = sum(r.weight for r in scored_results if r.weight > 0)
         if total_weight > 0:
-            score = sum(r.weighted_score for r in graded_results) / total_weight
-        elif graded_results:
-            # Every graded grader has zero weight: fall back to an unweighted
+            score = sum(r.weighted_score for r in scored_results) / total_weight
+        elif scored_results:
+            # Every scored grader has zero weight: fall back to an unweighted
             # mean of their scores so they still yield a pass/fail signal, rather
             # than forcing the case to score 0 and fail (and still applying the
             # gate/required checks below).
-            score = sum(r.score for r in graded_results) / len(graded_results)
-        else:
-            # Only gate graders exist; their pass/fail alone decides the score.
+            score = sum(r.score or 0.0 for r in scored_results) / len(scored_results)
+        elif gate_results:
+            # Only gate graders produced anything; their pass/fail decides.
             score = 1.0 if gates_passed else 0.0
+        else:
+            # Graded graders exist but none of them measured anything.
+            score = 0.0
 
         # Threshold check (only based on graded score)
         # When only gate graders exist, skip threshold check
-        threshold_passed = score >= pass_threshold if graded_results else True
+        threshold_passed = score >= pass_threshold if scored_results else True
 
         # Check required graders by name (from AggregationConfig.required_graders)
         # Only check non-gate, non-skipped graders
@@ -944,12 +1095,14 @@ class Compass:
                 required_by_flag_passed = False
                 break
 
-        # Overall pass: gates AND threshold AND required graders
+        # Overall pass: gates AND threshold AND required graders AND a
+        # complete evaluation (an unscored grader means we don't actually know)
         passed = (
             gates_passed
             and threshold_passed
             and required_by_name_passed
             and required_by_flag_passed
+            and all_scored
         )
         return score, passed
 

@@ -284,8 +284,12 @@ class TestTrialManager:
 
         assert result.total_trials == 1
         assert result.trials[0].passed is False
-        assert result.trials[0].score == 0.0
+        # A harness error measured nothing — unscored, not a zero score
+        assert result.trials[0].score is None
         assert "Test error" in result.trials[0].error
+        # ...and it is excluded from the metrics rather than counted as a miss
+        assert result.evaluated_trials == []
+        assert result.error_trials == 1
 
     @pytest.mark.asyncio
     async def test_mixed_success_and_errors(self):

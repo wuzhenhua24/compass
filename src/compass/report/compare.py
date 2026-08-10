@@ -42,9 +42,12 @@ class CaseRecord:
     case_id: str
     passed: bool
     score: float
-    # Per-case pass fraction: passed_trials/total_trials when multiple trials
-    # were run, else 1.0/0.0 from `passed`. Finer-grained than the boolean.
+    # Per-case pass fraction: passed_trials/evaluated_trials when multiple
+    # trials were run, else 1.0/0.0 from `passed`. Finer than the boolean.
     pass_fraction: float
+    # Content hash of the grading contract this case was scored under; ""
+    # for results written before fingerprints existed.
+    grader_fingerprint: str = ""
 
 
 def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
@@ -57,8 +60,11 @@ def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
     score = item.get("overall_score", item.get("score", 1.0 if passed else 0.0))
 
     total_trials = item.get("total_trials", 1) or 1
-    if total_trials > 1:
-        pass_fraction = item.get("passed_trials", 0) / total_trials
+    # Trials lost to harness errors are missing samples, not failed attempts —
+    # leaving them in the denominator would read as a quality drop.
+    evaluated_trials = total_trials - (item.get("error_trials") or 0)
+    if total_trials > 1 and evaluated_trials > 0:
+        pass_fraction = item.get("passed_trials", 0) / evaluated_trials
     else:
         pass_fraction = 1.0 if passed else 0.0
 
@@ -67,6 +73,7 @@ def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
         passed=passed,
         score=float(score),
         pass_fraction=pass_fraction,
+        grader_fingerprint=str(item.get("grader_fingerprint") or ""),
     )
 
 
@@ -207,6 +214,11 @@ class ComparisonReport:
     pass_stats: PairedStats | None = None
     score_stats: PairedStats | None = None
 
+    #: Paired cases whose grading contract differs between A and B. Their
+    #: score delta is at least partly the grader moving, not the agent — the
+    #: comparison is not a clean attribution for these cases.
+    regraded: list[str] = field(default_factory=list)
+
     @property
     def verdict(self) -> str:
         """One-line reading of the measurement.
@@ -256,6 +268,7 @@ class ComparisonReport:
             "both_fail": self.both_fail,
             "pass_stats": self.pass_stats.to_dict() if self.pass_stats else None,
             "score_stats": self.score_stats.to_dict() if self.score_stats else None,
+            "regraded": self.regraded,
             "verdict": self.verdict,
         }
 
@@ -302,6 +315,17 @@ def compare_results(
             report.both_pass += 1
         else:
             report.both_fail += 1
+
+    # Attribution check: a case scored under two different grading contracts
+    # is not a clean A/B on the agent. Only flag when both sides recorded a
+    # fingerprint — an older results file simply doesn't know.
+    report.regraded = [
+        a.case_id
+        for a, b in pairs
+        if a.grader_fingerprint
+        and b.grader_fingerprint
+        and a.grader_fingerprint != b.grader_fingerprint
+    ]
 
     report.pass_stats = paired_stats(
         [b.pass_fraction - a.pass_fraction for a, b in pairs]
