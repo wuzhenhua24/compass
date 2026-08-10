@@ -3,6 +3,108 @@
 > Compass 专题文档 · 返回 [README](../README.md)
 
 
+## 离线评分（`compass grade`）：跑一次，评多次
+
+**执行和评分是两个动词。** `compass test --trace-dir` 负责跑 agent 并把轨迹落盘，`compass grade` 负责给已落盘的轨迹打分：
+
+```bash
+compass test scenarios/qa.yaml --trace-dir ./traces    # 数据面：执行 + 记录
+compass grade ./traces -s scenarios/qa.yaml            # 控制面：评分 + 重评
+```
+
+轨迹是**不可变的证据**，评分只往 `traces/grades/<name>/` 里**新增**文件，从不修改轨迹本身。这解开了三个原本被"跑评一体"锁死的场景：
+
+| 场景 | 没有 `grade` 时 | 有了 `grade` 后 |
+|---|---|---|
+| 改一句 rubric / 挪一个阈值 | 必须重跑 agent，而 agent 非确定性让新旧分数**根本不可比**——`compass compare` 想测量的东西正好被这一步毁掉 | 同一批轨迹重评，分数差异**只可能**来自判分器 |
+| 判官校准（LLM judge vs human） | 做不到：两套 grader 拿不到同一批样本 | 两个 grade set 评同一批轨迹，直接算一致性 |
+| 评别人的 agent | `compass import` 只能打印摘要 | 导入轨迹 → 直接用 Compass 的 grader 评分，闭环 |
+
+### 落盘布局
+
+```
+traces/
+  cat_on_sofa.json              # 轨迹，永不修改
+  cat_on_sofa/output.png        # 产物二进制（ArtifactStore 写入）
+  grades/
+    default/                    # 一个 grade set
+      _spec.json                #   判分器规格快照（逐 case 指纹）
+      cat_on_sofa.json          #   评分记录
+    judge/                      # 另一个 grade set，与上面并存
+      ...
+```
+
+每条评分记录同时带**两份溯源**：证据侧的 `run_id` / `config_hash`（从轨迹继承，回答"我评的是哪次运行"）和判定侧的 `spec_fingerprint`（回答"我用的是哪版判分器"）。
+
+### 判分器指纹与 staleness
+
+`spec_fingerprint` 是**逐 case** 计算的内容哈希——覆盖该 case 解析后的 grader 列表、aggregation 规则、leak markers 和 `expect`。它是自动的，不依赖手工维护 `Grader.version`：改了阈值就变，忘记 bump 版本号也拦不住它。
+
+于是重复执行 `compass grade` 是幂等的，并且会主动报告过期：
+
+```bash
+compass grade ./traces -s qa.yaml     # 第二次：Graded 0, reused 2
+# 编辑 qa.yaml 里某个 case 的阈值后再跑：
+compass grade ./traces -s qa.yaml
+# ⚠ 1 existing grade(s) came from an older version of this grader spec — use --regrade
+compass grade ./traces -s qa.yaml --regrade   # 丢弃重评，不留陈旧记录
+```
+
+改动只影响**被改的那个 case**：同一次编辑里没动过的 case 依然是 up-to-date，不会被无谓地重评。
+
+### 多套 grade set 并存
+
+`-n/--name` 指定 grade set 名字（默认取 scenario 文件名）。廉价的确定性 grader 和昂贵的 LLM 判官可以并排评同一批轨迹：
+
+```bash
+compass grade ./traces -s cheap.yaml -n default    # 秒级、零成本
+compass grade ./traces -s judge.yaml -n judge      # 慢、花钱，但只跑一次
+```
+
+### 常用选项
+
+```bash
+compass grade ./traces -s qa.yaml -c case_a -c case_b   # 只评指定 case
+compass grade ./traces -s qa.yaml -v                    # 展开逐 grader 明细
+compass grade ./traces -s qa.yaml -o regraded.json      # 输出喂给 analyze / compare
+compass grade ./traces/one_case.json -s qa.yaml         # 也接受单个轨迹文件
+```
+
+`-o` 输出的就是标准 `EvalResult` 结构，因此**重评结果与实跑结果在下游完全同权**：
+
+```bash
+compass grade ./traces -s strict.yaml -n strict -o a.json
+compass grade ./traces -s relaxed.yaml -n relaxed -o b.json
+compass compare a.json b.json      # 同一批轨迹、两套判分器的配对比较
+compass analyze b.json
+```
+
+### 不评什么，会明说
+
+沉默等于"全都评了"，所以凡是没评的都会列出来：
+
+- **轨迹的 `task_id` 在 scenario 里没有对应 case** → 列出 task_id
+- **scenario 里的 case 没有任何轨迹** → 列出 case id
+- **JSONL 轨迹 + OUTCOME/BOTH 域 grader** → **拒绝评分**并提示改用 `--trace-format json`
+
+最后一条值得单独说：JSONL 是事件流，`outcome.set` 事件里没有 `output_data`、也没有 artifact 载荷，所以 OUTCOME 域的 grader 从 JSONL 重评必然看到空产物。Compass 不会因此给出一个 0 分——**"没测出来"和"确实是 0 分"是两回事**，这类 case 报为 ERROR 而不是 FAIL。纯 TRANSCRIPT 域的 grader（工具调用、成本、延迟、绕圈）在 JSONL 上是完整的，照常评。
+
+### Python SDK
+
+```python
+from compass.core.regrade import grade_traces
+from compass.core.scenario import Scenario
+
+report = await grade_traces(
+    Scenario.from_yaml("qa.yaml"), "./traces", grade_set="default"
+)
+print(report.graded, report.skipped, report.stale)
+print(report.result.pass_rate)          # 标准 EvalResult
+print(report.unmatched, report.missing_traces, report.unreadable)
+```
+
+> **实现纪律**：`compass test` 与 `compass grade` 共用同一条评分路径（`Compass.grade_transcript`）——重评一条轨迹得到的分数，就是实跑时面对同样证据会给出的分数，两者不会漂移。
+
 ## 评估结果分析与可视化
 
 Compass 提供内置的结果分析引擎，延续 Transcript / Outcome 分离思想，从**过程**和**结果**两个维度深度剖析评估数据。
@@ -139,7 +241,15 @@ json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
 
 ### 结果 JSON 格式
 
-`compass analyze` 命令接受以下 JSON 格式的评估结果文件：
+`analyze` 与 `compare` 共用同一个读取器（`compass.report.analyzer.iter_case_dicts`），因此 Compass 各命令写出的**任何一种**结果形状都能被两者消费：
+
+| 形状 | 来源 |
+|---|---|
+| `{"results": [EvalResult, ...], "summary": {...}}` | `compass test --report json` |
+| `{"case_results": [...]}`（EvalResult） | `compass grade -o` / `EvalResult.to_dict()` |
+| `[case, ...]` 或单个 case dict | 手写 / 自定义 harness |
+
+最朴素的那种（case 列表）长这样：
 
 ```json
 [

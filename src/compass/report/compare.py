@@ -73,11 +73,13 @@ def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
 def load_case_records(path: str | Path) -> dict[str, CaseRecord]:
     """Load case records from a results file or directory.
 
-    Accepts the same shapes as ``compass analyze``: an EvalResult dict (with
-    ``case_results``), a list of case dicts, a single case dict, or a
+    Accepts the same shapes as ``compass analyze`` — see
+    :func:`compass.report.analyzer.iter_case_dicts`, the shared reader — plus a
     directory of such JSON files. Unrecognized files/items are skipped with a
     warning. On duplicate case_ids the last record wins.
     """
+    from compass.report.analyzer import iter_case_dicts
+
     path = Path(path)
     json_files = [path] if path.is_file() else sorted(path.glob("**/*.json"))
 
@@ -90,16 +92,7 @@ def load_case_records(path: str | Path) -> dict[str, CaseRecord]:
             logger.warning("Skipping %s: %s", jf, e)
             continue
 
-        if isinstance(data, dict) and "case_results" in data:
-            items = data["case_results"]  # EvalResult.to_dict() shape
-        elif isinstance(data, list):
-            items = data
-        else:
-            items = [data]
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
+        for item in iter_case_dicts(data):
             record = _extract_case_records(item)
             if record is not None:
                 records[record.case_id] = record

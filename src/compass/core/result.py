@@ -55,6 +55,17 @@ class EvaluatorResult:
             "error": self.error,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EvaluatorResult":
+        """Rebuild from a ``to_dict()`` payload.
+
+        Unknown keys are ignored, so a stored record stays loadable after new
+        fields are added — and ``weighted_score`` (a property, not a field)
+        does not blow up the constructor.
+        """
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
 
 @dataclass
 class CaseResult:

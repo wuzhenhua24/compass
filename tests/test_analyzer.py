@@ -5,6 +5,7 @@ from compass.report.analyzer import (
     AnalysisReport,
     EvalResultAnalyzer,
     TaskEvalResult,
+    iter_case_dicts,
 )
 
 # ------------------------------------------------------------------
@@ -386,3 +387,48 @@ class TestDualAxisData:
         assert "dual_axis_data" in d
         assert len(d["dual_axis_data"]) == 1
         assert d["dual_axis_data"][0]["task_id"] == "t1"
+
+
+# ------------------------------------------------------------------
+# iter_case_dicts — one reader for every results shape Compass writes
+# ------------------------------------------------------------------
+
+
+class TestIterCaseDicts:
+    """Every command's output must be readable by every analysis command."""
+
+    def test_bare_case_list(self):
+        data = [{"task_id": "t1"}, {"task_id": "t2"}]
+        assert [c["task_id"] for c in iter_case_dicts(data)] == ["t1", "t2"]
+
+    def test_single_case_dict(self):
+        assert iter_case_dicts({"task_id": "t1"}) == [{"task_id": "t1"}]
+
+    def test_eval_result_shape(self):
+        """`compass grade -o` / EvalResult.to_dict()."""
+        data = {
+            "scenario_name": "s",
+            "total_cases": 2,
+            "case_results": [{"task_id": "t1"}, {"task_id": "t2"}],
+        }
+        assert [c["task_id"] for c in iter_case_dicts(data)] == ["t1", "t2"]
+
+    def test_report_json_bundle(self):
+        """`compass test --report json` nests EvalResults under "results"."""
+        data = {
+            "results": [
+                {"case_results": [{"task_id": "t1"}]},
+                {"case_results": [{"task_id": "t2"}, {"task_id": "t3"}]},
+            ],
+            "summary": {"total_cases": 3},
+        }
+        assert [c["task_id"] for c in iter_case_dicts(data)] == ["t1", "t2", "t3"]
+
+    def test_non_dict_items_are_dropped(self):
+        assert iter_case_dicts([{"task_id": "t1"}, "junk", None]) == [{"task_id": "t1"}]
+
+    def test_empty_case_results_yields_nothing(self):
+        assert iter_case_dicts({"case_results": []}) == []
+
+    def test_unrecognized_scalar(self):
+        assert iter_case_dicts("nope") == []

@@ -14,6 +14,32 @@ from typing import Any
 from compass.graders.base import GradeResult, GraderScope
 
 
+def iter_case_dicts(data: Any) -> list[dict[str, Any]]:
+    """Flatten a results payload into per-case dicts.
+
+    One reader for every shape Compass writes, so a results file produced by
+    any command stays consumable by every analysis command:
+
+    - ``{"results": [EvalResult, ...], "summary": ...}`` — ``compass test --report json``
+    - ``{"case_results": [...]}`` — ``EvalResult.to_dict()`` (``compass grade -o``)
+    - ``[case, ...]`` / ``{case}`` — bare case records
+
+    Unrecognized payloads come back as a single item so the caller can decide.
+    """
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        if isinstance(data.get("results"), list):
+            cases: list[dict[str, Any]] = []
+            for entry in data["results"]:
+                cases.extend(iter_case_dicts(entry))
+            return cases
+        if isinstance(data.get("case_results"), list):
+            return [c for c in data["case_results"] if isinstance(c, dict)]
+        return [data]
+    return []
+
+
 @dataclass
 class TaskEvalResult:
     """Complete evaluation result for a single task.

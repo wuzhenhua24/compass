@@ -21,7 +21,7 @@ from compass.core.scenario import (
     ShortCircuitMode,
     TestCase,
 )
-from compass.core.transcript import Transcript, TranscriptRecorder
+from compass.core.transcript import Outcome, Transcript, TranscriptRecorder
 from compass.core.trial import TrialManager, TaskResult, TrialResult
 from compass.graders import get_grader, GradeContext, GradeResult
 
@@ -380,55 +380,9 @@ class Compass:
                 )
                 outcome = transcript.outcome
 
-                # Load named reference images
-                reference_images = self._load_reference_images(
-                    case.input.reference_images
+                passed, overall_score, evaluator_results = await self.grade_transcript(
+                    scenario, case, transcript, outcome=outcome
                 )
-
-                # Back-compat: if exactly one reference image, also set
-                # the legacy single reference_image field
-                ref_image = None
-                if len(reference_images) == 1:
-                    ref_image = next(iter(reference_images.values()))
-
-                # Build grade context
-                grade_context = GradeContext(
-                    prompt=case.input.prompt,
-                    negative_prompt=case.input.negative_prompt,
-                    params=case.input.params,
-                    transcript=transcript,
-                    outcome=outcome,
-                    reference_image=ref_image,
-                    reference_images=reference_images,
-                    leak_markers=scenario.get_leak_markers_for_case(case),
-                    metadata=case.metadata,
-                )
-
-                # Get graders for this case (default_graders + case graders)
-                grader_configs = scenario.get_graders_for_case(case)
-
-                # Get aggregation config (needed for short-circuit mode)
-                aggregation = scenario.get_aggregation_for_case(case)
-
-                # Run graders (with Code-First short-circuit support)
-                evaluator_results = await self._run_graders(
-                    grader_configs, grade_context, aggregation
-                )
-                overall_score, graders_passed = self._aggregate_results(
-                    evaluator_results,
-                    pass_threshold=aggregation.pass_threshold,
-                    required_graders=aggregation.required_graders,
-                )
-
-                # Handle expect=fail (negative tests)
-                # For negative tests, we expect the agent to be blocked or fail
-                if case.is_negative_test:
-                    # Negative test passes if: agent was blocked OR graders failed
-                    agent_blocked = outcome.blocked if outcome else False
-                    passed = agent_blocked or not graders_passed
-                else:
-                    # Positive test: normal pass logic
-                    passed = graders_passed
 
                 transcript.finalize(
                     grader_results=[
@@ -473,6 +427,84 @@ class Compass:
                 )
                 # Re-raise to let TrialManager handle error recording
                 raise
+
+    async def grade_transcript(
+        self,
+        scenario: Scenario,
+        case: TestCase,
+        transcript: Transcript,
+        outcome: Outcome | None = None,
+    ) -> tuple[bool, float, list[EvaluatorResult]]:
+        """Grade an already-executed transcript against a case's graders.
+
+        This is the single grading path, shared by live runs (``compass test``)
+        and offline re-grading (``compass grade``) so the two can never drift:
+        a score produced by re-grading a recorded trace is the score the live
+        run would have produced from the same evidence.
+
+        Args:
+            scenario: The scenario supplying default graders, aggregation,
+                leak markers and category.
+            case: The test case whose graders/aggregation apply.
+            transcript: The execution trace (live or loaded from disk).
+            outcome: The outcome to grade; defaults to ``transcript.outcome``.
+
+        Returns:
+            Tuple of (passed, overall_score, evaluator_results). ``passed``
+            already accounts for ``expect=fail`` negative tests.
+        """
+        if outcome is None:
+            outcome = transcript.outcome
+
+        # Load named reference images
+        reference_images = self._load_reference_images(case.input.reference_images)
+
+        # Back-compat: if exactly one reference image, also set
+        # the legacy single reference_image field
+        ref_image = None
+        if len(reference_images) == 1:
+            ref_image = next(iter(reference_images.values()))
+
+        # Build grade context
+        grade_context = GradeContext(
+            prompt=case.input.prompt,
+            negative_prompt=case.input.negative_prompt,
+            params=case.input.params,
+            transcript=transcript,
+            outcome=outcome,
+            reference_image=ref_image,
+            reference_images=reference_images,
+            leak_markers=scenario.get_leak_markers_for_case(case),
+            metadata=case.metadata,
+        )
+
+        # Get graders for this case (default_graders + case graders)
+        grader_configs = scenario.get_graders_for_case(case)
+
+        # Get aggregation config (needed for short-circuit mode)
+        aggregation = scenario.get_aggregation_for_case(case)
+
+        # Run graders (with Code-First short-circuit support)
+        evaluator_results = await self._run_graders(
+            grader_configs, grade_context, aggregation
+        )
+        overall_score, graders_passed = self._aggregate_results(
+            evaluator_results,
+            pass_threshold=aggregation.pass_threshold,
+            required_graders=aggregation.required_graders,
+        )
+
+        # Handle expect=fail (negative tests)
+        # For negative tests, we expect the agent to be blocked or fail
+        if case.is_negative_test:
+            # Negative test passes if: agent was blocked OR graders failed
+            agent_blocked = outcome.blocked if outcome else False
+            passed = agent_blocked or not graders_passed
+        else:
+            # Positive test: normal pass logic
+            passed = graders_passed
+
+        return passed, overall_score, evaluator_results
 
     def _save_trace(
         self,

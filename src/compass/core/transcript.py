@@ -1240,6 +1240,11 @@ class Transcript:
         transcript.outcome = Outcome(
             image_path=outcome_data.get("image_path"),
             image_hash=outcome_data.get("image_hash"),
+            # blocked/blocked_reason must round-trip: negative tests
+            # (expect=fail) decide pass/fail from `outcome.blocked`, so dropping
+            # it here would silently mis-grade every re-graded negative test.
+            blocked=outcome_data.get("blocked", False),
+            blocked_reason=outcome_data.get("blocked_reason", ""),
             output_data=outcome_data.get("output_data", {}),
             metadata=outcome_data.get("metadata", {}),
             artifacts=loaded_artifacts,

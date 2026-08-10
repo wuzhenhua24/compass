@@ -13,6 +13,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
 - **轨迹接入**：把 OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见 [docs/integrations.md](docs/integrations.md)）
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
+- **执行与评分解耦**：轨迹是不可变证据，`compass grade` 给已落盘的轨迹打分——改判分器不用重跑 Agent，多套 grader 可并排评同一批样本；判分器指纹自动标记过期评分（见 [docs/analysis.md](docs/analysis.md)）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
@@ -129,6 +130,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | 命令 | 用途 |
 |------|------|
 | `compass test <scenario.yaml \| 目录>` | 运行测试场景（`--parallel` / `--trace-dir` / `--resume` / `--stage` / `--category`） |
+| `compass grade <traces> -s <scenario.yaml>` | **离线评分**：给已落盘的轨迹打分，不重跑 Agent（`-n` grade set / `--regrade`） |
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
 | `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
@@ -193,7 +195,22 @@ compass test scenarios/ -p -w 8 --report html -o report.html --trace-dir ./trace
 
 > 多次试验数在 YAML 里配置（`defaults.trials` 或 case 级 `trials:`），不是 CLI 选项。
 
-### 3. 分析评估结果
+### 3. 离线评分：跑一次，评多次
+
+执行和评分是两个动词——轨迹是不可变证据，评分只往 `traces/grades/<name>/` 里新增：
+
+```bash
+# 改了 rubric / 挪了阈值后重评，不用重跑 Agent
+compass grade ./traces -s scenarios/my_test.yaml --regrade
+
+# 廉价 grader 与 LLM 判官并存，评同一批轨迹
+compass grade ./traces -s cheap.yaml -n default
+compass grade ./traces -s judge.yaml -n judge -o judge.json
+```
+
+重复执行是幂等的；判分器配置一改，对应 case 的评分自动被标记为过期（内容指纹，不靠手工 bump 版本号）。这也是让 `compass compare` 有意义的前提：**同一批轨迹重评，分数差异只可能来自判分器，而不是 Agent 的随机性。** 详见 [docs/analysis.md](docs/analysis.md)。
+
+### 4. 分析评估结果
 
 ```bash
 # 分析单个结果文件（终端可视化输出）
@@ -213,7 +230,7 @@ compass analyze results/ --output analysis_report.json
 compass compare results_a/ results_b/
 ```
 
-### 4. 查看执行轨迹
+### 5. 查看执行轨迹
 
 ```bash
 # 查看某个 case 的 transcript（工具调用、耗时、成本、评分）
@@ -221,7 +238,7 @@ compass trace traces/cat_on_sofa.json
 compass trace traces/cat_on_sofa.jsonl --steps
 ```
 
-### 5. Python SDK
+### 6. Python SDK
 
 ```python
 import asyncio
