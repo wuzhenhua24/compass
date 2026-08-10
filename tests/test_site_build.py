@@ -299,8 +299,59 @@ class TestHistory:
         assert "scenarios" not in snapshot
         assert set(snapshot) == {
             "generated", "pass_rate", "average_score", "best_of_k_score",
-            "total_cases", "evaluated_cases", "passed_cases",
+            "total_cases", "evaluated_cases", "passed_cases", "contract",
         }
+
+
+class TestContract:
+    """A trend line is a comparison stretched over time, so it inherits
+    Compass's rule that scores are only comparable under one grading
+    contract."""
+
+    def test_same_grading_gives_the_same_id(self):
+        cases = [_case("c1", grader_fingerprint="abc"), _case("c2", grader_fingerprint="def")]
+
+        assert _doc(cases=cases)["run"]["contract"] == _doc(cases=cases)["run"]["contract"]
+
+    def test_a_changed_fingerprint_changes_the_id(self):
+        before = _doc(cases=[_case("c1", grader_fingerprint="abc")])
+        after = _doc(cases=[_case("c1", grader_fingerprint="xyz")])
+
+        assert before["run"]["contract"] != after["run"]["contract"]
+
+    def test_order_does_not_matter(self):
+        a = _doc(cases=[_case("c1", grader_fingerprint="abc"),
+                        _case("c2", grader_fingerprint="def")])
+        b = _doc(cases=[_case("c2", grader_fingerprint="def"),
+                        _case("c1", grader_fingerprint="abc")])
+
+        assert a["run"]["contract"] == b["run"]["contract"]
+
+    def test_falls_back_to_the_scenario_config_hash(self):
+        """Older results predate per-case fingerprints but still identify the
+        configuration they ran under."""
+        doc = collect_run_payload({
+            "results": [{"scenario_name": "qa", "config_hash": "cfg-1",
+                         "case_results": [_case("c1")]}]
+        })
+
+        assert doc["run"]["contract"]
+
+    def test_unknown_is_reported_as_unknown(self):
+        """Never as "unchanged" — that would draw a straight line through a
+        break nobody can see."""
+        doc = collect_run_payload({"results": [{"scenario_name": "qa",
+                                               "case_results": [_case("c1")]}]})
+
+        assert doc["run"]["contract"] == ""
+
+    def test_history_records_the_contract_of_each_build(self, tmp_path):
+        build_site(_doc(cases=[_case("c1", grader_fingerprint="abc")]), tmp_path, slug="qa")
+        build_site(_doc(cases=[_case("c1", grader_fingerprint="xyz")]), tmp_path, slug="qa")
+        entry = _index(tmp_path)["runs"][0]
+
+        assert entry["contract"] != entry["history"][0]["contract"]
+        assert entry["history"][0]["contract"]
 
 
 class TestTraces:

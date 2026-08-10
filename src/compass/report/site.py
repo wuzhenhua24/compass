@@ -54,6 +54,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from ipaddress import ip_address
@@ -79,7 +80,10 @@ _OUTCOME_SCOPES = ("outcome", "both")
 _TRANSCRIPT_SCOPES = ("transcript", "both")
 _ERROR = TestStatus.ERROR.value
 
-#: Summary fields carried from an entry into the history trail.
+#: Summary fields carried from an entry into the history trail. ``contract``
+#: rides along on purpose: a trend line whose points were graded under
+#: different rules is not a trend, and the viewer has to be able to say where
+#: the break is rather than drawing straight through it.
 _SNAPSHOT_FIELDS = (
     "generated",
     "pass_rate",
@@ -88,6 +92,7 @@ _SNAPSHOT_FIELDS = (
     "total_cases",
     "evaluated_cases",
     "passed_cases",
+    "contract",
 )
 
 
@@ -204,6 +209,29 @@ def _stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def contract_id(
+    cases: Sequence[Mapping[str, Any]], scenarios: Sequence[Mapping[str, Any]]
+) -> str:
+    """A short id for the grading rules this run was scored under.
+
+    Compass already refuses to call scores comparable across different grading
+    contracts (see ``CaseResult.grader_fingerprint``). A trend line is a
+    comparison stretched over time, so it inherits that rule: when this id
+    changes between builds, the points on either side were not measured the
+    same way and a viewer must say so rather than drawing through it.
+
+    Derived from the per-case fingerprints, falling back to the scenario config
+    hashes. Empty when a results file carries neither — an unknown contract is
+    reported as unknown, never as "unchanged".
+    """
+    parts = sorted({str(c.get("grader_fingerprint") or "") for c in cases} - {""})
+    if not parts:
+        parts = sorted({str(s.get("config_hash") or "") for s in scenarios} - {""})
+    if not parts:
+        return ""
+    return sha256("\n".join(parts).encode()).hexdigest()[:12]
+
+
 def _case_row(record: Mapping[str, Any], scenario: str) -> dict[str, Any]:
     row = dict(record)
     row.pop("grade_results", None)  # verbatim alias of evaluator_results
@@ -271,6 +299,7 @@ def collect_run_payload(
             # size, so averaging their averages would over-weight small ones.
             **_stats(cases),
             "duration_ms": sum(s["duration_ms"] for s in scenarios),
+            "contract": contract_id(cases, scenarios),
         },
         "scenarios": scenarios,
         "categories": category_rows(cases),

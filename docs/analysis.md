@@ -380,7 +380,8 @@ html = HTMLReporter().render_document(doc)   # 渲染器只读文档
   "schema": "compass.run/1",     // viewer 先读它，旧页面可以拒绝新文档而不是渲染错
   "generated": "2026-08-10T08:00:00+00:00",
   "run":       { "name": …, "total_cases": …, "evaluated_cases": …,
-                 "pass_rate": …, "average_score": …, "best_of_k_score": … },
+                 "pass_rate": …, "average_score": …, "best_of_k_score": …,
+                 "contract": "…" },   // 这次运行的判分契约 id，跨运行可比性的依据
   "scenarios": [ { "name": …, "run_id": …, "config_hash": …, "cases": [ … ] } ],
   "categories":[ { "category": …, "passed": …, "failed": …, "errors": … } ],
   "scopes":    { "outcome": true, "transcript": true }
@@ -426,7 +427,7 @@ site/
 - **轨迹靠 `--trace-dir` 显式点名才发布**，因为一条 transcript 带着完整的输入输出。命令行会明说发布了多少个文件、多大。
 - **slug 会被规范化成单个路径段**，`../` 之类折成 `-`，不可能写到站点目录外面。
 
-**趋势线只留摘要**：同一个 slug 重复 build 时，上一次的汇总数字（pass rate / 平均分 / 用例数）进入 `history`，默认留 20 次（`--history`）。留的是画一条趋势线所需的数，不是归档——case 行和产物只有最新一次在站上。
+**趋势线只留摘要**：同一个 slug 重复 build 时，上一次的汇总数字（pass rate / 平均分 / 用例数 / 判分契约 id）进入 `history`，默认留 20 次（`--history`）。留的是画一条趋势线所需的数，不是归档——case 行和产物只有最新一次在站上。运行页据此画趋势图，并在判分契约变化处断开（见下文"CI 配方"）。
 
 **跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用 `compass compare` 对同一批 case 做配对检验。
 
@@ -446,6 +447,50 @@ compass site serve site/                           # 已 build 好的站，静�
 服务端只在结果文件的 mtime 变了才重新解析（轮询要足够便宜），但**轨迹列表每次都重扫**：一条 trace 落盘时结果文件不一定跟着改，"要等别的东西变了才点得开"比多扫一次目录糟糕得多。结果文件正被改写到一半会返回 503 而不是断连——轮询期间撞上这个是常态。
 
 **默认值随绑定地址走**：绑 localhost 是本地调试，grader 细节照常给；绑到别的地址就是发布，默认脱敏并提示"这台机器能被谁访问"，要带细节得显式 `--include-details`。反过来 `--redact` 也能在本地强制脱敏。
+
+### CI 配方：让同一个 eval 集攒出趋势
+
+最常见的用法不是跨仓库，是**同一个仓库、同一个 eval 集、看它随时间怎么变**。每天跑一次、build 到同一个 slug，趋势自己就攒出来了。
+
+配方只有三步，顺序不能变：
+
+```bash
+set -e                                   # 拉不回来就不要 build（见下）
+
+# 1. 先把已有的站拉回来 —— 整个目录，不是只拉 index.json
+aws s3 sync s3://evals/site ./site
+
+# 2. build 到固定的 slug
+compass test qa.yaml --report json -o results.json --trace-dir ./traces
+compass site build results.json -o site/ --slug agent-qa --history 90 --trace-dir ./traces
+
+# 3. 写回去
+aws s3 sync ./site s3://evals/site
+```
+
+换成 git 分支同理（`git clone --depth 1 --branch site-data` → build → commit → push），换成内网 docroot 更简单——直接 build 进挂载路径，第 1、3 步都不用。
+
+**四个坑，每个都真的会踩：**
+
+**① slug 必须固定。** 它是趋势线的身份。写成 `--slug agent-qa-$(date +%F)` 或带上 commit sha，结果是每天新建一条 run、每条都没有历史——总览页会变成一堆一次性条目。要区分环境或分支，把它做成 slug 的**固定前缀**（`agent-qa-main` / `agent-qa-staging`），不要放变量。
+
+**② 拉不回来就不能 build。** 历史快照是 build 时从"上一条 entry"里取的。如果第 1 步静默失败（网络问题、凭证过期、bucket 名打错），第 2 步会当成首次 build，**整条趋势归零且不报错**。所以 `set -e`，或者显式判断 `site/index.json` 存在再继续。这是这套流程唯一会静默丢数据的地方。
+
+**③ 只有最新一次的 case 行和轨迹在站上。** `--history` 留的是摘要（pass rate / 平均分 / 用例数 / 判分契约），不是归档；每次 build 会清空并重写 `runs/<slug>/`。要留完整历史，那是 artifact 仓库的事，不是站点的事。日跑 + `--history 90` ≈ 一个季度的趋势线，默认 20 约三周。
+
+**④ 别让 PR 跑污染趋势。** 如果主干夜跑和 PR 验证都 build，用不同的 slug（`agent-qa` vs `agent-qa-pr`），否则一次 PR 的临时结果会挤掉一天的真实数据点。
+
+### 趋势线只在同一份判分契约内连起来
+
+运行页的趋势图会把**判分契约变了的那些点断开、置灰，并明说断在哪**：
+
+```
+3 earlier build(s) were graded under a different contract, so the line breaks there.
+```
+
+这是把"分数只在同一份判分契约下可比"（见上文"评测卫生"）这条规则延伸到时间轴上——趋势本来就是拉长了的对比。契约 id（`run.contract`）由各 case 的 `grader_fingerprint` 派生，没有指纹时回退到 scenario 的 `config_hash`；两者都没有就记为空，**报告成"未知"而不是"没变"**——后者会画出一条穿过断点的直线，比不画更糟。
+
+所以改了 grader 阈值之后趋势线断开是**正确行为**，不是 bug。要回答"改判分器之后到底好了还是差了"，用 `compass grade --regrade` 把同一批轨迹按新契约重评，再 `compass compare`。
 
 ### 配对比较（`compass compare`）：把对比当测量，不当读数
 

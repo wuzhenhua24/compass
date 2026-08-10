@@ -238,6 +238,75 @@ function scatter(cases) {
     <svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div>`;
 }
 
+// Builds of this slug, oldest first: the trail plus the run on screen.
+function trendSeries(entry, run) {
+  if (!entry) return [];
+  const trail = (entry.history || []).slice().reverse();
+  return trail.concat([{
+    generated: entry.generated, pass_rate: entry.pass_rate,
+    average_score: entry.average_score, total_cases: entry.total_cases,
+    evaluated_cases: entry.evaluated_cases, passed_cases: entry.passed_cases,
+    contract: (run || {}).contract != null ? run.contract : entry.contract,
+  }]);
+}
+
+function trendPanel(entry, run) {
+  const series = trendSeries(entry, run);
+  if (series.length < 2) return "";
+
+  const w = 720, h = 200, padL = 46, padR = 16, padT = 16, padB = 34;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  const step = series.length > 1 ? pw / (series.length - 1) : 0;
+  const x = (i) => padL + i * step;
+  const y = (v) => padT + (1 - Math.max(0, Math.min(1, Number(v || 0)))) * ph;
+  const current = series[series.length - 1].contract || "";
+
+  // Where the grading contract changed, the points either side were not
+  // measured the same way — break the line instead of drawing through it.
+  const segments = [];
+  let run_ = [];
+  series.forEach((p, i) => {
+    const same = (p.contract || "") === current;
+    if (!same) { if (run_.length > 1) segments.push(run_); run_ = []; return; }
+    run_.push(`${x(i).toFixed(1)},${y(p.pass_rate).toFixed(1)}`);
+  });
+  if (run_.length > 1) segments.push(run_);
+
+  let svg = "";
+  [0, 0.25, 0.5, 0.75, 1].forEach((v) => {
+    svg += `<line x1="${padL}" y1="${y(v)}" x2="${w - padR}" y2="${y(v)}" stroke="#eee"/>`
+      + `<text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#999">${pct(v)}</text>`;
+  });
+  segments.forEach((pts) => {
+    svg += `<polyline points="${pts.join(" ")}" fill="none" stroke="#667eea" stroke-width="2"/>`;
+  });
+
+  let stale = 0;
+  series.forEach((p, i) => {
+    const same = (p.contract || "") === current;
+    if (!same) stale++;
+    const color = !same ? "#94a3b8" : p.pass_rate >= 0.7 ? "#10b981" : p.pass_rate >= 0.4 ? "#f59e0b" : "#ef4444";
+    const when = String(p.generated || "").slice(0, 10);
+    svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(p.pass_rate).toFixed(1)}" r="${i === series.length - 1 ? 5 : 4}"
+      fill="${color}" stroke="white" stroke-width="1.5">
+      <title>${esc(when)}: ${pct(p.pass_rate)} (${p.passed_cases || 0}/${p.evaluated_cases || 0})${same ? "" : " — graded under a different contract"}</title></circle>`;
+    if (i === 0 || i === series.length - 1) {
+      svg += `<text x="${x(i)}" y="${h - 12}" text-anchor="${i ? "end" : "start"}"
+        font-size="11" fill="#888">${esc(when)}</text>`;
+    }
+  });
+
+  const note = stale
+    ? `<div class="note warn" style="margin:0 0 14px">${stale} earlier build(s) were graded under a
+       different contract, so the line breaks there. Scores are only comparable within one contract —
+       use <code>compass compare</code> for a proper before/after.</div>`
+    : "";
+
+  return `<div class="card"><h2>Pass rate over ${plural(series.length, "build")}</h2>
+    <div class="body">${note}
+    <div class="scroll"><svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div></div>`;
+}
+
 function categoryTable(rows) {
   if (!rows || !rows.length) return "";
   const body = rows.map((r) => `<tr>
@@ -338,6 +407,7 @@ function renderRun(slug, entry, doc) {
     </div>
     ${doc.details_redacted ? `<div class="note info">Grader details were left out of this build.
       Rebuild with <code>--include-details</code> to publish them.</div>` : ""}
+    ${trendPanel(entry, run)}
     ${showScatter ? scatter(cases) : ""}
     ${categoryTable(doc.categories)}
     <div class="card">
