@@ -73,6 +73,7 @@ packages = ["src/compass"]
 # wheel either.
 [tool.hatch.build.targets.wheel.force-include]
 "README.md" = "compass/docs/README.md"
+"docs/cheatsheet.md" = "compass/docs/cheatsheet.md"
 "docs/core-design.md" = "compass/docs/core-design.md"
 "docs/graders.md" = "compass/docs/graders.md"
 "docs/scenario-config.md" = "compass/docs/scenario-config.md"

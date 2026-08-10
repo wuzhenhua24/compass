@@ -1,5 +1,8 @@
 """Common graders shared across different agent types."""
 
+from compass.graders.code.common.exact import (
+    ExactMatchGrader,
+)
 from compass.graders.code.common.external import (
     ExternalCheckerGrader,
 )
@@ -23,6 +26,8 @@ from compass.graders.code.common.transcript_graders import (
 )
 
 __all__ = [
+    # Exact match
+    "ExactMatchGrader",
     # External process graders
     "ExternalCheckerGrader",
     # Structure graders

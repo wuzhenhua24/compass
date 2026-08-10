@@ -42,6 +42,11 @@ TOPICS: tuple[Topic, ...] = (
         "定位、核心概念、架构、CLI 总览、快速开始",
     ),
     Topic(
+        "cheatsheet",
+        "docs/cheatsheet.md",
+        "一页速查：YAML 全字段、内置 grader、常用配方、语义坑（建议 agent 先读这个）",
+    ),
+    Topic(
         "core-design",
         "docs/core-design.md",
         "Transcript/Outcome 分离、GraderScope、ToolCall 协议、JSONL 事件流",

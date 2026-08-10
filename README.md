@@ -277,6 +277,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 
 | 主题 | 内容 | 文档 |
 |------|------|------|
+| **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、41 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
 | **Grader 体系** | 三层体系（Code/Model/Human）、全部 39 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |

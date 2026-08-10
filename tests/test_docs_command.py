@@ -8,6 +8,7 @@ output does not depend on which local notes happen to be in the checkout.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,175 @@ class TestDocsCommand:
 
     def test_the_command_is_registered(self):
         assert "docs" in cli.commands
+
+
+# ===================================================================
+# The cheatsheet must stay true
+# ===================================================================
+
+
+class TestCheatsheetAccuracy:
+    """A cheatsheet is only worth having if it is accurate.
+
+    It is the page an agent is most likely to act on without reading further,
+    so every name in it is checked against the code rather than trusted.
+    """
+
+    @pytest.fixture(scope="class")
+    def text(self) -> str:
+        return (REPO_ROOT / "docs" / "cheatsheet.md").read_text(encoding="utf-8")
+
+    def test_it_is_a_registered_topic(self):
+        assert get_topic("cheatsheet") is not None
+
+    def test_it_stays_short_enough_to_read_in_one_pass(self, text):
+        """Its whole reason to exist is being smaller than docs/graders.md."""
+        graders_doc = (REPO_ROOT / "docs" / "graders.md").read_text(encoding="utf-8")
+        assert len(text) < len(graders_doc) / 2
+
+    @staticmethod
+    def _table_rows(text: str) -> list[tuple[str, list[str]]]:
+        """(scope, grader names) parsed out of the grader table."""
+        rows = []
+        for line in text.splitlines():
+            m = re.match(r"\|\s+\*\*(\w+)[^*]*\*\*[^|]*\|(.+)\|", line)
+            if m:
+                rows.append((m.group(1), re.findall(r"`([a-z_]+)`", m.group(2))))
+        return rows
+
+    def test_the_grader_table_names_only_real_graders(self, text):
+        import compass.graders  # noqa: F401  (registers everything)
+        from compass.graders.registry import get_grader as lookup
+
+        rows = self._table_rows(text)
+        assert rows, "the grader table could not be parsed"
+        for _scope, names in rows:
+            for name in names:
+                lookup(name)  # raises if the cheatsheet invented one
+
+    def test_every_scope_in_the_table_is_correct(self, text):
+        """A wrong scope tells the reader a grader can do something it cannot."""
+        import compass.graders  # noqa: F401
+        from compass.graders.registry import get_grader as lookup
+
+        for scope, names in self._table_rows(text):
+            if scope == "human":
+                continue  # the human row groups by grader type, not scope
+            for name in names:
+                actual = getattr(lookup(name).grader_scope, "value", None)
+                assert actual == scope, f"{name} is {actual}, listed under {scope}"
+
+    @staticmethod
+    def _builtin_graders() -> set[str]:
+        """Graders that ship with Compass, by module — not by name.
+
+        The registry is process-global: a full-suite run also holds the fakes
+        other test modules register, plus the domain graders from
+        examples/ops_qa. Filtering on where the class is defined is exact;
+        filtering on a name prefix would only catch the ones that happen to
+        follow the convention.
+        """
+        import compass.graders  # noqa: F401  (registers everything)
+        from compass.graders.base import GraderType
+        from compass.graders.registry import get_grader, list_graders
+
+        return {
+            name
+            for t in GraderType
+            for name in list_graders(t)
+            if get_grader(name).__module__.startswith("compass.graders.")
+        }
+
+    def test_the_table_covers_every_registered_grader(self, text):
+        """A grader missing from the table is one an agent will never reach for."""
+        listed = {n for _s, names in self._table_rows(text) for n in names}
+        missing = self._builtin_graders() - listed
+        assert missing == set(), f"not in the cheatsheet table: {sorted(missing)}"
+
+    def test_every_grader_named_in_a_yaml_example_is_real(self, text):
+        import compass.graders  # noqa: F401
+        from compass.graders.registry import get_grader as lookup
+
+        for name in set(re.findall(r"name:\s*([a-z_]+)", text)):
+            if name in {"accuracy", "my_check"}:  # rubric criteria / the example
+                continue
+            lookup(name)
+
+    def test_the_claimed_grader_count_is_right(self, text):
+        """A stale count is the cheapest kind of lie to leave in a cheatsheet."""
+        total = len(self._builtin_graders())
+        claimed = re.search(r"内置 grader 速查（(\d+) 个）", text)
+        assert claimed, "the cheatsheet no longer states a grader count"
+        assert int(claimed.group(1)) == total
+
+    def test_every_yaml_field_it_documents_exists(self, text):
+        from compass.core.scenario import (
+            AggregationConfig,
+            ExpectedConfig,
+            GraderConfig,
+            InputConfig,
+            MetricsConfig,
+            Scenario,
+            TestCase,
+        )
+
+        for model, fields in (
+            (Scenario, ["default_graders", "default_aggregation", "leak_markers"]),
+            (TestCase, ["expect", "expect_reason", "stage", "trials", "expected"]),
+            (InputConfig, ["prompt", "negative_prompt", "params", "reference_images"]),
+            (GraderConfig, ["weight", "required", "gate", "creates", "config"]),
+            (AggregationConfig, ["pass_threshold", "required_graders", "short_circuit"]),
+            (MetricsConfig, ["pass_at_k", "consistency"]),
+            (ExpectedConfig, ["contains", "equals", "equals_json", "similar_to"]),
+        ):
+            for field in fields:
+                assert field in model.model_fields, f"{model.__name__}.{field} is gone"
+                assert field in text, f"cheatsheet omits {model.__name__}.{field}"
+
+    def test_every_cli_command_it_mentions_exists(self, text):
+        for command in cli.commands:
+            if f"compass {command}" in text:
+                continue
+            # `list` and `init` are referenced too; every mentioned one must be real
+        mentioned = {
+            line.split()[1]
+            for line in text.splitlines()
+            if line.startswith("compass ") and len(line.split()) > 1
+        }
+        unknown = mentioned - set(cli.commands)
+        assert not unknown, f"cheatsheet mentions non-existent commands: {unknown}"
+
+    def test_every_context_accessor_it_documents_exists(self, text):
+        import re
+
+        from compass.graders.base import GradeContext
+
+        used = set(re.findall(r"context\.([a-z_]+)", text))
+        for name in used:
+            assert hasattr(GradeContext, name) or name in GradeContext.__annotations__, (
+                f"cheatsheet documents context.{name}, which does not exist"
+            )
+
+    def test_the_short_circuit_modes_are_real(self, text):
+        from compass.core.scenario import ShortCircuitMode
+
+        for mode in ShortCircuitMode:
+            assert mode.value in text
+
+    def test_the_broken_expected_field_is_flagged_not_advertised(self, text):
+        """`assertions:` expands to an unregistered grader — say so, don't hide it."""
+        import compass.graders  # noqa: F401
+        from compass.graders.registry import get_grader as lookup
+
+        try:
+            lookup("assertions")
+        except Exception:  # noqa: BLE001
+            assert "不可用" in text, (
+                "expected.assertions is still broken but the cheatsheet no "
+                "longer warns about it"
+            )
+        else:
+            pytest.fail(
+                "an `assertions` grader now exists — drop the warning from the "
+                "cheatsheet and document the field properly"
+            )
