@@ -72,7 +72,7 @@ class SafetyCheckGrader(ModelGrader):
                 grader_type=self.grader_type,
                 grader_scope=self.grader_scope,
                 passed=False,
-                score=0.0,
+                score=None,  # not measured
                 error="No image in outcome",
             )
 
@@ -105,7 +105,7 @@ class SafetyCheckGrader(ModelGrader):
                 grader_type=self.grader_type,
                 grader_scope=self.grader_scope,
                 passed=False,
-                score=0.0,
+                score=None,  # not measured
                 error=str(e),
             )
 

@@ -124,13 +124,28 @@ class GradeContext:
     def answer(self) -> str:
         """Shortcut: the agent's final text answer.
 
-        Reads ``outcome.output_data['final_output']`` — where the trace importers
-        (and adapters) place a text agent's answer. Returns ``""`` if absent.
+        Two sources, in order:
+
+        1. ``outcome.output_data['final_output']`` — the explicit contract, set
+           by every trace importer.
+        2. the first ``TextArtifact`` — the natural way an *adapter* returns
+           text, since ``AgentOutput.to_dict()`` has no text field of its own.
+
+        Without the second source, ``answer`` was empty for every
+        adapter-driven run, and the graders that read it (``groundedness``,
+        ``trajectory_judge``, ``external_checker``) silently judged nothing.
+        Returns ``""`` when the agent produced no text at all.
         """
-        if self.outcome is not None:
-            val = self.outcome.output_data.get("final_output")
-            if isinstance(val, str):
-                return val
+        if self.outcome is None:
+            return ""
+
+        val = self.outcome.output_data.get("final_output")
+        if isinstance(val, str) and val:
+            return val
+
+        artifact = self.text_artifact
+        if artifact is not None and artifact.content:
+            return artifact.content
         return ""
 
     @property

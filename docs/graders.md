@@ -126,7 +126,7 @@ graders:
 | `COMPASS_TRANSCRIPT` | 执行轨迹 JSON 文件的路径 |
 | `COMPASS_OUTCOME` | 最终产物 JSON 文件的路径 |
 | `COMPASS_PROMPT` | case 的 prompt |
-| `COMPASS_ANSWER` | agent 的最终文本答案（有的话） |
+| `COMPASS_ANSWER` | agent 的最终文本答案（见下方"答案从哪来"） |
 | `COMPASS_REFERENCE_ANSWER` | golden 答案（case 提供的话） |
 | `COMPASS_CONFIG` | grader 的完整 config，JSON——结构化值走这里 |
 | `COMPASS_CONFIG_<KEY>` | 每个**标量** config 键，大写——给 shell 脚本用 |
@@ -173,6 +173,15 @@ smevals 里，一个失败但没给分的 check 会让整个 Grade **unscored**�
 - transcript / outcome 的 JSON 落在临时目录而非 workspace：workspace 是**判分证据**，不该被 Compass 自己的输入污染。
 
 > **安全**：这会执行 scenario 里写的任何命令——和一个 Python grader 模块能做的事一样。**scenario 文件是可信输入**。
+
+### 答案从哪来
+
+`context.answer`（以及 `COMPASS_ANSWER`）按顺序取两个来源：
+
+1. `outcome.output_data["final_output"]` —— 显式契约，**所有轨迹 importer** 都会设置
+2. 第一个 **`TextArtifact`** 的 `content` —— **adapter** 返回文本的自然方式（`AgentOutput` 本身没有文本字段）
+
+第 2 条是补上的：在此之前 adapter 驱动的运行里 `answer` 恒为空，读它的 grader（`groundedness` / `trajectory_judge` / `external_checker`）实际上在对空字符串评分。自定义 adapter 只要 `AgentOutput(artifacts=[TextArtifact(content=answer)])` 即可。
 
 ## 观察标签（Observed Tags）：从"失败统计"到"行为画像"
 

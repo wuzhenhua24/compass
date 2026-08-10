@@ -55,7 +55,7 @@ Finally, give an overall score from 0.0 to 1.0 based on how well the image meets
                 grader_type=self.grader_type,
                 grader_scope=self.grader_scope,
                 passed=False,
-                score=0.0,
+                score=None,  # not measured
                 error="No image in outcome",
             )
 
@@ -67,7 +67,7 @@ Finally, give an overall score from 0.0 to 1.0 based on how well the image meets
                 grader_type=self.grader_type,
                 grader_scope=self.grader_scope,
                 passed=False,
-                score=0.0,
+                score=None,  # not measured
                 error="No evaluation criteria provided",
             )
 
@@ -93,7 +93,7 @@ Finally, give an overall score from 0.0 to 1.0 based on how well the image meets
                 grader_type=self.grader_type,
                 grader_scope=self.grader_scope,
                 passed=False,
-                score=0.0,
+                score=None,  # not measured
                 error=str(e),
             )
 
