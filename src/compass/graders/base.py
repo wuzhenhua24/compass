@@ -12,6 +12,7 @@ Key design principle (from Anthropic "Demystifying Evals for AI Agents"):
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Type
 import uuid
 
@@ -75,6 +76,14 @@ class GradeContext:
     # Golden/expected answer text for QA-style evaluation (symmetric with
     # ``reference_image``). Graders compare the agent's answer against this.
     reference_answer: str = ""
+
+    # === Shared grade workspace ===
+    # A directory all graders for one trial share, in declared order. A grader
+    # may write intermediates (an extracted SVG, a rendered PNG, a diff) for
+    # later graders to consume, turning a flat list of independent checks into
+    # a pipeline. Whatever is left in it is kept as scoring evidence — the
+    # `details` dict can hold structured data, but not a rendered image.
+    workspace: "Path | None" = None
 
     # === Leak detection ===
     # Unique marker strings embedded in grader/solution files.
@@ -150,6 +159,29 @@ class GradeContext:
         if self.transcript is not None:
             return self.transcript.total_duration_ms
         return 0.0
+
+    def workspace_file(self, name: str) -> Path:
+        """Path to *name* inside the shared grade workspace.
+
+        Raises RuntimeError when no workspace was provided, rather than
+        silently writing into the current working directory.
+        """
+        if self.workspace is None:
+            raise RuntimeError(
+                "No grade workspace available — this grader was called outside "
+                "a runner that provides one"
+            )
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        return self.workspace / name
+
+    def read_workspace_file(self, name: str) -> str | None:
+        """Text of a file an earlier grader left in the workspace, or None."""
+        if self.workspace is None:
+            return None
+        path = self.workspace / name
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8")
 
     @property
     def has_transcript(self) -> bool:

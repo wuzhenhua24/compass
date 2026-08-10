@@ -138,6 +138,30 @@ class ArtifactStore:
         image.save(str(path), format="PNG")
 
     # ------------------------------------------------------------------
+    # Grade workspace
+    # ------------------------------------------------------------------
+
+    def grade_workspace(self, case_id: str, create: bool = True) -> Path:
+        """The shared workspace directory for one trial's graders.
+
+        Sits beside that trial's output artifacts (``{base_dir}/{case_id}/``)
+        so evidence produced *while scoring* — a rendered image, an extracted
+        document, a judge's raw response — is archived next to the output it
+        was derived from, rather than living in a temp dir that disappears.
+        """
+        path = self.base_dir / _safe_filename(case_id) / "grade"
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def list_grade_evidence(self, case_id: str) -> list[str]:
+        """Filenames left in a trial's grade workspace, sorted."""
+        path = self.grade_workspace(case_id, create=False)
+        if not path.is_dir():
+            return []
+        return sorted(p.name for p in path.iterdir() if p.is_file())
+
+    # ------------------------------------------------------------------
     # Baseline management
     # ------------------------------------------------------------------
 

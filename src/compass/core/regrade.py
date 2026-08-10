@@ -248,6 +248,17 @@ class GradeStore:
     def record_path(self, trace_stem: str) -> Path:
         return self.dir / f"{trace_stem}.json"
 
+    def workspace_path(self, trace_stem: str) -> Path:
+        """Shared grade workspace for one trace, beside its grade record."""
+        return self.dir / trace_stem
+
+    def list_evidence(self, trace_stem: str) -> list[str]:
+        """Files the graders left in that trace's workspace, sorted."""
+        path = self.workspace_path(trace_stem)
+        if not path.is_dir():
+            return []
+        return sorted(p.name for p in path.iterdir() if p.is_file())
+
     def load_record(self, trace_stem: str) -> dict[str, Any] | None:
         path = self.record_path(trace_stem)
         if not path.exists():
@@ -440,8 +451,11 @@ async def grade_traces(
                 trials.append(_trial_from_record(record, trace, index))
                 continue
 
+            # Graders chain through this directory and whatever they leave
+            # behind is kept beside the grade record as scoring evidence.
+            workspace = store.workspace_path(trace.stem)
             passed, score, evaluator_results = await runner.grade_transcript(
-                scenario, case, trace.transcript
+                scenario, case, trace.transcript, workspace=workspace
             )
             record = _build_record(
                 scenario=scenario,
@@ -451,6 +465,7 @@ async def grade_traces(
                 passed=passed,
                 score=score,
                 evaluator_results=evaluator_results,
+                evidence=store.list_evidence(trace.stem),
             )
             store.write_record(trace.stem, record)
             graded += 1
@@ -568,6 +583,7 @@ def _build_record(
     passed: bool,
     score: float,
     evaluator_results: list[EvaluatorResult],
+    evidence: list[str] | None = None,
 ) -> dict[str, Any]:
     """The on-disk grade record: the verdict plus everything needed to audit it."""
     return {
@@ -586,6 +602,9 @@ def _build_record(
         "passed": passed,
         "score": score,
         "grade_results": [r.to_dict() for r in evaluator_results],
+        # Files the graders produced while scoring — the visual/derived
+        # evidence behind the verdict, which `details` cannot hold.
+        "evidence": evidence or [],
     }
 
 

@@ -3,6 +3,94 @@
 > Compass 专题文档 · 返回 [README](../README.md)
 
 
+## 评分流水线：grader 不是一盘散沙
+
+一个 case 的 graders **按声明顺序执行、共享同一个工作目录**。三条机制把「一串互相独立的检查」变成「一条流水线」：
+
+| 机制 | 作用 |
+|---|---|
+| `context.workspace` | 共享工作目录，前一个 grader 的产物是后一个的输入 |
+| `creates:` | grader 声明它承诺产出的文件；没产出即判失败 |
+| `required:` | 失败即**中止链路**，后续 grader 不再执行 |
+
+典型场景是图像评测：从回答里抠出 SVG → 严格校验 → 渲染成 PNG → 让 VLM 判分。这四步天然有依赖——抠不出 SVG 就不该渲染，渲染失败就不该花钱叫判官。
+
+```yaml
+graders:
+  - name: extract_svg          # 从 answer 里抠出 SVG，写进 workspace
+    type: code
+    required: true             # 抠不出来就中止，后面全跳过
+    creates: extracted.svg     # 承诺产出这个文件
+
+  - name: render_svg           # 消费 extracted.svg，产出 render.png
+    type: code
+    required: true
+    creates: render.png
+
+  - name: vlm_judge            # 只在前两步都成功时才被调用（省钱）
+    type: model
+    config:
+      image: render.png
+```
+
+### 在 grader 里读写 workspace
+
+```python
+@register_grader("render_svg")
+class RenderSvg(CodeGrader):
+    grader_scope = GraderScope.OUTCOME
+
+    async def grade(self, context: GradeContext) -> GradeResult:
+        svg = context.read_workspace_file("extracted.svg")   # 上游产物
+        if svg is None:
+            return GradeResult(..., passed=False, error="上游没有产出 SVG")
+
+        png = context.workspace_file("render.png")           # 下游可消费 + 留证
+        png.write_bytes(rasterize(svg))
+        return GradeResult(..., passed=True, score=1.0)
+```
+
+- `context.workspace` 是 `Path | None`；`workspace_file(name)` 返回可写路径（无 workspace 时**抛异常**而不是悄悄写进当前目录），`read_workspace_file(name)` 读不到返回 `None`。
+- 没配 `--trace-dir` 时 workspace 是临时目录：grader 照常串联，只是不留证据。
+
+### `creates:`：把「承诺」变成可验证的契约
+
+grader 报告成功、却没产出它声明的文件——这是**静默失败**，不是通过。Compass 在 grader 返回后校验 `creates:` 里的每个文件，缺任何一个就把该 grader 判为失败并打上 `missing_promised_file` 标签。
+
+`creates` 接受字符串或字符串列表。只在 grader **自称成功**时校验：一个凭自身逻辑就失败的 grader 保留它自己的错误信息，不会被二次追责。
+
+### `required:`：失败即中止
+
+`required: true` 的 grader 失败（或崩溃、或违背 `creates` 承诺）时，**后续 grader 全部跳过**，标记为 `skipped=True, skip_reason="required_failed"`。
+
+跳过的 grader 是「未打分」（`score=None`），既不进加权平均，也不额外拖累判定——判定已经由那个失败的 required grader 决定了。所以链路中止**只省钱，不改判**：
+
+```
+extract_svg  FAIL  ← required 失败
+render_svg   skip
+vlm_judge    skip  ← 昂贵调用被省下
+→ score=0.00, passed=False
+```
+
+> **注意分数语义**：中止后，分数只由**已经跑过**的 grader 决定。上例中 case 得 0.00 而不是「跑完全部 grader 的加权平均」——这是刻意的：没跑的 grader 不该用一个虚构的数字参与平均。详见 [analysis.md](analysis.md) 的"未打分 ≠ 0 分"。
+
+### 证据留存
+
+grader 在 workspace 里留下的一切都会被归档，作为**判分依据**可追溯——`details` dict 装得下结构化数据，装不下一张渲染图或一份判官原始响应。
+
+```
+traces/
+  case_a.json                 # 轨迹
+  case_a/
+    output.png                #   产物（agent 做出了什么）
+    grade/                    #   评分证据（我们凭什么这么判）
+      extracted.svg
+      render.png
+      judge-log.json
+```
+
+`compass grade` 的证据落在 `grades/<set>/<trace>/`，并在评分记录的 `evidence` 字段里列出文件名。Python 侧：`ArtifactStore(trace_dir).list_grade_evidence(case_id)`。没有任何 grader 写入时，空目录会被自动清理。
+
 ## 三层 Grader 体系
 
 ```

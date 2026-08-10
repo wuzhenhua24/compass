@@ -948,10 +948,15 @@ class TestGateGraders:
         result = await runner.run(scenario)
 
         case = result.case_results[0]
-        # Gate passes, graded score = (0+1)/2 = 0.5 > 0.3 threshold,
-        # but required grader failed → overall fails
-        assert case.overall_score == pytest.approx(0.5)
+        # The required grader fails, which halts the chain: the third grader
+        # never runs, so it contributes nothing and the score is the failing
+        # grader's own 0.0 rather than a half-measured 0.5.
+        assert case.overall_score == pytest.approx(0.0)
         assert case.passed is False
+
+        third = case.evaluator_results[2]
+        assert third.skipped is True
+        assert third.skip_reason == "required_failed"
 
     @pytest.mark.asyncio
     async def test_gate_flag_preserved_in_result(self):

@@ -25,6 +25,12 @@ class GraderConfig(BaseModel):
     score calculation.  When ``gate=True`` the grader must pass for the
     overall case to pass, but its score is excluded from the weighted
     average so it cannot drag the aggregate number down.
+
+    ``required=True`` additionally **halts the chain**: graders declared after
+    it are not run.  Graders execute in declared order over a shared
+    workspace, so a failed prerequisite makes everything downstream
+    meaningless — there is no point rendering an SVG that could not be
+    extracted, or paying a VLM to judge an image that was never produced.
     """
 
     type: GraderType = GraderType.MODEL
@@ -32,7 +38,18 @@ class GraderConfig(BaseModel):
     weight: float = 1.0
     required: bool = False
     gate: bool = False  # Hard gate: must pass, excluded from score
+    # Files this grader promises to write into the shared grade workspace.
+    # The runner verifies they appeared; a grader that reports success without
+    # producing what it promised is a silent failure, not a pass.
+    creates: str | list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def promised_files(self) -> list[str]:
+        """``creates`` normalized to a list."""
+        if isinstance(self.creates, str):
+            return [self.creates] if self.creates else []
+        return list(self.creates)
 
 
 class ExpectedConfig(BaseModel):

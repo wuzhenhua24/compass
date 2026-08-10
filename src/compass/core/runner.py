@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -27,6 +28,18 @@ from compass.core.trial import TrialManager, TaskResult, TrialResult
 from compass.graders import get_grader, GradeContext, GradeResult
 
 logger = logging.getLogger(__name__)
+
+
+def _prune_if_empty(path: Path) -> None:
+    """Remove *path* (and a then-empty parent) if nothing was written to it."""
+    try:
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+            parent = path.parent
+            if parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+    except OSError:  # pragma: no cover - best effort cleanup
+        pass
 
 
 class Compass:
@@ -285,7 +298,8 @@ class Compass:
 
         try:
             passed, score, evaluator_results, output_data, _, transcript = await self._run_single_trial(
-                scenario, case, run_id=run_id, config_hash=config_hash
+                scenario, case, run_id=run_id, config_hash=config_hash,
+                workspace=self._grade_workspace(trace_dir, case.id),
             )
 
             # Save trace if trace_dir is specified
@@ -442,9 +456,12 @@ class Compass:
         """Run one attempt, capturing harness errors as an unscored trial."""
         captured: list[Transcript] = []
 
+        trial_key = f"{case.id}_trial{trial_number}"
+
         async def run_fn():
             result = await self._run_single_trial(
-                scenario, case, run_id=run_id, config_hash=config_hash
+                scenario, case, run_id=run_id, config_hash=config_hash,
+                workspace=self._grade_workspace(trace_dir, trial_key),
             )
             if len(result) >= 6 and result[5] is not None:
                 captured.append(result[5])
@@ -454,9 +471,7 @@ class Compass:
             case.id, trial_number, run_fn
         )
         if trace_dir and captured:
-            self._save_trace(
-                captured[0], trace_dir, f"{case.id}_trial{trial_number}", trace_format
-            )
+            self._save_trace(captured[0], trace_dir, trial_key, trace_format)
         return trial
 
     async def _run_single_trial(
@@ -465,6 +480,7 @@ class Compass:
         case: TestCase,
         run_id: str = "",
         config_hash: str = "",
+        workspace: Path | None = None,
     ) -> tuple[bool, float, list[EvaluatorResult], dict[str, Any], dict[str, Any], Transcript]:
         """Execute a single trial.
 
@@ -513,7 +529,7 @@ class Compass:
                 outcome = transcript.outcome
 
                 passed, overall_score, evaluator_results = await self.grade_transcript(
-                    scenario, case, transcript, outcome=outcome
+                    scenario, case, transcript, outcome=outcome, workspace=workspace
                 )
 
                 transcript.finalize(
@@ -566,6 +582,7 @@ class Compass:
         case: TestCase,
         transcript: Transcript,
         outcome: Outcome | None = None,
+        workspace: Path | None = None,
     ) -> tuple[bool, float, list[EvaluatorResult]]:
         """Grade an already-executed transcript against a case's graders.
 
@@ -580,6 +597,10 @@ class Compass:
             case: The test case whose graders/aggregation apply.
             transcript: The execution trace (live or loaded from disk).
             outcome: The outcome to grade; defaults to ``transcript.outcome``.
+            workspace: Directory the case's graders share, in declared order.
+                Whatever they leave in it is kept as scoring evidence. When
+                omitted a temp directory is used and discarded — graders still
+                chain, but nothing is retained.
 
         Returns:
             Tuple of (passed, overall_score, evaluator_results). ``passed``
@@ -588,6 +609,31 @@ class Compass:
         if outcome is None:
             outcome = transcript.outcome
 
+        if workspace is not None:
+            workspace.mkdir(parents=True, exist_ok=True)
+            try:
+                return await self._grade_in_workspace(
+                    scenario, case, transcript, outcome, workspace
+                )
+            finally:
+                # Most cases have no pipeline graders; don't litter the trace
+                # directory with empty workspaces for them.
+                _prune_if_empty(workspace)
+
+        with tempfile.TemporaryDirectory(prefix="compass-grade-") as tmp:
+            return await self._grade_in_workspace(
+                scenario, case, transcript, outcome, Path(tmp)
+            )
+
+    async def _grade_in_workspace(
+        self,
+        scenario: Scenario,
+        case: TestCase,
+        transcript: Transcript,
+        outcome: Outcome | None,
+        workspace: Path,
+    ) -> tuple[bool, float, list[EvaluatorResult]]:
+        """Grading proper, with the shared workspace already established."""
         # Load named reference images
         reference_images = self._load_reference_images(case.input.reference_images)
 
@@ -606,6 +652,7 @@ class Compass:
             outcome=outcome,
             reference_image=ref_image,
             reference_images=reference_images,
+            workspace=workspace,
             leak_markers=scenario.get_leak_markers_for_case(case),
             metadata=case.metadata,
         )
@@ -925,22 +972,65 @@ class Compass:
         grader_configs: list[GraderConfig],
         context: GradeContext,
     ) -> list[EvaluatorResult]:
-        """Run graders sequentially and return results.
+        """Run graders in declared order, as a chain.
+
+        Two things make this a pipeline rather than a list of independent
+        checks:
+
+        - They share ``context.workspace``, so one grader's output (an
+          extracted SVG, a rendered PNG) is the next one's input.
+        - A failed ``required`` grader **halts** the rest. Downstream graders
+          depend on a prerequisite that did not hold, so running them would
+          burn money to produce meaningless numbers.
+
+        A grader that declares ``creates:`` must actually produce those files;
+        claiming success without them is a silent failure, not a pass.
 
         Args:
             grader_configs: Grader configurations to run.
-            context: Grade context with outcome and transcript.
+            context: Grade context with outcome, transcript and workspace.
 
         Returns:
-            List of EvaluatorResult.
+            List of EvaluatorResult, one per config (halted ones marked skipped).
         """
         results: list[EvaluatorResult] = []
+        halted_by: str | None = None
 
         for config in grader_configs:
+            if halted_by is not None:
+                results.append(
+                    EvaluatorResult(
+                        name=config.name,
+                        score=None,  # never ran, so never measured
+                        passed=False,
+                        weight=config.weight,
+                        required=config.required,
+                        gate=config.gate,
+                        grader_type=config.type.value,
+                        grader_scope="outcome",
+                        skipped=True,
+                        skip_reason="required_failed",
+                        metadata={"skipped": True, "reason": "required_failed"},
+                        error=f"Skipped: required grader '{halted_by}' failed",
+                    )
+                )
+                continue
+
             try:
                 grader_cls = get_grader(config.name)
                 grader = grader_cls(config.config)
                 grade_result = await grader.grade(context)
+
+                # A grader that promised files must have produced them
+                missing = self._missing_promised_files(config, context)
+                if missing and grade_result.passed:
+                    grade_result.passed = False
+                    grade_result.failure_tags = list(grade_result.failure_tags) + [
+                        "missing_promised_file"
+                    ]
+                    grade_result.error = (
+                        "did not create promised file(s): " + ", ".join(missing)
+                    )
 
                 # Get grader type and scope from the grader class
                 grader_type = getattr(grader, "grader_type", None)
@@ -976,6 +1066,8 @@ class Compass:
                         error=grade_result.error,
                     )
                 )
+                if config.required and not grade_result.passed:
+                    halted_by = config.name
             except Exception as e:
                 results.append(
                     EvaluatorResult(
@@ -994,8 +1086,37 @@ class Compass:
                         error=str(e),
                     )
                 )
+                # A crashed prerequisite is still an unmet prerequisite
+                if config.required:
+                    halted_by = config.name
 
         return results
+
+    @staticmethod
+    def _grade_workspace(trace_dir: Path | None, trial_key: str) -> Path | None:
+        """Where this trial's graders share files, or None to use a temp dir.
+
+        Only persisted when traces are being kept: without a ``--trace-dir``
+        there is nowhere durable for the evidence to live, and graders still
+        chain through a temp directory.
+        """
+        if trace_dir is None:
+            return None
+        from compass.core.artifact_store import ArtifactStore
+
+        return ArtifactStore(trace_dir).grade_workspace(trial_key)
+
+    @staticmethod
+    def _missing_promised_files(
+        config: GraderConfig, context: GradeContext
+    ) -> list[str]:
+        """Files a grader declared via ``creates:`` but did not produce."""
+        promised = config.promised_files
+        if not promised:
+            return []
+        if context.workspace is None:
+            return promised
+        return [n for n in promised if not (context.workspace / n).exists()]
 
     @staticmethod
     def _aggregate_results(

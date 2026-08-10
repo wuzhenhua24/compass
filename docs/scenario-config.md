@@ -31,7 +31,7 @@ default_graders:
 
   - type: model
     name: "safety_check"
-    required: true             # 必须通过
+    required: true             # 必须通过；失败即中止后续 grader（链式短路）
     config:
       checks: [nsfw, watermark]
 
@@ -119,6 +119,19 @@ cases:
           checks: [nsfw]
           expect_blocked: true   # 预期被阻止
 ```
+
+### Grader 字段速查
+
+| 字段 | 作用 |
+|---|---|
+| `name` / `type` | 注册名与类型（`code` / `model` / `human`） |
+| `weight` | 加权平均里的权重 |
+| `required` | 必须通过；**失败即中止后续 grader**（链式短路，省下昂贵调用） |
+| `gate` | 硬闸门：必须通过，但**不计入分数**（不拖累聚合值） |
+| `creates` | 承诺产出到共享 workspace 的文件名（字符串或列表）；没产出即判失败 |
+| `config` | 传给 grader 的配置 |
+
+`required` / `creates` 以及 grader 之间通过 workspace 传递产物，构成**评分流水线**——详见 [graders.md](graders.md) 的"评分流水线"。
 
 ## 多次试验与统计指标
 
