@@ -10,12 +10,14 @@ Positioning discipline (keep this in mind when extending): the core stays small.
 
 ## Common Commands
 
+Everything runs through `uv run` — Compass is not installed on PATH in a source
+checkout, `uv sync` only puts it in `.venv`.
+
 ```bash
 # Install dependencies
 uv sync
 
-使用uv运行测试
-# Run all tests
+# Run all tests (1657 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file
@@ -24,23 +26,40 @@ uv run pytest tests/test_scenario.py
 # Run a specific test
 uv run pytest tests/test_scenario.py::test_function_name -v
 
-# Lint
-ruff check .
+# Lint — clean; keep it that way
+uv run ruff check .
+uv run ruff check . --fix     # safe autofixes only
 
-# Format
-ruff format .
+# Type check — green via a ratchet (see below)
+uv run mypy src/compass
+```
 
-# Type check
-mypy src/compass
+**Do not run `ruff format .`** — the codebase has never been formatter-managed,
+so it would reformat 113 of 151 files (~8.8k lines) and bury real changes. Match
+the surrounding style by hand instead. Adopting the formatter is a deliberate,
+separate commit if it ever happens.
 
+**The mypy ratchet.** `uv run mypy src/compass` passes, but that is a floor, not
+a clean bill of health: 31 modules are quarantined by `ignore_errors` in
+`pyproject.toml` and still carry ~110 findings. The other 53 modules are gated —
+**new code and edits to clean modules must type-check**. Never add a module to
+that list to make an error go away; fix the annotation, or say so explicitly.
+Removing an entry (and fixing what mypy then reports) is always welcome.
+
+```bash
 # CLI usage
-compass test <scenario.yaml>              # Run tests
-compass test scenarios/ --parallel -w 4   # Parallel execution
-compass analyze results/                  # Analyze results
-compass compare a.json b.json             # Paired run comparison (flips + CI)
-compass trace results/case.json           # View transcript
-compass import session.jsonl              # Import external trace (pi/OTLP/Claude)
-compass list                              # List registered graders/adapters
+uv run compass test <scenario.yaml>          # Run tests
+uv run compass test scenarios/ --parallel -w 4   # Parallel execution
+uv run compass test qa.yaml -m gpt-5 -m claude-5 # Multi-model leaderboard
+uv run compass grade ./traces -s qa.yaml     # Offline grading, no agent re-run
+uv run compass analyze results/              # Analyze results
+uv run compass compare a.json b.json         # Paired comparison (flips + CI)
+uv run compass site build results.json -o site/  # Publish a static site
+uv run compass site serve results.json       # Live view, recomputed per request
+uv run compass trace results/case.json       # View transcript
+uv run compass import session.jsonl          # Import trace (pi/OTLP/Claude/OpenAI)
+uv run compass docs [topic]                  # Read Compass's own docs
+uv run compass list                          # List registered graders/adapters
 ```
 
 ## Architecture
@@ -165,5 +184,7 @@ cases:
 
 ## document
  - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
- - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
+ - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——cheatsheet.md（单页速查，agent 入口）、core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）、roadmap.md（路线图归档）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
+ - 这 7 份专题文档同时是 `compass docs <topic>` 的内容源，且在 pyproject 的 `force-include` 里逐个打进 wheel。**新增专题文档要三处同步**：`src/compass/docs_index.py` 的 TOPICS、pyproject 的 force-include、README 导航表——漏掉任一处，装出来的包就读不到它。
+ - 改评分器数量时记得同步：README 导航表两处、docs/graders.md 的"全部 N 个"与其表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 41）。
  - docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 等是本地参考资料（gitignore），专题 *.md 文档是版本库的一部分。
