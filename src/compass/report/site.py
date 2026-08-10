@@ -19,6 +19,11 @@ output directory — a shared ``gh-pages`` branch, one bucket prefix — and the
 manifest accumulates. There is no central node to run, because the merge point
 is a file that can be rewritten idempotently.
 
+``make_server`` serves that same shape without building it, recomputing each
+response from the results files on disk. The viewer cannot tell the two apart
+except by the manifest's ``live`` flag, which is its cue to keep polling — so
+one page shows both a finished run and a run still being written.
+
 Conventions the document commits to:
 
 - Scores and rates are fractions in ``0..1``, never percentages. Formatting is
@@ -49,9 +54,13 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from ipaddress import ip_address
+from mimetypes import guess_type
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from compass.core.result import EvalResult, TestStatus
 from compass.report.analyzer import iter_case_dicts
@@ -471,7 +480,7 @@ def build_site(
 
     (site_dir / "index.json").write_text(
         json.dumps(
-            {"schema": SCHEMA, "generated": now_iso(), "runs": entries},
+            {"schema": SCHEMA, "generated": now_iso(), "live": False, "runs": entries},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -489,3 +498,190 @@ def build_site(
         history=len(entry["history"]),
         published_paths=trace_paths,
     )
+
+
+# --- live server ---------------------------------------------------------
+
+
+@dataclass
+class LiveSource:
+    """One results file the server watches.
+
+    ``build_site`` freezes a run; this points at the file it was frozen from,
+    so a page can show a run that is still being written.
+    """
+
+    slug: str
+    path: Path
+    name: str = ""
+    trace_dir: Path | None = None
+
+
+def _list_traces(trace_dir: Path | None) -> list[str]:
+    if trace_dir is None or not trace_dir.is_dir():
+        return []
+    return sorted(
+        p.relative_to(trace_dir).as_posix() for p in trace_dir.rglob("*") if p.is_file()
+    )
+
+
+def _read_source(
+    source: LiveSource, cache: dict[str, tuple[int, dict[str, Any]]]
+) -> dict[str, Any]:
+    """The document for one source, recomputed whenever its file changes.
+
+    Parsing is keyed on mtime rather than a timer: polling has to be cheap
+    enough for the page to do it every few seconds, and a run that has not
+    advanced should cost nothing to re-serve. The trace listing is *not*
+    cached with it — a trace lands without the results file necessarily being
+    rewritten, and a transcript you cannot open until something else changes
+    is worse than a directory scan.
+    """
+    key = str(source.path)
+    mtime = source.path.stat().st_mtime_ns
+    hit = cache.get(key)
+    if hit and hit[0] == mtime:
+        doc = hit[1]
+    else:
+        payload = json.loads(source.path.read_text(encoding="utf-8"))
+        doc = collect_run_payload(payload, name=source.name or source.slug)
+        cache[key] = (mtime, doc)
+
+    doc["traces"] = _list_traces(source.trace_dir)
+    return doc
+
+
+def make_server(
+    sources: Sequence[LiveSource],
+    *,
+    host: str = "127.0.0.1",
+    port: int = 7001,
+    include_details: bool = False,
+) -> ThreadingHTTPServer:
+    """A server that renders results straight from disk.
+
+    Serves the same shape ``build_site`` writes, so the viewer cannot tell the
+    difference — except that the manifest says ``live``, which is the page's
+    cue to keep polling. Every response is recomputed from the files, so a run
+    that is still being written shows its progress.
+
+    Returns the server without starting it; call ``serve_forever()``.
+    """
+    by_slug = {source.slug: source for source in sources}
+    cache: dict[str, tuple[int, dict[str, Any]]] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802  (BaseHTTPRequestHandler's API)
+            path = unquote(self.path.split("?")[0])
+            try:
+                if path in ("/", "/index.html"):
+                    return self._reply(200, app_html().encode(), "text/html; charset=utf-8")
+                if path == "/index.json":
+                    return self._reply_json(self._manifest())
+                if path.startswith("/runs/"):
+                    return self._serve_run(path.removeprefix("/runs/"))
+            except FileNotFoundError:
+                return self._reply(404, b"gone from disk", "text/plain; charset=utf-8")
+            except (json.JSONDecodeError, OSError) as e:
+                # A results file being rewritten is a normal thing to catch
+                # mid-poll; say so rather than dropping the connection.
+                return self._reply(503, str(e).encode(), "text/plain; charset=utf-8")
+            self._reply(404, b"not found", "text/plain; charset=utf-8")
+
+        def _manifest(self) -> dict[str, Any]:
+            entries = []
+            for slug, source in sorted(by_slug.items()):
+                doc = _read_source(source, cache)
+                entry = index_entry(slug, doc)
+                entry["traces"] = len(doc.get("traces") or [])
+                entries.append(entry)
+            return {"schema": SCHEMA, "generated": now_iso(), "live": True, "runs": entries}
+
+        def _serve_run(self, rest: str) -> None:
+            slug, _, tail = rest.partition("/")
+            source = by_slug.get(slug)
+            if source is None:
+                return self._reply(404, b"no such run", "text/plain; charset=utf-8")
+            if tail == "run.json":
+                doc = _read_source(source, cache)
+                return self._reply_json(publish_doc(doc, include_details=include_details))
+            if tail.startswith("traces/") and source.trace_dir:
+                return self._serve_trace(source.trace_dir, tail.removeprefix("traces/"))
+            self._reply(404, b"not found", "text/plain; charset=utf-8")
+
+        def _serve_trace(self, trace_dir: Path, rest: str) -> None:
+            root = trace_dir.resolve()
+            target = (root / rest).resolve()
+            if not target.is_relative_to(root) or not target.is_file():
+                return self._reply(404, b"no such trace", "text/plain; charset=utf-8")
+            # Transcripts are JSON/JSONL; render them inline rather than
+            # prompting a download the reader did not ask for.
+            ctype = (
+                "text/plain; charset=utf-8"
+                if target.suffix in (".json", ".jsonl", ".yaml", ".yml", ".txt", ".log")
+                else guess_type(target.name)[0] or "application/octet-stream"
+            )
+            self._reply(200, target.read_bytes(), ctype)
+
+        def _reply_json(self, data: Mapping[str, Any]) -> None:
+            self._reply(
+                200, json.dumps(data, ensure_ascii=False).encode(), "application/json"
+            )
+
+        def _reply(self, status: int, body: bytes, ctype: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            """Silence per-request logging — the page polls every few seconds."""
+
+    return ThreadingHTTPServer((host, port), Handler)
+
+
+def make_static_server(
+    root: str | Path, *, host: str = "127.0.0.1", port: int = 7001
+) -> ThreadingHTTPServer:
+    """Serve an already-built site directory.
+
+    Browsers will not fetch JSON from ``file://``, so a built site needs a
+    server even to be looked at locally. Files are read per request, so a
+    concurrent ``site build`` shows up on the next reload.
+    """
+    directory = str(Path(root).resolve())
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, directory=directory, **kwargs)
+
+        def end_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            """Silence per-request logging."""
+
+    return ThreadingHTTPServer((host, port), Handler)
+
+
+def is_built_site(path: str | Path) -> bool:
+    """Whether a directory is a site rather than a pile of results files."""
+    path = Path(path)
+    return path.is_dir() and (path / "index.json").is_file() and (path / "runs").is_dir()
+
+
+def is_loopback(host: str) -> bool:
+    """Whether binding this host keeps the server on this machine.
+
+    Serving to the loopback interface is local debugging; serving to anything
+    else is publishing, and the two deserve different defaults.
+    """
+    if host in ("", "localhost"):
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False

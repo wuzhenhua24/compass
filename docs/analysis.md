@@ -430,6 +430,23 @@ site/
 
 **跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用 `compass compare` 对同一批 case 做配对检验。
 
+### 实时查看（`compass site serve`）
+
+不 build、不落盘，每个请求都从磁盘现算——**跑到一半的运行也能看**。这也是"为什么不能直接双击 index.html"：浏览器不会从 `file://` 取 JSON。
+
+```bash
+compass site serve results.json                    # 一个结果文件
+compass site serve results/ -p 8000                # 目录下每个 *.json 一个 run（不递归）
+compass site serve results.json --trace-dir traces/
+compass site serve site/                           # 已 build 好的站，静态伺服
+```
+
+页面看到 manifest 里的 `live: true` 就每 3 秒轮询一次；数字变了才重渲染，**并且保留你正在用的筛选条件和已展开的行**——否则一边看一边被刷掉就没法用。build 出来的站是快照，`live: false`，页面不会轮询。
+
+服务端只在结果文件的 mtime 变了才重新解析（轮询要足够便宜），但**轨迹列表每次都重扫**：一条 trace 落盘时结果文件不一定跟着改，"要等别的东西变了才点得开"比多扫一次目录糟糕得多。结果文件正被改写到一半会返回 503 而不是断连——轮询期间撞上这个是常态。
+
+**默认值随绑定地址走**：绑 localhost 是本地调试，grader 细节照常给；绑到别的地址就是发布，默认脱敏并提示"这台机器能被谁访问"，要带细节得显式 `--include-details`。反过来 `--redact` 也能在本地强制脱敏。
+
 ### 配对比较（`compass compare`）：把对比当测量，不当读数
 
 `analyze` 看一次运行，`compare` 回答控制面最常见的问题：**改了一个变量（换模型/改 prompt/加工具）之后，B 比 A 真的好了吗？** 平均分涨 2.4 个点可能是真提升、也可能纯是噪声——均值本身分不出来。

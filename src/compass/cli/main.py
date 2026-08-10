@@ -1728,6 +1728,111 @@ def site_build(
     console.print(f"[dim]Preview with:[/dim] python -m http.server -d {last.site_dir}")
 
 
+@site.command("serve")
+@click.argument("sources", type=click.Path(exists=True), nargs=-1, required=True)
+@click.option("--port", "-p", default=7001, show_default=True, help="Port to listen on")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Address to bind")
+@click.option("--slug", help="Name to serve a single results file under")
+@click.option("--name", help="Display name for the run")
+@click.option("--trace-dir", type=click.Path(exists=True),
+              help="Serve these transcripts alongside the run")
+@click.option("--include-details/--redact", "include_details", default=None,
+              help="Publish grader details (default: on for localhost, off otherwise)")
+def site_serve(
+    sources: tuple[str, ...],
+    port: int,
+    host: str,
+    slug: str | None,
+    name: str | None,
+    trace_dir: str | None,
+    include_details: bool | None,
+):
+    """Serve results as a site, reading from disk on every request.
+
+    SOURCES are results JSON files, directories of them (``*.json``, not
+    recursive), or one already-built site directory.
+
+    Nothing is written. Each response is recomputed from the files, and the
+    page polls, so a run that is still being written updates as it goes —
+    which is also the answer to "why can't I just open index.html": browsers
+    will not fetch JSON from file://.
+
+    \b
+      compass site serve results.json
+      compass site serve results/ -p 8000
+      compass site serve site/                # an already-built site
+
+    Grader details are served by default on localhost, where this is local
+    debugging. Bind anywhere else and they are redacted unless you pass
+    --include-details, because that is publishing.
+    """
+    from compass.report.site import (
+        LiveSource,
+        is_built_site,
+        is_loopback,
+        make_server,
+        make_static_server,
+        slugify,
+    )
+
+    loopback = is_loopback(host)
+    if include_details is None:
+        include_details = loopback
+
+    paths = [Path(s) for s in sources]
+    if len(paths) == 1 and is_built_site(paths[0]):
+        server = make_static_server(paths[0], host=host, port=port)
+        console.print(Panel(f"[bold]Serving built site[/bold]  {paths[0]}"))
+    else:
+        if (slug or trace_dir) and len(paths) > 1:
+            console.print("[red]--slug and --trace-dir take a single source[/red]")
+            sys.exit(1)
+
+        files: list[Path] = []
+        for path in paths:
+            files.extend(sorted(path.glob("*.json")) if path.is_dir() else [path])
+        if not files:
+            console.print("[red]No results files found[/red]")
+            sys.exit(1)
+        if len(files) > 1 and (slug or trace_dir):
+            console.print("[red]--slug and --trace-dir take a single results file[/red]")
+            sys.exit(1)
+
+        live = [
+            LiveSource(
+                slug=slugify(slug or path.stem),
+                path=path,
+                name=name or slug or path.stem,
+                trace_dir=Path(trace_dir) if trace_dir else None,
+            )
+            for path in files
+        ]
+        server = make_server(live, host=host, port=port, include_details=include_details)
+
+        table = Table(title="Serving live")
+        table.add_column("Run", style="bold cyan")
+        table.add_column("Source")
+        for source in live:
+            table.add_row(source.slug, str(source.path))
+        console.print(table)
+
+    shown = "localhost" if host in ("127.0.0.1", "::1", "") else host
+    console.print(f"[green]http://{shown}:{server.server_port}[/green]  (Ctrl-C to stop)")
+    if not loopback:
+        console.print(
+            f"[yellow]Bound to {host} — anyone who can reach this machine can read it.[/yellow]"
+        )
+    if not include_details:
+        console.print("[dim]Grader details redacted — pass --include-details to serve them.[/dim]")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopped.[/dim]")
+    finally:
+        server.server_close()
+
+
 def _format_bytes(size: int) -> str:
     """Human-readable byte count — the site's weight has to be visible."""
     value = float(size)

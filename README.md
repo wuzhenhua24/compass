@@ -139,6 +139,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
 | `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE |
 | `compass site build <results>` | 把结果发布成可分享的静态站；多个仓库可 build 进同一个目录，索引自动累积 |
+| `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
 | `compass import <trace 文件>` | 导入外部轨迹（pi / OTLP·OpenInference / Claude stream-json，自动识别） |
 | `compass eval <image>` | 单张图像快速评估（不写 scenario） |
@@ -240,7 +241,9 @@ compass compare results_a/ results_b/
 ```bash
 # 发布成可分享的静态站（同一目录可被多个仓库反复 build，索引累积）
 compass site build results.json -o site/ --slug agent-qa
-python -m http.server -d site/          # 浏览器不会从 file:// 取数据
+
+# 本地实时查看：不 build，每个请求从磁盘现算，跑到一半的运行也能看
+compass site serve results.json
 ```
 
 ### 5. 查看执行轨迹

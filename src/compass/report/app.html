@@ -22,6 +22,7 @@
   header .timestamp { opacity: .8; font-size: .9rem; }
   header .crumb { opacity: .9; font-size: .9rem; margin-bottom: 8px; }
   header .crumb a { color: white; text-decoration: underline; }
+  header .live { margin-left: 6px; color: #86efac; font-weight: 500; }
 
   .card {
     background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1);
@@ -92,8 +93,12 @@
 "use strict";
 
 const SCHEMA = "compass.run/1";
+const POLL_MS = 3000;
 const view = document.getElementById("view");
-const state = { index: null, docs: {} };
+const state = { index: null, docs: {}, poll: null };
+// Filter values and expanded rows, kept per slug so a live refresh does not
+// undo what the reader is in the middle of doing.
+const ui = {};
 
 // ---------- helpers ----------
 
@@ -357,19 +362,23 @@ function renderRun(slug, entry, doc) {
     </div>`;
 
   const body = document.getElementById("case-body");
-  const open = new Set();
+  const store = ui[slug] || (ui[slug] = { text: "", status: "", category: "", tag: "", open: new Set() });
+  const open = store.open;
+
+  // Restore what the reader had set — this render may be a live refresh.
+  ["text", "status", "category", "tag"].forEach((key) => {
+    const el = document.getElementById("f-" + key);
+    if (el && store[key]) el.value = store[key];
+  });
 
   function matches(c) {
-    const text = (document.getElementById("f-text").value || "").toLowerCase();
-    const status = document.getElementById("f-status").value;
-    const category = (document.getElementById("f-category") || {}).value || "";
-    const tag = (document.getElementById("f-tag") || {}).value || "";
+    const text = (store.text || "").toLowerCase();
     if (text && !((c.case_id + " " + c.scenario).toLowerCase().includes(text))) return false;
-    if (status === "passed" && !c.passed) return false;
-    if (status === "failed" && (c.passed || c.status === "error")) return false;
-    if (status === "error" && c.status !== "error") return false;
-    if (category && c.category !== category) return false;
-    if (tag && !(c.observed_tags || []).concat(c.tags || []).includes(tag)) return false;
+    if (store.status === "passed" && !c.passed) return false;
+    if (store.status === "failed" && (c.passed || c.status === "error")) return false;
+    if (store.status === "error" && c.status !== "error") return false;
+    if (store.category && c.category !== store.category) return false;
+    if (store.tag && !(c.observed_tags || []).concat(c.tags || []).includes(store.tag)) return false;
     return true;
   }
 
@@ -405,9 +414,9 @@ function renderRun(slug, entry, doc) {
     });
   }
 
-  ["f-text", "f-status", "f-category", "f-tag"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener("input", draw);
+  ["text", "status", "category", "tag"].forEach((key) => {
+    const el = document.getElementById("f-" + key);
+    if (el) el.addEventListener("input", () => { store[key] = el.value; draw(); });
   });
   draw();
 }
@@ -421,11 +430,14 @@ async function route() {
   } catch (err) {
     view.innerHTML = `<div class="note warn">Could not read <code>index.json</code>: ${esc(err.message)}.
       A browser will not fetch from <code>file://</code> — serve the directory over HTTP
-      (<code>python -m http.server</code>) or open the published URL.</div>`;
+      (<code>compass site serve</code>) or open the published URL.</div>`;
     return;
   }
 
-  if (!match) return renderIndex();
+  if (!match) {
+    renderIndex();
+    return startPolling(null);
+  }
 
   const slug = decodeURIComponent(match[1]);
   const entry = (state.index.runs || []).find((e) => e.slug === slug);
@@ -438,6 +450,44 @@ async function route() {
     return;
   }
   renderRun(slug, entry, state.docs[slug]);
+  startPolling(slug);
+}
+
+// A served page recomputes from disk on every request, so polling shows a run
+// that is still being written. A built page is a snapshot and never changes.
+function startPolling(slug) {
+  clearInterval(state.poll);
+  if (!state.index || !state.index.live) return;
+  liveBadge();
+  state.poll = setInterval(() => refresh(slug), POLL_MS);
+}
+
+function liveBadge() {
+  const sub = document.getElementById("subtitle");
+  if (sub && !sub.querySelector(".live")) {
+    sub.insertAdjacentHTML("beforeend",
+      ' <span class="live" title="re-reading from disk">● live</span>');
+  }
+}
+
+async function refresh(slug) {
+  try {
+    const index = await loadJSON("index.json");
+    const changed = JSON.stringify(index.runs) !== JSON.stringify((state.index || {}).runs);
+    state.index = index;
+    if (!slug) {
+      if (changed) renderIndex();
+      return liveBadge();
+    }
+    const doc = await loadJSON(`runs/${encodeURIComponent(slug)}/run.json`);
+    if (JSON.stringify(doc) === JSON.stringify(state.docs[slug])) return;
+    state.docs[slug] = doc;
+    renderRun(slug, (index.runs || []).find((e) => e.slug === slug), doc);
+    liveBadge();
+  } catch (err) {
+    // A results file mid-rewrite, or the server going away: keep what is on
+    // screen and try again on the next tick rather than blanking the page.
+  }
 }
 
 window.addEventListener("hashchange", route);
