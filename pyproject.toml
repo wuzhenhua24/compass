@@ -66,6 +66,20 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/compass"]
 
+# Ship the docs inside the wheel so `compass docs` works on an installed
+# Compass, not just in a checkout. Listed one by one rather than mapping the
+# whole docs/ directory: docs/ also holds local working notes (interview.md,
+# todos.md, idea.md) that are gitignored and must never reach a published
+# wheel either.
+[tool.hatch.build.targets.wheel.force-include]
+"README.md" = "compass/docs/README.md"
+"docs/core-design.md" = "compass/docs/core-design.md"
+"docs/graders.md" = "compass/docs/graders.md"
+"docs/scenario-config.md" = "compass/docs/scenario-config.md"
+"docs/analysis.md" = "compass/docs/analysis.md"
+"docs/integrations.md" = "compass/docs/integrations.md"
+"docs/roadmap.md" = "compass/docs/roadmap.md"
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

@@ -142,6 +142,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass import <trace 文件>` | 导入外部轨迹（pi / OTLP·OpenInference / Claude stream-json，自动识别） |
 | `compass eval <image>` | 单张图像快速评估（不写 scenario） |
 | `compass init [output.yaml]` | 生成场景模板 |
+| `compass docs [topic]` | 在终端里打印 Compass 自身文档（raw markdown，可管道）；不带参数列出主题 |
 | `compass list` | 列出已注册的 grader 和 adapter |
 | `compass baseline set/list` | 回归基线管理：把某 case 的产物存为基线 |
 | `compass checkpoint list` | 列出 trace 目录下的运行断点（配合 `compass test --resume`） |
@@ -272,7 +273,7 @@ asyncio.run(main())
 
 ## 核心特性与文档导航
 
-Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架：
+Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架。这些文档也随包分发——`compass docs <topic>` 可直接在终端读，无需回到仓库：
 
 | 主题 | 内容 | 文档 |
 |------|------|------|
