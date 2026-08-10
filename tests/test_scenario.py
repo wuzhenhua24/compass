@@ -364,16 +364,20 @@ class TestExpectedConfig:
         assert graders[0].config["reference_text"] == "A friendly greeting message"
         assert graders[0].config["threshold"] == 0.8
 
-    def test_assertions_to_graders(self):
-        """Assertions should map to assertions grader."""
-        config = ExpectedConfig(
-            assertions={"has_name": True, "word_count_gt": 10}
-        )
-        graders = config.to_graders()
+    def test_unknown_expected_keys_are_rejected(self):
+        """Silently ignoring a typo means checking nothing while reporting a pass."""
+        import pydantic
 
-        assert len(graders) == 1
-        assert graders[0].name == "assertions"
-        assert graders[0].config["checks"] == {"has_name": True, "word_count_gt": 10}
+        with pytest.raises(pydantic.ValidationError):
+            ExpectedConfig.model_validate({"contian": ["typo"]})
+
+    def test_the_removed_assertions_field_is_gone(self):
+        """It expanded to an unregistered grader, so it only ever failed cases."""
+        import pydantic
+
+        assert "assertions" not in ExpectedConfig.model_fields
+        with pytest.raises(pydantic.ValidationError):
+            ExpectedConfig.model_validate({"assertions": {"has_name": True}})
 
     def test_combined_expectations(self):
         """Multiple expectations should generate multiple graders."""

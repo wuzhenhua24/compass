@@ -100,7 +100,7 @@ expected:
   similarity_threshold: 0.7
 ```
 
-> ⚠️ `assertions:` 字段目前**不可用**——它会展开成一个未注册的 `assertions` grader，导致 case 判负。需要自定义断言时直接写 grader，或用 `external_checker`。
+> `expected:` 下的**未知键会直接报错**，不会被静默忽略——拼错 `contian:` 却报告「通过」是最糟的一类评测 bug。需要上面覆盖不了的断言时，写自定义 grader 或用 `external_checker`。
 
 ## 内置 grader 速查（41 个）
 

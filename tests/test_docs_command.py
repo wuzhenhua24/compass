@@ -281,20 +281,27 @@ class TestCheatsheetAccuracy:
         for mode in ShortCircuitMode:
             assert mode.value in text
 
-    def test_the_broken_expected_field_is_flagged_not_advertised(self, text):
-        """`assertions:` expands to an unregistered grader — say so, don't hide it."""
-        import compass.graders  # noqa: F401
-        from compass.graders.registry import get_grader as lookup
+    def test_it_does_not_document_the_removed_assertions_field(self, text):
+        """`expected.assertions` was deleted; the cheatsheet must not resurrect it."""
+        from compass.core.scenario import ExpectedConfig
 
-        try:
-            lookup("assertions")
-        except Exception:  # noqa: BLE001
-            assert "不可用" in text, (
-                "expected.assertions is still broken but the cheatsheet no "
-                "longer warns about it"
-            )
-        else:
-            pytest.fail(
-                "an `assertions` grader now exists — drop the warning from the "
-                "cheatsheet and document the field properly"
-            )
+        assert "assertions" not in ExpectedConfig.model_fields
+        assert "`assertions:`" not in text
+
+    def test_it_documents_only_real_expected_fields(self, text):
+        """Every `expected:` key the cheatsheet shows must still exist."""
+        from compass.core.scenario import ExpectedConfig
+
+        block = text.split("### `expected:` 简化写法", 1)[1].split("```", 2)[1]
+        shown = {
+            line.split(":")[0].strip()
+            for line in block.splitlines()
+            # Indented lines are the keys; `expected:` itself sits at column 0
+            if line.startswith("  ") and ":" in line and not line.strip().startswith("#")
+        }
+        assert shown, "the expected: block could not be parsed"
+        for key in shown:
+            for name in key.split(" / "):  # "min_length / max_length"
+                assert name in ExpectedConfig.model_fields, (
+                    f"cheatsheet documents expected.{name}, which does not exist"
+                )

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from compass.core.sweep import SweepConfig
 
@@ -70,7 +70,13 @@ class ExpectedConfig(BaseModel):
               name: { type: string }
           similar_to: "A friendly greeting"
           similarity_threshold: 0.8
+
+    Unknown keys are rejected rather than ignored. A typo'd ``contian:`` that
+    silently expands to no grader at all is the worst kind of eval bug: the
+    case reports a clean pass while checking nothing.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # Text content checks (maps to style_convention grader)
     contains: list[str] | None = None
@@ -95,9 +101,6 @@ class ExpectedConfig(BaseModel):
     max_length: int | None = None
     min_words: int | None = None
     max_words: int | None = None
-
-    # Custom assertions via simple key-value (maps to assertions grader)
-    assertions: dict[str, Any] | None = None
 
     def is_empty(self) -> bool:
         """Check if no expectations are defined."""
@@ -187,16 +190,6 @@ class ExpectedConfig(BaseModel):
                         "reference_text": self.similar_to,
                         "threshold": self.similarity_threshold,
                     },
-                )
-            )
-
-        # Custom assertions
-        if self.assertions is not None:
-            graders.append(
-                GraderConfig(
-                    type=GraderType.CODE,
-                    name="assertions",
-                    config={"checks": self.assertions},
                 )
             )
 
