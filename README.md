@@ -159,7 +159,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 **A. 试用 / 开发 Compass 本身**——在 checkout 里直接跑：
 
 ```bash
-git clone <内部仓库地址>/compass.git
+git clone https://github.com/wuzhenhua24/compass.git
 cd compass
 uv sync
 uv run compass --help

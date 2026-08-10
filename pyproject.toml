@@ -53,8 +53,11 @@ all = [
 [project.scripts]
 compass = "compass.cli.main:cli"
 
-# [project.urls] intentionally absent while Compass is unpublished — placeholder
-# links would ship into the package metadata. Add real ones before releasing.
+[project.urls]
+Homepage = "https://github.com/wuzhenhua24/compass"
+Documentation = "https://github.com/wuzhenhua24/compass#readme"
+Repository = "https://github.com/wuzhenhua24/compass"
+Issues = "https://github.com/wuzhenhua24/compass/issues"
 
 [build-system]
 requires = ["hatchling"]
