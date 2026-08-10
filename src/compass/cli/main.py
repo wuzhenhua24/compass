@@ -21,6 +21,7 @@ from compass.report.console import ConsoleReporter
 
 if TYPE_CHECKING:
     from compass.core.regrade import GradeReport
+    from compass.report.leaderboard import Leaderboard
 
 
 console = Console()
@@ -48,6 +49,14 @@ def cli():
 @click.option("--trace-dir", type=click.Path(), help="Directory to save execution traces")
 @click.option("--trace-format", type=click.Choice(["json", "jsonl"]), default="json", help="Trace file format")
 @click.option("--resume", is_flag=True, help="Resume from last checkpoint (requires --trace-dir)")
+@click.option(
+    "--model", "-m", "models", multiple=True,
+    help="Run the scenario once per model and rank the results (repeatable)",
+)
+@click.option(
+    "--model-key", default="model", show_default=True,
+    help="Which agent.config key --model overrides",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def test(
     scenario: str,
@@ -61,11 +70,21 @@ def test(
     trace_dir: Optional[str],
     trace_format: str,
     resume: bool,
+    models: tuple[str, ...],
+    model_key: str,
     verbose: bool,
 ):
     """Run test scenarios.
 
     SCENARIO can be a YAML file or directory containing scenario files.
+
+    With one or more -m/--model the scenario runs once per model and the
+    results are ranked. The table is a reading, not a measurement, so it
+    reports mean ± stderr and tests whether the top two rows actually differ:
+
+    \b
+      compass test qa.yaml -m gpt-5 -m claude-sonnet-5
+      compass test qa.yaml -m a -m b --trace-dir ./traces   # traces/<model>/
     """
     if resume and not trace_dir:
         console.print("[red]--resume requires --trace-dir[/red]")
@@ -87,19 +106,36 @@ def test(
         console.print("[red]No scenarios found[/red]")
         sys.exit(1)
 
-    console.print(Panel(f"[bold]Compass Test Runner[/bold]\n{len(scenarios)} scenario(s) to run"))
+    from compass.report.leaderboard import build_leaderboard, slugify
+
+    # Each (scenario, model) pair is one run. Without -m there is exactly one
+    # variant per scenario and nothing changes.
+    variants = _model_variants(scenarios, list(models), model_key)
+
+    console.print(Panel(
+        f"[bold]Compass Test Runner[/bold]\n{len(scenarios)} scenario(s) to run"
+        + (f" × {len(models)} model(s)" if models else "")
+    ))
 
     # Run tests
     compass = Compass()
     all_results = []
+    ranked: list[tuple[str, object]] = []
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        for scn in scenarios:
+        for label, scn in variants:
             task = progress.add_task(f"Running: {scn.name}", total=None)
+
+            # Per-model trace subdirectory: without it the models would
+            # overwrite each other's traces, and each one's agent config would
+            # invalidate the previous one's checkpoint.
+            variant_trace_dir = trace_dir
+            if trace_dir and models:
+                variant_trace_dir = str(Path(trace_dir) / slugify(label))
 
             try:
                 result = asyncio.run(
@@ -110,12 +146,13 @@ def test(
                         categories=list(category) if category else None,
                         parallel=parallel,
                         max_workers=workers,
-                        trace_dir=trace_dir,
+                        trace_dir=variant_trace_dir,
                         trace_format=trace_format,
                         resume=resume,
                     )
                 )
                 all_results.append(result)
+                ranked.append((label, result))
 
                 # Print summary. pass_rate excludes harness errors, so a run
                 # with errors is not "all green" even at pass_rate == 1.0.
@@ -137,6 +174,11 @@ def test(
     # Print summary table
     _print_summary_table(all_results)
 
+    board = None
+    if models and len(ranked) > 1:
+        board = build_leaderboard(ranked)
+        _print_leaderboard(board)
+
     # Generate report
     if report and all_results:
         import json
@@ -157,9 +199,27 @@ def test(
                     "error_cases": sum(r.error_cases for r in all_results),
                 },
             }
+            if board is not None:
+                report_data["leaderboard"] = board.to_dict()
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, ensure_ascii=False, indent=2)
             console.print(f"\n[green]Report generated:[/green] {output_path}")
+
+            # One file per model as well: `compass compare` pairs by case_id,
+            # so it needs the runs separated to measure any two of them.
+            if board is not None:
+                base = Path(output_path)
+                for label, result in ranked:
+                    per_model = base.with_name(
+                        f"{base.stem}.{slugify(label)}{base.suffix}"
+                    )
+                    with open(per_model, "w", encoding="utf-8") as f:
+                        json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
+                console.print(
+                    f"[green]Per-model results:[/green] "
+                    f"{base.stem}.<model>{base.suffix} — pair any two with "
+                    f"[bold]compass compare[/bold]"
+                )
 
     # Show trace directory info
     if trace_dir and all_results:
@@ -169,6 +229,85 @@ def test(
     total_passed = sum(r.passed_cases for r in all_results)
     total_cases = sum(r.total_cases for r in all_results)
     sys.exit(0 if total_passed == total_cases else 1)
+
+
+def _model_variants(
+    scenarios: list, models: list[str], model_key: str
+) -> list[tuple[str, Scenario]]:
+    """Expand scenarios into one labelled run per model.
+
+    Without ``-m`` this is the identity: one variant per scenario, unchanged.
+    With models, each variant is a deep copy whose ``agent.config[model_key]``
+    is overridden — the agent config is the axis, so every other part of the
+    scenario (cases, graders, thresholds) stays identical and the runs remain
+    comparable.
+    """
+    if not models:
+        return [(scn.name, scn) for scn in scenarios]
+
+    variants: list[tuple[str, Scenario]] = []
+    for scn in scenarios:
+        for model in models:
+            variant = scn.model_copy(deep=True)
+            variant.agent.config[model_key] = model
+            # The run really is a different configuration, so say so in the
+            # name that reports and summaries display.
+            variant.name = f"{scn.name} [{model}]"
+            label = model if len(scenarios) == 1 else f"{scn.name} / {model}"
+            variants.append((label, variant))
+    return variants
+
+
+def _print_leaderboard(board: "Leaderboard") -> None:
+    """Render the ranking, then immediately qualify it."""
+    show_errors = any(e.error_cases for e in board.entries)
+    show_reliability = any(e.reliability is not None for e in board.entries)
+
+    table = Table(title="Leaderboard")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Model", style="bold")
+    table.add_column("Score (mean ± stderr)", justify="right")
+    table.add_column("Pass Rate", justify="right")
+    if show_reliability:
+        k = next(e.reliability_k for e in board.entries if e.reliability_k)
+        table.add_column(f"pass^{k}", justify="right")
+    table.add_column("Cases", justify="right")
+    if show_errors:
+        table.add_column("Errors", justify="right", style="yellow")
+
+    for entry in board.entries:
+        rate = entry.pass_rate
+        color = "green" if rate >= 0.7 else "yellow" if rate >= 0.5 else "red"
+        row = [
+            str(entry.rank),
+            entry.label,
+            entry.score_display,
+            f"[{color}]{rate:.1%}[/{color}]",
+        ]
+        if show_reliability:
+            row.append(
+                "-" if entry.reliability is None else f"{entry.reliability:.3f}"
+            )
+        row.append(str(entry.evaluated_cases))
+        if show_errors:
+            row.append(str(entry.error_cases))
+        table.add_row(*row)
+
+    console.print()
+    console.print(table)
+
+    # A ranked table invites reading a winner out of noise; say plainly
+    # whether the top gap survives a paired test.
+    style = "green" if (board.top_gap and board.top_gap.significant) else "yellow"
+    console.print(f"[{style}]{board.verdict}[/{style}]")
+
+    if board.unpaired:
+        console.print(
+            f"[yellow]⚠ {len(board.unpaired)} case(s) were not run by both of the "
+            f"top two, and are excluded from that test:[/yellow] "
+            + ", ".join(board.unpaired[:10])
+            + (" …" if len(board.unpaired) > 10 else "")
+        )
 
 
 @cli.command()
@@ -234,9 +373,14 @@ def eval(image: str, prompt: str, graders: str, verbose: bool):
         console.print(f"\n[bold]Overall:[/bold] {'[green]PASS[/green]' if all_passed else '[red]FAIL[/red]'} (avg score: {avg_score:.3f})")
 
 
-@cli.command()
-def list():
-    """List available graders and adapters."""
+@cli.command("list")
+def list_registered():
+    """List available graders and adapters.
+
+    Named ``list_registered`` rather than ``list``: a module-level function
+    called ``list`` shadows the builtin for every other command in this file,
+    which silently turned ``list(...)`` calls into invocations of this command.
+    """
     from compass.graders import list_graders, GraderType
 
     console.print("\n[bold]Available Graders:[/bold]")
@@ -510,17 +654,15 @@ def analyze(results_path: str, output: Optional[str]):
     RESULTS_PATH is a JSON file or directory containing evaluation result files.
     Each result file should contain a list of task evaluation results.
     """
-    import builtins
     import json
 
     results_file = Path(results_path)
 
     # Load results
-    # Note: builtins.list needed because the `list` CLI command shadows the builtin
     if results_file.is_file():
         json_files = [results_file]
     else:
-        json_files = builtins.list(results_file.glob("**/*.json"))
+        json_files = list(results_file.glob("**/*.json"))
 
     if not json_files:
         console.print("[red]No result files found[/red]")
@@ -529,7 +671,7 @@ def analyze(results_path: str, output: Optional[str]):
     # Parse into TaskEvalResult objects
     from compass.graders.base import GradeResult, GraderScope, GraderType
 
-    task_results: builtins.list[TaskEvalResult] = []
+    task_results: list[TaskEvalResult] = []
 
     for jf in json_files:
         try:

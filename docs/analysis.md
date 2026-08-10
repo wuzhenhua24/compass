@@ -374,6 +374,58 @@ Verdict: pass rate within noise band, but significant score improvement
 
 细节：只在一侧出现的 case 会**明确列出并排除出统计**（覆盖范围变了要可见，不静默丢弃）；多 trial 的 case 用 `passed_trials/total_trials` 作为该 case 的通过分数，比布尔更细。Python 侧 `from compass.report import compare_paths, compare_results, paired_stats` 可编程使用。
 
+## 多模型排行榜（`compass test -m`）
+
+一个 scenario 跑多个模型并排名：
+
+```bash
+compass test qa.yaml -m gpt-5 -m claude-sonnet-5 -m tiny-model
+compass test qa.yaml -m a -m b --model-key endpoint     # 覆盖 agent.config 的别的键
+compass test qa.yaml -m a -m b --trace-dir ./traces     # 轨迹落在 traces/<model>/
+```
+
+```
+                         Leaderboard
+┏━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┓
+┃ # ┃ Model      ┃ Score (mean ± stderr) ┃ Pass Rate ┃ Cases ┃
+┡━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━┩
+│ 1 │ big-model  │          0.925 ±0.032 │    100.0% │     4 │
+│ 2 │ mid-model  │          0.875 ±0.032 │    100.0% │     4 │
+│ 3 │ tiny-model │          0.175 ±0.085 │      0.0% │     4 │
+└───┴────────────┴───────────────────────┴───────────┴───────┘
+big-model beats mid-model by +0.050 (95% CI [+0.050, +0.050])
+```
+
+### 排行榜是读数，不是测量
+
+排名表天生诱导人从噪声里读出一个赢家——20 个 case、两个模型差 2 个点，通常根本分不出来。所以每一行都带**标准误**，并且**最后一行明说 top 2 的差距是否经得起配对检验**：
+
+```
+big-model leads mid-model by +0.020, but the 95% CI [-0.041, +0.081] spans 0
+— the ranking is within noise (detectable at this n: ~0.089)
+```
+
+这也是把它建在 `compass compare` **之上**而不是旁边的原因：**表格给出顺序，配对统计告诉你这个顺序有没有意义。**
+
+### 其它行为
+
+- **模型是 `agent.config` 上的一个轴**：每个变体是 scenario 的深拷贝，只改 `agent.config[--model-key]`（默认 `model`），case / grader / 阈值完全相同，所以各次运行可比。
+- **每个模型独立的 trace 子目录** `traces/<model>/`：否则模型之间会互相覆盖轨迹，而且 agent config 进了 scenario 指纹，后一个模型会让前一个的 checkpoint 失效。
+- **并列同名次**：分数显示相同的行共享名次（standard competition ranking）。
+- **多试验时多一列 `pass^k`**——仅当所有 case 报告了同一个 k，否则省略（把 pass^3 和 pass^5 平均是个没有意义的数）。
+- **harness 错误照常移出分母**（见上文"评测卫生"）。
+- **覆盖差异会列出**：只有 top 2 之一跑过的 case 不参与配对检验，并显式报告。
+
+### 与 compare 串起来
+
+`-o` 除了写合并报告（含 `leaderboard` 字段），还会为**每个模型**单写一份结果文件——因为 `compass compare` 按 case_id 配对，需要把各次运行分开：
+
+```bash
+compass test qa.yaml -m a -m b -m c --report json -o out.json
+# → out.json  out.a.json  out.b.json  out.c.json
+compass compare out.b.json out.a.json      # 任意两个做严格配对检验
+```
+
 ## Best-of-k 评分展示
 
 受 Stripe Agent Benchmark **每个任务跑 3 次，取最高分**的做法启发，Compass 在多次 Trial 场景下同时展示 **average score** 和 **best-of-k score**，帮助区分"模型能力上限"与"稳定输出水平"。

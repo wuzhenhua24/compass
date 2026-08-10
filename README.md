@@ -18,6 +18,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **观察标签**：grader 产出中性标签（通过的样本也打，presence-only），报告聚合成占比 + 每标签通过率——「短回答占 67%、其中只有 25% 通过」这类行为画像，失败统计给不出；LLM 判官支持受控词表（编译进 schema enum，跨 run 可聚合）
 - **子进程 Checker**：`external_checker` 让**任何可执行文件**成为 grader（shell / Go 二进制 / `npm test`），契约是进程边界（env 进、stdout JSON 出、exit code 判定），checker 无需 import Compass——扩展面从「会写 Python」扩到「会写脚本」
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
+- **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
 - **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
 
@@ -133,7 +134,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 
 | 命令 | 用途 |
 |------|------|
-| `compass test <scenario.yaml \| 目录>` | 运行测试场景（`--parallel` / `--trace-dir` / `--resume` / `--stage` / `--category`） |
+| `compass test <scenario.yaml \| 目录>` | 运行测试场景（`--parallel` / `--trace-dir` / `--resume` / `--stage` / `--category`）；`-m` 可一次跑多个模型并出排行榜 |
 | `compass grade <traces> -s <scenario.yaml>` | **离线评分**：给已落盘的轨迹打分，不重跑 Agent（`-n` grade set / `--regrade`） |
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
 | `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE |
