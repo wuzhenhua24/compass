@@ -17,6 +17,7 @@ from compass.core.artifacts import (
     ImageArtifact,
     deserialize_artifact,
 )
+from compass.core.fileio import atomic_write_json, atomic_write_text
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -1038,10 +1039,7 @@ class Transcript:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(self.to_jsonl())
-            f.write("\n")  # Trailing newline
-
+        atomic_write_text(path, self.to_jsonl() + "\n")
         return path
 
     @classmethod
@@ -1163,11 +1161,9 @@ class Transcript:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(path, "w", encoding="utf-8") as f:
-            # default=str: outcome/output_data may carry non-JSON types
-            # (datetime, Path, ...) — degrade to strings rather than crash.
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False, default=str)
-
+        # default=str: outcome/output_data may carry non-JSON types
+        # (datetime, Path, ...) — degrade to strings rather than crash.
+        atomic_write_json(path, self.to_dict())
         return path
 
     @classmethod

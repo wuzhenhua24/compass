@@ -21,6 +21,7 @@ from compass.core.artifacts import (
     ImageArtifact,
     TextArtifact,
 )
+from compass.core.fileio import atomic_path, atomic_write_json, atomic_write_text
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -105,13 +106,13 @@ class ArtifactStore:
                     safe_name = _safe_filename(Path(gf.path).name) if gf.path else f"file_{j}"
                     fname = f"artifact_{i}_code_{j}_{safe_name}"
                     path = artifact_dir / fname
-                    path.write_text(gf.content, encoding="utf-8")
+                    atomic_write_text(path, gf.content)
                     saved.append(str(path.relative_to(self.base_dir)))
 
             elif isinstance(artifact, TextArtifact) and artifact.content:
                 fname = f"artifact_{i}_text.txt"
                 path = artifact_dir / fname
-                path.write_text(artifact.content, encoding="utf-8")
+                atomic_write_text(path, artifact.content)
                 saved.append(str(path.relative_to(self.base_dir)))
 
         # Write manifest
@@ -123,19 +124,15 @@ class ArtifactStore:
                 "artifacts": saved,
                 "image_hash": outcome.image_hash,
             }
-            manifest_path = artifact_dir / "manifest.json"
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            atomic_write_json(artifact_dir / "manifest.json", manifest)
 
         return saved
 
     @staticmethod
     def save_image(image: Image.Image, path: Path) -> None:
-        """Save a PIL Image to *path* as PNG."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(str(path), format="PNG")
+        """Save a PIL Image to *path* as PNG, atomically."""
+        with atomic_path(path, suffix=".png") as tmp:
+            image.save(str(tmp), format="PNG")
 
     # ------------------------------------------------------------------
     # Grade workspace

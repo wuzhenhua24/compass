@@ -15,6 +15,12 @@ Storage layout::
 Two granularities on purpose: a finished case resumes from its CaseResult,
 while a multi-trial case interrupted midway resumes from the attempts it
 already made — the alternative is paying for those samples twice.
+
+Every file here is written atomically (see :mod:`compass.core.fileio`) and read
+defensively: the index is rewritten after *every* case and trial, so a
+half-written one is the single failure that would cost a whole run's recorded
+progress. A damaged index degrades to "start fresh"; a damaged individual
+record costs that record alone.
 """
 
 import hashlib
@@ -25,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from compass.core.fileio import atomic_write_json
 from compass.core.result import CaseResult, EvaluatorResult, TestStatus
 from compass.core.trial import TrialResult
 
@@ -287,10 +294,26 @@ class CheckpointStore:
 
     @classmethod
     def load(cls, checkpoint_dir: Path) -> "CheckpointStore | None":
-        """Load an existing checkpoint.  Returns *None* if none exists."""
+        """Load an existing checkpoint, or None if there is nothing usable.
+
+        An unreadable index returns None rather than raising, so a resume
+        degrades to "start fresh" instead of taking the whole run down. Writes
+        are atomic now, but a checkpoint written by an older version — or
+        damaged by something outside Compass — must still be survivable.
+        """
         if not (checkpoint_dir / _CHECKPOINT_FILE).exists():
             return None
-        return cls(checkpoint_dir)
+        store = cls(checkpoint_dir)
+        try:
+            store.get_checkpoint()
+        except (OSError, ValueError, TypeError) as e:
+            logger.warning(
+                "Ignoring unreadable checkpoint at %s (%s) — starting fresh",
+                checkpoint_dir / _CHECKPOINT_FILE,
+                e,
+            )
+            return None
+        return store
 
     def get_checkpoint(self) -> RunCheckpoint:
         """Read the current checkpoint index."""
@@ -298,6 +321,28 @@ class CheckpointStore:
             (self._dir / _CHECKPOINT_FILE).read_text(encoding="utf-8")
         )
         return RunCheckpoint(**data)
+
+    def _read_record(self, path: Path, kind: str, case_id: str) -> dict[str, Any] | None:
+        """Read one checkpoint record, or None if it is missing or damaged.
+
+        One bad file costs that record, not the entire resume: the rest of the
+        run's recorded progress is still worth keeping.
+        """
+        if not path.exists():
+            logger.warning(
+                "Checkpoint references missing %s file %s for case %s",
+                kind, path, case_id,
+            )
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(
+                "Discarding unreadable %s record %s for case %s (%s) — it will be re-run",
+                kind, path, case_id, e,
+            )
+            return None
+        return data if isinstance(data, dict) else None
 
     def validate_scenario(self, fingerprint: str) -> bool:
         """Return True if the stored fingerprint matches *fingerprint*."""
@@ -308,18 +353,10 @@ class CheckpointStore:
     def save_case_result(self, case_id: str, result: CaseResult) -> None:
         """Persist a single completed case (called after each case finishes)."""
         filename = f"{_safe_filename(case_id)}.json"
-        case_file = self._cases_dir / filename
-        case_file.write_text(
-            json.dumps(
-                _case_result_to_dict(result),
-                ensure_ascii=False,
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
+        # Payload first, index second: an index entry that points at a
+        # half-written file would be worse than no entry at all.
+        atomic_write_json(self._cases_dir / filename, _case_result_to_dict(result))
 
-        # Update the index atomically
         cp = self.get_checkpoint()
         cp.completed_cases[case_id] = {"file": filename}
         cp.updated_at = datetime.now().isoformat()
@@ -331,17 +368,8 @@ class CheckpointStore:
         Trial-level granularity is what makes an interrupted multi-trial run
         resumable *without* throwing away the attempts it already paid for.
         """
-        self._trials_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{_safe_filename(case_id)}__t{trial.trial_number}.json"
-        (self._trials_dir / filename).write_text(
-            json.dumps(
-                _trial_result_to_dict(trial),
-                ensure_ascii=False,
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._trials_dir / filename, _trial_result_to_dict(trial))
 
         cp = self.get_checkpoint()
         cp.completed_trials.setdefault(case_id, {})[str(trial.trial_number)] = filename
@@ -356,15 +384,11 @@ class CheckpointStore:
         for case_id, entries in cp.completed_trials.items():
             loaded: list[TrialResult] = []
             for filename in entries.values():
-                trial_file = self._trials_dir / filename
-                if not trial_file.exists():
-                    logger.warning(
-                        "Checkpoint references missing trial file %s for case %s",
-                        trial_file,
-                        case_id,
-                    )
+                data = self._read_record(
+                    self._trials_dir / filename, "trial", case_id
+                )
+                if data is None:
                     continue
-                data = json.loads(trial_file.read_text(encoding="utf-8"))
                 loaded.append(_dict_to_trial_result(data))
             if loaded:
                 trials[case_id] = sorted(loaded, key=lambda t: t.trial_number)
@@ -377,16 +401,18 @@ class CheckpointStore:
         results: dict[str, CaseResult] = {}
 
         for case_id, meta in cp.completed_cases.items():
-            case_file = self._cases_dir / meta["file"]
-            if not case_file.exists():
-                logger.warning(
-                    "Checkpoint references missing file %s for case %s",
-                    case_file,
-                    case_id,
-                )
+            data = self._read_record(
+                self._cases_dir / meta["file"], "case", case_id
+            )
+            if data is None:
                 continue
-            data = json.loads(case_file.read_text(encoding="utf-8"))
-            results[case_id] = _dict_to_case_result(data)
+            try:
+                results[case_id] = _dict_to_case_result(data)
+            except (KeyError, ValueError) as e:
+                logger.warning(
+                    "Discarding malformed case record for %s (%s) — it will be re-run",
+                    case_id, e,
+                )
 
         return results
 
@@ -430,11 +456,12 @@ class CheckpointStore:
     # ── Internal ──
 
     def _write_index(self, cp: RunCheckpoint) -> None:
-        index_file = self._dir / _CHECKPOINT_FILE
-        index_file.write_text(
-            json.dumps(cp.__dict__, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        """Rewrite the run index.
+
+        Atomic because this happens after *every* case and trial: a truncated
+        index is the one failure that costs the whole run's recorded progress.
+        """
+        atomic_write_json(self._dir / _CHECKPOINT_FILE, cp.__dict__, default=None)
 
 
 # ── Discovery ──

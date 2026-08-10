@@ -700,21 +700,16 @@ class Compass:
             case_id: Case identifier for filename.
             trace_format: Format to save ("json" or "jsonl").
         """
-        import json
-
         # Sanitize case_id for filename
         safe_case_id = case_id.replace("/", "_").replace("\\", "_")
 
-        if trace_format == "jsonl":
-            trace_file = trace_dir / f"{safe_case_id}.jsonl"
-            transcript.save_jsonl(trace_file)
-        else:
-            # Default to JSON format
-            trace_file = trace_dir / f"{safe_case_id}.json"
-            with open(trace_file, "w", encoding="utf-8") as f:
-                json.dump(transcript.to_dict(), f, ensure_ascii=False, indent=2, default=str)
-
-        # Save artifact binaries
+        # Artifacts first, trace last. Two reasons, both load-bearing:
+        #   1. save_trial_artifacts() back-fills ImageArtifact.image_path as it
+        #      writes each file. Serializing the trace before that recorded
+        #      image_path: null for every image, so `compass grade` could not
+        #      rehydrate them and image graders saw an empty outcome.
+        #   2. The trace file is the completion marker (smevals' "run.yaml is
+        #      written last"): if it exists, the artifacts it points at exist.
         if transcript.outcome and (
             transcript.outcome.image is not None
             or transcript.outcome.artifacts
@@ -725,6 +720,11 @@ class Compass:
             saved = store.save_trial_artifacts(transcript, case_id)
             if saved:
                 logger.info("Saved %d artifact(s) for case %s", len(saved), case_id)
+
+        if trace_format == "jsonl":
+            transcript.save_jsonl(trace_dir / f"{safe_case_id}.jsonl")
+        else:
+            transcript.save(trace_dir / f"{safe_case_id}.json")
 
     @staticmethod
     def _load_reference_images(paths: dict[str, str]) -> dict:

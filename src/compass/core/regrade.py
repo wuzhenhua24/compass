@@ -41,6 +41,7 @@ from typing import Any
 
 from compass.core.artifact_store import _safe_filename
 from compass.core.artifacts import ImageArtifact
+from compass.core.fileio import atomic_write_json
 from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
 from compass.core.scenario import Scenario, TestCase
 from compass.core.transcript import Transcript
@@ -271,39 +272,25 @@ class GradeStore:
         return record if isinstance(record, dict) else None
 
     def write_record(self, trace_stem: str, record: dict[str, Any]) -> Path:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self.record_path(trace_stem)
-        path.write_text(
-            json.dumps(record, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        return path
+        return atomic_write_json(self.record_path(trace_stem), record)
 
     def write_spec(self, scenario: Scenario, specs: dict[str, dict[str, Any]]) -> Path:
         """Snapshot the grader spec that produced this round of grades."""
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self.dir / SPEC_FILENAME
-        path.write_text(
-            json.dumps(
-                {
-                    "grade_set": self.grade_set,
-                    "scenario_name": scenario.name,
-                    "written_at": datetime.now(timezone.utc).isoformat(),
-                    "cases": {
-                        case_id: {
-                            "fingerprint": spec_fingerprint(spec),
-                            "spec": spec,
-                        }
-                        for case_id, spec in sorted(specs.items())
-                    },
+        return atomic_write_json(
+            self.dir / SPEC_FILENAME,
+            {
+                "grade_set": self.grade_set,
+                "scenario_name": scenario.name,
+                "written_at": datetime.now(timezone.utc).isoformat(),
+                "cases": {
+                    case_id: {
+                        "fingerprint": spec_fingerprint(spec),
+                        "spec": spec,
+                    }
+                    for case_id, spec in sorted(specs.items())
                 },
-                indent=2,
-                ensure_ascii=False,
-                default=str,
-            ),
-            encoding="utf-8",
+            },
         )
-        return path
 
     def clear(self) -> None:
         """Discard every grade in this set, so nothing stale survives a --regrade."""
