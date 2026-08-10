@@ -1,10 +1,23 @@
-"""Report data layer: one run in, one plain document out.
+"""The report data layer, and the static site built on top of it.
 
-``collect_run`` turns a run's ``EvalResult`` objects into a JSON-serializable
-document. The HTML report renders that document and nothing else — no viewer
-reaches into result objects. Keeping the extraction in one place is what lets a
-page rendered now, a page written to disk, and a page aggregated across
-repositories all show the same numbers.
+``collect_run`` turns a run into a plain, versioned JSON document. Everything
+that shows a run to a person renders that document and nothing else — the HTML
+report, and the static site this module builds.
+
+The site is deliberately dumb::
+
+    site/
+      index.html              the viewer (one self-contained file)
+      index.json              the manifest: one entry per run, merged in place
+      runs/<slug>/run.json    the document for that run
+      runs/<slug>/traces/…    its transcripts and artifacts, if published
+
+``build_site`` writes exactly one slug and leaves every other entry in
+``index.json`` untouched. That single property is what makes cross-repository
+aggregation work without a server: several projects can build into the same
+output directory — a shared ``gh-pages`` branch, one bucket prefix — and the
+manifest accumulates. There is no central node to run, because the merge point
+is a file that can be rewritten idempotently.
 
 Conventions the document commits to:
 
@@ -17,6 +30,9 @@ Conventions the document commits to:
 - A grader that was skipped, or that ran without producing a number, is left
   out of averages rather than counted as zero. "Not measured" is not
   "measured as zero".
+- Every aggregate is derived from the case rows, at every level. Stored
+  counters are never trusted, so a hand-written results file and a
+  Compass-written one summarize the same way.
 
 Case rows are a near-copy of ``EvalResult.to_dict()``'s case records, so
 anything that reads a Compass results file (``analyzer.iter_case_dicts`` and
@@ -26,21 +42,44 @@ verbatim, and a published document pays for every byte twice), and each row
 gains its scenario name plus the two scope axes.
 """
 
+import json
+import re
+import shutil
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 from compass.core.result import EvalResult, TestStatus
+from compass.report.analyzer import iter_case_dicts
 
 #: Bumped when the document shape changes incompatibly. A viewer reads this
 #: before anything else, so an old page can refuse a new document instead of
 #: rendering it wrong.
 SCHEMA = "compass.run/1"
 
+#: How many previous builds of a slug the manifest remembers. Only the summary
+#: numbers are kept — enough for a trend line, and small enough that a site
+#: aggregating many runs stays a manifest rather than an archive.
+DEFAULT_HISTORY = 20
+
 _OUTCOME_SCOPES = ("outcome", "both")
 _TRANSCRIPT_SCOPES = ("transcript", "both")
 _ERROR = TestStatus.ERROR.value
+
+#: Summary fields carried from an entry into the history trail.
+_SNAPSHOT_FIELDS = (
+    "generated",
+    "pass_rate",
+    "average_score",
+    "best_of_k_score",
+    "total_cases",
+    "evaluated_cases",
+    "passed_cases",
+)
 
 
 def now_iso() -> str:
@@ -120,52 +159,116 @@ def category_rows(cases: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for category in sorted(buckets):
         group = buckets[category]
-        evaluated = [c for c in group if c.get("status") != _ERROR]
-        passed = sum(1 for c in evaluated if c.get("passed"))
+        stats = _stats(group)
         rows.append(
             {
                 "category": category,
-                "total": len(group),
-                "errors": len(group) - len(evaluated),
-                "evaluated": len(evaluated),
-                "passed": passed,
-                "failed": len(evaluated) - passed,
-                "pass_rate": _rate(passed, len(evaluated)),
-                "average_score": _mean(
-                    [float(c.get("overall_score") or 0.0) for c in evaluated]
-                ),
+                "total": stats["total_cases"],
+                "errors": stats["error_cases"],
+                "evaluated": stats["evaluated_cases"],
+                "passed": stats["passed_cases"],
+                "failed": stats["failed_cases"],
+                "pass_rate": stats["pass_rate"],
+                "average_score": stats["average_score"],
             }
         )
     return rows
 
 
-def _scenario_block(result: EvalResult) -> dict[str, Any]:
-    """One scenario's summary and its case rows."""
-    payload = result.to_dict()
+def _stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts and means over case rows.
 
-    cases = []
-    for record in payload["case_results"]:
-        row = dict(record)
-        row.pop("grade_results", None)  # verbatim alias of evaluator_results
-        row["scenario"] = result.scenario_name
-        row.update(scope_scores(row.get("evaluator_results") or []))
-        cases.append(row)
+    Every level of the document aggregates here — run, scenario, category — so
+    the three can never tell different stories about the same cases.
+    """
+    evaluated = [r for r in rows if r.get("status") != _ERROR]
+    passed = sum(1 for r in evaluated if r.get("passed"))
+    return {
+        "total_cases": len(rows),
+        "passed_cases": passed,
+        "failed_cases": len(evaluated) - passed,
+        "error_cases": len(rows) - len(evaluated),
+        "evaluated_cases": len(evaluated),
+        "pass_rate": _rate(passed, len(evaluated)),
+        "average_score": _mean([float(r.get("overall_score") or 0.0) for r in evaluated]),
+        "best_of_k_score": _mean([float(r.get("best_score") or 0.0) for r in evaluated]),
+    }
+
+
+def _case_row(record: Mapping[str, Any], scenario: str) -> dict[str, Any]:
+    row = dict(record)
+    row.pop("grade_results", None)  # verbatim alias of evaluator_results
+    row["scenario"] = scenario
+    row.setdefault("case_id", row.get("task_id", ""))
+    row.setdefault("task_id", row["case_id"])
+    row.update(scope_scores(row.get("evaluator_results") or []))
+    return row
+
+
+def _scenario_block(record: Mapping[str, Any]) -> dict[str, Any]:
+    """One scenario's summary and its case rows."""
+    name = str(record.get("scenario_name") or "")
+    rows = [_case_row(case, name) for case in record.get("case_results") or []]
+    return {
+        "name": name,
+        "run_id": record.get("run_id", ""),
+        "config_hash": record.get("config_hash", ""),
+        "timestamp": record.get("timestamp", ""),
+        "duration_ms": float(record.get("duration_ms") or 0.0),
+        **_stats(rows),
+        "cases": rows,
+    }
+
+
+def _scenario_records(payload: Any) -> list[Mapping[str, Any]]:
+    """Find the scenario records in any results shape Compass writes.
+
+    Mirrors ``analyzer.iter_case_dicts``, but keeps the scenario grouping that
+    a report needs; only a bare case list has no grouping to keep, and becomes
+    a single unnamed scenario.
+    """
+    if isinstance(payload, Mapping):
+        if isinstance(payload.get("results"), list):
+            records = []
+            for entry in payload["results"]:
+                records.extend(_scenario_records(entry))
+            return records
+        if isinstance(payload.get("case_results"), list):
+            return [payload]
+    return [{"scenario_name": "", "case_results": iter_case_dicts(payload)}]
+
+
+def collect_run_payload(
+    payload: Any,
+    *,
+    name: str = "",
+    generated: str | None = None,
+) -> dict[str, Any]:
+    """Build the document from a serialized results payload.
+
+    Accepts every shape ``analyze`` and ``compare`` accept, so a results file
+    written by any Compass command can be published without being replayed.
+    """
+    scenarios = [_scenario_block(record) for record in _scenario_records(payload)]
+    cases = [case for scenario in scenarios for case in scenario["cases"]]
 
     return {
-        "name": result.scenario_name,
-        "run_id": result.run_id,
-        "config_hash": result.config_hash,
-        "total_cases": result.total_cases,
-        "passed_cases": result.passed_cases,
-        "failed_cases": result.failed_cases,
-        "error_cases": result.error_cases,
-        "evaluated_cases": result.evaluated_cases,
-        "pass_rate": result.pass_rate,
-        "average_score": result.average_score,
-        "best_of_k_score": result.best_of_k_score,
-        "duration_ms": result.duration_ms,
-        "timestamp": payload["timestamp"],
-        "cases": cases,
+        "schema": SCHEMA,
+        "generated": generated or now_iso(),
+        "run": {
+            "name": name,
+            "scenarios": len(scenarios),
+            # Means over cases, not over scenario means: scenarios differ in
+            # size, so averaging their averages would over-weight small ones.
+            **_stats(cases),
+            "duration_ms": sum(s["duration_ms"] for s in scenarios),
+        },
+        "scenarios": scenarios,
+        "categories": category_rows(cases),
+        "scopes": {
+            "outcome": any(c["has_outcome"] for c in cases),
+            "transcript": any(c["has_transcript"] for c in cases),
+        },
     }
 
 
@@ -180,46 +283,209 @@ def collect_run(
     Args:
         results: The run's scenario results.
         name: Optional label for the run as a whole (a viewer's heading, and
-            later the entry a static site indexes it under).
+            the name a static site indexes it under).
         generated: Override the timestamp — for reproducible output.
 
     Returns:
         A JSON-serializable dict; see the module docstring for the conventions
         its numbers follow.
     """
-    scenarios = [_scenario_block(result) for result in results]
-    cases = [case for scenario in scenarios for case in scenario["cases"]]
-    evaluated = [case for case in cases if case.get("status") != _ERROR]
+    return collect_run_payload(
+        {"results": [result.to_dict() for result in results]},
+        name=name,
+        generated=generated,
+    )
 
-    passed_cases = sum(s["passed_cases"] for s in scenarios)
-    evaluated_cases = sum(s["evaluated_cases"] for s in scenarios)
 
+# --- static site ---------------------------------------------------------
+
+
+_SLUG_STRIP = re.compile(r"[^a-z0-9._-]+")
+
+
+def slugify(text: str) -> str:
+    """Turn a name into a safe single path segment.
+
+    A slug becomes a directory under the site, so it may not carry separators
+    or resolve upwards; anything that would is folded to ``-``.
+    """
+    slug = _SLUG_STRIP.sub("-", text.strip().lower()).strip("-.")
+    return slug or "run"
+
+
+def app_html() -> str:
+    """The viewer, as shipped with the package."""
+    return (files("compass.report") / "app.html").read_text(encoding="utf-8")
+
+
+def publish_doc(doc: Mapping[str, Any], *, include_details: bool = False) -> dict[str, Any]:
+    """The copy of a document that is safe to publish.
+
+    Grader ``metadata`` is the one free-form field in a case row: it carries
+    whatever a grader chose to put in ``details``, which routinely means model
+    output, prompts, or rendered reasoning. Publishing is not local debugging,
+    so it comes out by default and goes back in only when asked for.
+    """
+    published: dict[str, Any] = json.loads(json.dumps(doc))
+    if include_details:
+        return published
+
+    for case in iter_cases(published):
+        for grader in case.get("evaluator_results") or []:
+            grader.pop("metadata", None)
+    published["details_redacted"] = True
+    return published
+
+
+def index_entry(slug: str, doc: Mapping[str, Any]) -> dict[str, Any]:
+    """One run's row in the manifest — the index page renders only these."""
+    run = dict(doc["run"])
+    run.pop("name", None)
     return {
-        "schema": SCHEMA,
-        "generated": generated or now_iso(),
-        "run": {
-            "name": name,
-            "scenarios": len(scenarios),
-            "total_cases": sum(s["total_cases"] for s in scenarios),
-            "passed_cases": passed_cases,
-            "failed_cases": sum(s["failed_cases"] for s in scenarios),
-            "error_cases": sum(s["error_cases"] for s in scenarios),
-            "evaluated_cases": evaluated_cases,
-            "pass_rate": _rate(passed_cases, evaluated_cases),
-            # Means over cases, not over scenario means: scenarios differ in
-            # size, so averaging their averages would over-weight small ones.
-            "average_score": _mean(
-                [float(c.get("overall_score") or 0.0) for c in evaluated]
-            ),
-            "best_of_k_score": _mean(
-                [float(c.get("best_score") or 0.0) for c in evaluated]
-            ),
-            "duration_ms": sum(s["duration_ms"] for s in scenarios),
-        },
-        "scenarios": scenarios,
-        "categories": category_rows(cases),
-        "scopes": {
-            "outcome": any(c["has_outcome"] for c in cases),
-            "transcript": any(c["has_transcript"] for c in cases),
-        },
+        "slug": slug,
+        "name": doc["run"].get("name") or slug,
+        "generated": doc["generated"],
+        **run,
+        "scopes": doc.get("scopes", {}),
+        "categories": [row["category"] for row in doc.get("categories", [])],
+        "traces": 0,
+        "history": [],
     }
+
+
+def _snapshot(entry: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: entry.get(key) for key in _SNAPSHOT_FIELDS}
+
+
+def load_index(site_dir: Path) -> list[dict[str, Any]]:
+    """Existing manifest entries, or none.
+
+    A corrupt manifest is treated as absent rather than fatal: refusing to
+    build because some other writer left half a file behind would make the
+    aggregation property useless in exactly the situation it exists for.
+    """
+    index_file = Path(site_dir) / "index.json"
+    if not index_file.exists():
+        return []
+    try:
+        data = json.loads(index_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    entries = data.get("runs") if isinstance(data, Mapping) else None
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+@dataclass
+class BuildResult:
+    """What one ``build_site`` call did."""
+
+    slug: str
+    site_dir: Path
+    run_dir: Path
+    entry: dict[str, Any]
+    #: Every run now in the manifest, this one included.
+    runs: int
+    trace_files: int = 0
+    trace_bytes: int = 0
+    #: Slug's previous builds still remembered, for the trend line.
+    history: int = 0
+    published_paths: list[str] = field(default_factory=list)
+
+
+def _copy_traces(source: Path, target: Path) -> tuple[list[str], int]:
+    """Copy a trace directory into the site, reporting what was published."""
+    shutil.copytree(source, target)
+    paths, total = [], 0
+    for path in sorted(target.rglob("*")):
+        if path.is_file():
+            paths.append(path.relative_to(target).as_posix())
+            total += path.stat().st_size
+    return paths, total
+
+
+def build_site(
+    doc: Mapping[str, Any],
+    site_dir: str | Path,
+    *,
+    slug: str,
+    trace_dir: str | Path | None = None,
+    include_details: bool = False,
+    history: int = DEFAULT_HISTORY,
+) -> BuildResult:
+    """Add or refresh one run in a static site directory.
+
+    Only this slug is written. Entries for other runs are carried through
+    untouched, which is what lets separate repositories build into one shared
+    output directory and have the manifest accumulate.
+
+    Args:
+        doc: Document from ``collect_run`` / ``collect_run_payload``.
+        site_dir: Output directory; created if absent, merged into if not.
+        slug: Name to index this run under. Slugified before use.
+        trace_dir: Transcripts and artifacts to publish alongside the run.
+            Opt-in: a trace carries the full prompts and outputs of a run, so
+            it is never published unless named.
+        include_details: Keep grader ``metadata`` in the published document.
+        history: How many previous builds of this slug to remember.
+
+    Returns:
+        A ``BuildResult`` describing what was written.
+    """
+    site_dir = Path(site_dir)
+    slug = slugify(slug)
+
+    run_dir = (site_dir / "runs" / slug).resolve()
+    runs_root = (site_dir / "runs").resolve()
+    if not run_dir.is_relative_to(runs_root):
+        raise ValueError(f"unsafe slug: {slug!r}")
+
+    published = publish_doc(doc, include_details=include_details)
+
+    site_dir.mkdir(parents=True, exist_ok=True)
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True)
+
+    trace_paths: list[str] = []
+    trace_bytes = 0
+    if trace_dir is not None:
+        trace_paths, trace_bytes = _copy_traces(Path(trace_dir), run_dir / "traces")
+    published["traces"] = trace_paths
+
+    (run_dir / "run.json").write_text(
+        json.dumps(published, ensure_ascii=False), encoding="utf-8"
+    )
+
+    entry = index_entry(slug, published)
+    entry["traces"] = len(trace_paths)
+
+    entries = load_index(site_dir)
+    previous = next((e for e in entries if e.get("slug") == slug), None)
+    if previous and history > 0:
+        trail = [_snapshot(previous), *(previous.get("history") or [])]
+        entry["history"] = trail[:history]
+
+    entries = [e for e in entries if e.get("slug") != slug]
+    entries.append(entry)
+    entries.sort(key=lambda e: str(e.get("slug", "")))
+
+    (site_dir / "index.json").write_text(
+        json.dumps(
+            {"schema": SCHEMA, "generated": now_iso(), "runs": entries},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (site_dir / "index.html").write_text(app_html(), encoding="utf-8")
+
+    return BuildResult(
+        slug=slug,
+        site_dir=site_dir,
+        run_dir=run_dir,
+        entry=entry,
+        runs=len(entries),
+        trace_files=len(trace_paths),
+        trace_bytes=trace_bytes,
+        history=len(entry["history"]),
+        published_paths=trace_paths,
+    )

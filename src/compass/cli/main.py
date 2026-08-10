@@ -18,6 +18,7 @@ from compass.adapters import list_adapters
 from compass.report.html import HTMLReporter
 from compass.report.analyzer import EvalResultAnalyzer, TaskEvalResult, iter_case_dicts
 from compass.report.console import ConsoleReporter
+from compass.report.site import DEFAULT_HISTORY
 
 if TYPE_CHECKING:
     from compass.core.regrade import GradeReport
@@ -1611,6 +1612,130 @@ def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive
             console.print(f"  [red]Error cleaning {store.dir}: {e}[/red]")
 
     console.print(f"\n[green]Cleaned {len(targets)} checkpoint(s) ({total_deleted} files removed)[/green]")
+
+
+@cli.group()
+def site():
+    """Publish results as a shareable static site."""
+    pass
+
+
+@site.command("build")
+@click.argument("results", type=click.Path(exists=True), nargs=-1, required=True)
+@click.option("--output", "-o", type=click.Path(), default="site", show_default=True,
+              help="Site directory; merged into if it already exists")
+@click.option("--slug", help="Name to index this run under (default: derived from the results)")
+@click.option("--name", help="Display name for the run (default: the slug)")
+@click.option("--trace-dir", type=click.Path(exists=True),
+              help="Publish these transcripts alongside the run (they carry prompts and outputs)")
+@click.option("--include-details", is_flag=True,
+              help="Publish grader details/metadata too (redacted by default)")
+@click.option("--history", default=DEFAULT_HISTORY, show_default=True,
+              help="Previous builds of this slug to remember for the trend line")
+def site_build(
+    results: tuple[str, ...],
+    output: str,
+    slug: str | None,
+    name: str | None,
+    trace_dir: str | None,
+    include_details: bool,
+    history: int,
+):
+    """Build (or refresh) a run in a static site.
+
+    RESULTS is a results JSON written by `compass test --report json` or
+    `compass grade -o` — the same shapes `analyze` and `compare` read.
+
+    Only the named run is written; every other run already in the site is left
+    alone. That is what lets separate repositories build into one shared
+    directory (a gh-pages branch, a bucket prefix) and have the index
+    accumulate — no server, no database.
+
+    \b
+      compass site build results.json -o site/
+      compass site build results.json -o site/ --slug image-evals --trace-dir traces/
+      python -m http.server -d site/          # browsers will not fetch from file://
+
+    Grader details are left out unless --include-details: they are free-form
+    and routinely hold model output. Transcripts are opt-in the same way —
+    they are published only when --trace-dir names them.
+    """
+    import json
+
+    from compass.report.site import build_site, collect_run_payload, slugify
+
+    if slug and len(results) > 1:
+        console.print("[red]--slug takes a single results file[/red]")
+        sys.exit(1)
+
+    built = []
+    for path_str in results:
+        path = Path(path_str)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            console.print(f"[red]Could not read {path}: {e}[/red]")
+            sys.exit(1)
+
+        run_slug = slugify(slug or path.stem)
+        doc = collect_run_payload(payload, name=name or slug or path.stem)
+        if not doc["run"]["total_cases"]:
+            console.print(f"[yellow]No cases found in {path} — skipped[/yellow]")
+            continue
+
+        result = build_site(
+            doc,
+            output,
+            slug=run_slug,
+            trace_dir=trace_dir,
+            include_details=include_details,
+            history=history,
+        )
+        built.append(result)
+
+    if not built:
+        console.print("[red]Nothing to publish[/red]")
+        sys.exit(1)
+
+    last = built[-1]
+    table = Table(title=f"Published to {last.site_dir}")
+    table.add_column("Run", style="bold cyan")
+    table.add_column("Cases", justify="right")
+    table.add_column("Pass Rate", justify="right")
+    table.add_column("Traces", justify="right")
+    table.add_column("History", justify="right")
+    for result in built:
+        entry = result.entry
+        table.add_row(
+            result.slug,
+            f"{entry['passed_cases']}/{entry['evaluated_cases']}",
+            f"{entry['pass_rate'] * 100:.1f}%",
+            _format_bytes(result.trace_bytes) if result.trace_files else "—",
+            str(result.history) if result.history else "—",
+        )
+    console.print(table)
+
+    console.print(f"[green]{last.runs} run(s) in this site[/green]")
+    if not include_details:
+        console.print(
+            "[dim]Grader details redacted — rebuild with --include-details to keep them.[/dim]"
+        )
+    if last.trace_files:
+        console.print(
+            f"[yellow]Published {last.trace_files} trace file(s): "
+            f"transcripts carry prompts and model output.[/yellow]"
+        )
+    console.print(f"[dim]Preview with:[/dim] python -m http.server -d {last.site_dir}")
+
+
+def _format_bytes(size: int) -> str:
+    """Human-readable byte count — the site's weight has to be visible."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f}{unit}" if unit == "B" else f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{value:.1f}GB"
 
 
 if __name__ == "__main__":

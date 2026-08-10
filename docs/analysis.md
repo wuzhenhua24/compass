@@ -397,6 +397,39 @@ Case 行是 `EvalResult.to_dict()` 的 case 记录的近亲，因此 `iter_case_
 
 轴的**存在性**和轴的**数值**是分开记录的（`has_outcome` / `has_transcript`）：一次所有 outcome grader 都打 0 分的运行，仍然是有 outcome 轴的——而且恰恰是最值得画散点图的那种。
 
+### 可分享的静态站（`compass site build`）
+
+把上面那份文档发布成一个静态站——一条链接代替一堆附件，而且**可累积**。
+
+```bash
+compass site build results.json -o site/                       # slug 默认取文件名
+compass site build results.json -o site/ --slug image-evals \
+    --name "Image Evals" --trace-dir traces/
+python -m http.server -d site/                                 # 浏览器不会从 file:// 取数据
+```
+
+```
+site/
+  index.html              viewer（单文件、零依赖、无需构建）
+  index.json              清单：一次运行一条 + 趋势快照
+  runs/<slug>/run.json    该次运行的文档
+  runs/<slug>/traces/…    显式发布的轨迹与产物
+```
+
+**合并语义是全部的关键**：一次 build 只写自己那个 slug，`index.json` 里其它条目原样保留。所以多个仓库的 CI 可以 build 进**同一个目录**（一个共享的 gh-pages 分支、一个对象存储前缀），清单自己累积起来——没有服务、没有数据库，合并点就是一个可幂等重写的文件。
+
+站点里能做的事，都是把 Compass 已有的数据变得可点开：总览页按 pass rate 排、带趋势线 → 某次运行（双轴散点、分类表、Pass Rate 分母写明）→ 某个 case（每个 grader 的 scope/分数/观察标签/metrics、k 次 trial 的分布、判分契约指纹）→ 那次 case 的轨迹文件。observed_tags、failure_tags、category 都是点击筛选，不是重跑。
+
+**发布 = 公开，所以默认是收着的：**
+
+- **grader 的 `metadata` 默认不发布**。它是 case 行里唯一的自由字段，装的是 grader 自己的 `details`——经常就是模型原文、prompt、评审理由。要发布得显式 `--include-details`，页面上也会写明这次 build 有没有带上。
+- **轨迹靠 `--trace-dir` 显式点名才发布**，因为一条 transcript 带着完整的输入输出。命令行会明说发布了多少个文件、多大。
+- **slug 会被规范化成单个路径段**，`../` 之类折成 `-`，不可能写到站点目录外面。
+
+**趋势线只留摘要**：同一个 slug 重复 build 时，上一次的汇总数字（pass rate / 平均分 / 用例数）进入 `history`，默认留 20 次（`--history`）。留的是画一条趋势线所需的数，不是归档——case 行和产物只有最新一次在站上。
+
+**跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用 `compass compare` 对同一批 case 做配对检验。
+
 ### 配对比较（`compass compare`）：把对比当测量，不当读数
 
 `analyze` 看一次运行，`compare` 回答控制面最常见的问题：**改了一个变量（换模型/改 prompt/加工具）之后，B 比 A 真的好了吗？** 平均分涨 2.4 个点可能是真提升、也可能纯是噪声——均值本身分不出来。

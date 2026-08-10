@@ -241,6 +241,7 @@ compass grade ./traces -s judge.yaml -n judge  # 第二套 grader，并存
 
 compass analyze results.json                 # 分维度诊断 + 观察标签分布
 compass compare a.json b.json                # 配对比较：翻转 + 95% CI + MDE
+compass site build results.json -o site/     # 发布静态站（细节默认脱敏，轨迹需显式 --trace-dir）
 compass trace traces/case.json --steps       # 看轨迹
 compass import session.jsonl                 # 导入 pi / OTLP / Claude / OpenAI Agents 轨迹
 compass list                                 # 已注册的 grader 和 adapter

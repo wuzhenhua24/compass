@@ -14,11 +14,19 @@ from compass.report.compare import (
 from compass.report.console import ConsoleReporter
 from compass.report.html import HTMLReporter
 from compass.report.site import (
+    DEFAULT_HISTORY,
     SCHEMA,
+    BuildResult,
+    build_site,
     category_rows,
     collect_run,
+    collect_run_payload,
+    index_entry,
     iter_cases,
+    load_index,
+    publish_doc,
     scope_scores,
+    slugify,
 )
 
 __all__ = [
@@ -40,6 +48,15 @@ __all__ = [
     "SCHEMA",
     "category_rows",
     "collect_run",
+    "collect_run_payload",
     "iter_cases",
     "scope_scores",
+    # Static site
+    "DEFAULT_HISTORY",
+    "BuildResult",
+    "build_site",
+    "index_entry",
+    "load_index",
+    "publish_doc",
+    "slugify",
 ]
