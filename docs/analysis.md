@@ -361,6 +361,42 @@ json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
 
 每条 `grade_results` 中的 `grader_scope` 字段（`outcome` / `transcript` / `both`）决定该评分结果归入哪个分析维度。
 
+### 报告数据层（`compass.report.site`）：一次运行 → 一份文档
+
+报告的**取数**和**渲染**是分开的。`collect_run()` 把一次运行的 `EvalResult` 变成一份纯 JSON 文档，HTML 报告只是这份文档的一个渲染器——没有任何 viewer 直接去碰结果对象。
+
+```python
+from compass.report import collect_run
+from compass.report.html import HTMLReporter
+
+doc = collect_run(results, name="nightly")   # 纯 dict，json.dumps 即可落盘
+html = HTMLReporter().render_document(doc)   # 渲染器只读文档
+```
+
+文档形状：
+
+```jsonc
+{
+  "schema": "compass.run/1",     // viewer 先读它，旧页面可以拒绝新文档而不是渲染错
+  "generated": "2026-08-10T08:00:00+00:00",
+  "run":       { "name": …, "total_cases": …, "evaluated_cases": …,
+                 "pass_rate": …, "average_score": …, "best_of_k_score": … },
+  "scenarios": [ { "name": …, "run_id": …, "config_hash": …, "cases": [ … ] } ],
+  "categories":[ { "category": …, "passed": …, "failed": …, "errors": … } ],
+  "scopes":    { "outcome": true, "transcript": true }
+}
+```
+
+这份文档承诺三件事，任何消费方都可以依赖：
+
+- **分数和比率一律是 0..1 的分数**，百分号是渲染层的事。
+- **harness 错误不进任何分母**，与 `EvalResult.pass_rate` 一致（见上文"评测卫生"）。报告里的 Pass Rate 卡片在有 error 时会写明分母：`Pass Rate (2 evaluated)`。
+- **跳过 / 未打分的 grader 不进平均**——"没测"不是"测了 0 分"。
+
+Case 行是 `EvalResult.to_dict()` 的 case 记录的近亲，因此 `iter_case_dicts()` 及其下游（`analyze` / `compare`）能直接读。两点刻意的差异：去掉了与 `evaluator_results` 完全重复的 `grade_results` 别名（发布出去的文档不该为同一份数据付两次字节），并为每行补上所属 scenario 与两条 scope 轴（`outcome_score` / `transcript_score`）。
+
+轴的**存在性**和轴的**数值**是分开记录的（`has_outcome` / `has_transcript`）：一次所有 outcome grader 都打 0 分的运行，仍然是有 outcome 轴的——而且恰恰是最值得画散点图的那种。
+
 ### 配对比较（`compass compare`）：把对比当测量，不当读数
 
 `analyze` 看一次运行，`compare` 回答控制面最常见的问题：**改了一个变量（换模型/改 prompt/加工具）之后，B 比 A 真的好了吗？** 平均分涨 2.4 个点可能是真提升、也可能纯是噪声——均值本身分不出来。

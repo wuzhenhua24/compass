@@ -13,6 +13,13 @@ from compass.report.compare import (
 )
 from compass.report.console import ConsoleReporter
 from compass.report.html import HTMLReporter
+from compass.report.site import (
+    SCHEMA,
+    category_rows,
+    collect_run,
+    iter_cases,
+    scope_scores,
+)
 
 __all__ = [
     "HTMLReporter",
@@ -29,4 +36,10 @@ __all__ = [
     "compare_results",
     "load_case_records",
     "paired_stats",
+    # Report data layer
+    "SCHEMA",
+    "category_rows",
+    "collect_run",
+    "iter_cases",
+    "scope_scores",
 ]

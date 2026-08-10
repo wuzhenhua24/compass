@@ -1,11 +1,15 @@
-"""HTML report generator."""
+"""HTML report generator.
 
-from datetime import datetime
+A pure renderer: every number it shows comes from a ``compass.report.site``
+document, so a report and a published site can never disagree.
+"""
+
 from html import escape
 from pathlib import Path
 from typing import Any
 
-from compass.core.result import CaseResult, EvalResult
+from compass.core.result import EvalResult
+from compass.report.site import collect_run, iter_cases
 
 
 class HTMLReporter:
@@ -40,37 +44,38 @@ class HTMLReporter:
 
     def _render(self, results: list[EvalResult]) -> str:
         """Render results to HTML string."""
-        # Calculate summary statistics
-        total_scenarios = len(results)
-        total_cases = sum(r.total_cases for r in results)
-        total_passed = sum(r.passed_cases for r in results)
-        total_failed = sum(r.failed_cases for r in results)
-        total_errors = sum(r.error_cases for r in results)
-        overall_pass_rate = (total_passed / total_cases * 100) if total_cases > 0 else 0
+        return self.render_document(collect_run(results, name=self.title))
 
-        # Compute per-case scope scores for scatter chart
-        all_cases: list[CaseResult] = []
-        for r in results:
-            all_cases.extend(r.case_results)
-        scatter_data = [self._compute_case_scope_scores(c) for c in all_cases]
+    def render_document(self, doc: dict[str, Any]) -> str:
+        """Render a ``compass.report.site`` document to HTML.
 
-        # Compute category breakdown
-        category_html = self._render_category_breakdown(all_cases)
+        Args:
+            doc: Document from ``collect_run``.
 
-        # Only render scatter chart when both axes have data
-        has_outcome_graders = (
-            any(d["outcome_score"] > 0 for d in scatter_data) if scatter_data else False
-        )
-        has_transcript_graders = (
-            any(d["transcript_score"] > 0 for d in scatter_data) if scatter_data else False
-        )
+        Returns:
+            A self-contained HTML page.
+        """
+        run = doc["run"]
+        cases = list(iter_cases(doc))
+
+        # Pass rate is over evaluated cases — harness errors are not the
+        # agent's failures. Name the denominator whenever it differs from the
+        # case count, so the percentage cannot be read against the wrong base.
+        pass_rate_label = "Pass Rate"
+        if run["error_cases"]:
+            pass_rate_label = f"Pass Rate ({run['evaluated_cases']} evaluated)"
+
+        category_html = self._render_category_breakdown(doc["categories"])
+
+        # The scatter needs both axes to mean something. Presence, not
+        # magnitude: a run where every outcome grader scored 0.0 still has
+        # an outcome axis, and that chart is worth looking at.
         scatter_chart_html = ""
-        if has_outcome_graders and has_transcript_graders:
-            scatter_chart_html = self._render_dual_axis_chart(scatter_data)
+        if doc["scopes"]["outcome"] and doc["scopes"]["transcript"]:
+            scatter_chart_html = self._render_dual_axis_chart(cases)
 
-        # Generate scenario cards
         scenario_cards = "\n".join(
-            self._render_scenario_card(r) for r in results
+            self._render_scenario_card(s) for s in doc["scenarios"]
         )
 
         return f"""<!DOCTYPE html>
@@ -217,32 +222,32 @@ class HTMLReporter:
 <body>
     <header>
         <div class="container">
-            <h1>{self.title}</h1>
-            <div class="timestamp">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+            <h1>{escape(self.title)}</h1>
+            <div class="timestamp">Generated: {escape(doc['generated'])}</div>
         </div>
     </header>
 
     <div class="container">
         <div class="summary">
             <div class="summary-card">
-                <div class="value">{total_scenarios}</div>
+                <div class="value">{run['scenarios']}</div>
                 <div class="label">Scenarios</div>
             </div>
             <div class="summary-card passed">
-                <div class="value">{total_passed}</div>
+                <div class="value">{run['passed_cases']}</div>
                 <div class="label">Passed</div>
             </div>
             <div class="summary-card failed">
-                <div class="value">{total_failed}</div>
+                <div class="value">{run['failed_cases']}</div>
                 <div class="label">Failed</div>
             </div>
             <div class="summary-card error">
-                <div class="value">{total_errors}</div>
+                <div class="value">{run['error_cases']}</div>
                 <div class="label">Errors</div>
             </div>
             <div class="summary-card">
-                <div class="value">{overall_pass_rate:.1f}%</div>
-                <div class="label">Pass Rate</div>
+                <div class="value">{run['pass_rate'] * 100:.1f}%</div>
+                <div class="label">{pass_rate_label}</div>
             </div>
         </div>
 
@@ -256,63 +261,24 @@ class HTMLReporter:
 </html>"""
 
     @staticmethod
-    def _compute_case_scope_scores(case: CaseResult) -> dict[str, Any]:
-        """Compute per-case outcome_score and transcript_score from evaluator results.
-
-        Groups evaluator_results by grader_scope and averages each axis.
-        """
-        outcome_scores: list[float] = []
-        transcript_scores: list[float] = []
-
-        for er in case.evaluator_results:
-            scope = er.grader_scope  # string: "outcome", "transcript", or "both"
-            if scope in ("outcome", "both"):
-                outcome_scores.append(er.score)
-            if scope in ("transcript", "both"):
-                transcript_scores.append(er.score)
-
-        return {
-            "case_id": case.case_id,
-            "outcome_score": (
-                sum(outcome_scores) / len(outcome_scores) if outcome_scores else 0.0
-            ),
-            "transcript_score": (
-                sum(transcript_scores) / len(transcript_scores) if transcript_scores else 0.0
-            ),
-            "passed": case.passed,
-        }
-
-    @staticmethod
-    def _render_category_breakdown(cases: list[CaseResult]) -> str:
-        """Render an HTML table of per-category statistics."""
-        from collections import defaultdict
-
-        buckets: dict[str, list[CaseResult]] = defaultdict(list)
-        for c in cases:
-            if c.category:
-                buckets[c.category].append(c)
-
-        if not buckets:
+    def _render_category_breakdown(categories: list[dict[str, Any]]) -> str:
+        """Render an HTML table from the document's category rows."""
+        if not categories:
             return ""
 
         rows = ""
-        for cat in sorted(buckets):
-            cat_cases = buckets[cat]
-            total = len(cat_cases)
-            passed = sum(1 for c in cat_cases if c.passed)
-            failed = total - passed
-            rate = passed / total * 100 if total > 0 else 0
-            avg = sum(c.overall_score for c in cat_cases) / total if total else 0
+        for row in categories:
+            rate = row["pass_rate"] * 100
             rate_color = "#10b981" if rate >= 70 else "#f59e0b" if rate >= 50 else "#ef4444"
             rows += f"""
                 <tr>
-                    <td style="font-weight:500">{escape(cat)}</td>
-                    <td style="text-align:center">{total}</td>
-                    <td style="text-align:center;color:#10b981">{passed}</td>
-                    <td style="text-align:center;color:#ef4444">{failed}</td>
+                    <td style="font-weight:500">{escape(row["category"])}</td>
+                    <td style="text-align:center">{row["total"]}</td>
+                    <td style="text-align:center;color:#10b981">{row["passed"]}</td>
+                    <td style="text-align:center;color:#ef4444">{row["failed"]}</td>
                     <td style="text-align:center;color:{rate_color};font-weight:600">
                         {rate:.1f}%</td>
-                    <td style="text-align:center">{avg:.2f}</td>
+                    <td style="text-align:center">{row["average_score"]:.2f}</td>
                 </tr>"""
 
         return f"""
@@ -334,8 +300,13 @@ class HTMLReporter:
             </table>
         </div>"""
 
-    def _render_dual_axis_chart(self, scatter_data: list[dict[str, Any]]) -> str:
-        """Generate an inline SVG scatter plot of Outcome (X) vs Transcript (Y)."""
+    def _render_dual_axis_chart(self, cases: list[dict[str, Any]]) -> str:
+        """Generate an inline SVG scatter plot of Outcome (X) vs Transcript (Y).
+
+        Args:
+            cases: Document case rows — each carries ``outcome_score``,
+                ``transcript_score``, ``case_id`` and ``passed``.
+        """
         # SVG dimensions
         w, h = 500, 500
         pad_left, pad_bottom, pad_top, pad_right = 60, 60, 30, 30
@@ -422,7 +393,7 @@ class HTMLReporter:
 
         # Data points
         points = ""
-        for d in scatter_data:
+        for d in cases:
             cx = sx(d["outcome_score"])
             cy = sy(d["transcript_score"])
             color = "#10b981" if d["passed"] else "#ef4444"
@@ -459,47 +430,50 @@ class HTMLReporter:
             <div style="text-align: center;">{svg}</div>
         </div>"""
 
-    def _render_scenario_card(self, result: EvalResult) -> str:
+    def _render_scenario_card(self, scenario: dict[str, Any]) -> str:
         """Render a single scenario card."""
-        pass_rate = result.pass_rate * 100
+        pass_rate = scenario["pass_rate"] * 100
         status_class = "passed" if pass_rate >= 70 else "failed"
 
         case_items = "\n".join(
-            self._render_case_item(case) for case in result.case_results
+            self._render_case_item(case) for case in scenario["cases"]
         )
 
         return f"""
         <div class="scenario-card">
             <div class="scenario-header">
-                <h2>{result.scenario_name}</h2>
-                <span class="badge {status_class}">{result.passed_cases}/{result.total_cases} passed</span>
+                <h2>{escape(scenario["name"])}</h2>
+                <span class="badge {status_class}">{scenario["passed_cases"]}/{scenario["total_cases"]} passed</span>
             </div>
             <div class="case-list">
                 {case_items}
             </div>
         </div>"""
 
-    def _render_case_item(self, case) -> str:
+    def _render_case_item(self, case: dict[str, Any]) -> str:
         """Render a single case item."""
-        status_class = case.status.value
+        status_class = case.get("status", "failed")
         status_icon = (
-            "✓" if case.passed
+            "✓" if case.get("passed")
             else "✗" if status_class == "failed" else "!"
         )
 
+        overall_score = float(case.get("overall_score") or 0.0)
+        best_score = float(case.get("best_score") or 0.0)
+        has_trials = (case.get("total_trials") or 1) > 1
+
         # Build score meta text
-        meta_parts = [f"Avg: {case.overall_score:.2f}"]
-        if case.has_trials:
-            meta_parts.append(f"Best: {case.best_score:.2f}")
+        meta_parts = [f"Avg: {overall_score:.2f}"]
+        if has_trials:
+            meta_parts.append(f"Best: {best_score:.2f}")
             meta_parts.append(
-                f"Trials: {case.passed_trials}/{case.total_trials}"
+                f"Trials: {case.get('passed_trials', 0)}/{case['total_trials']}"
             )
-        meta_parts.append(f"Duration: {case.duration_ms:.0f}ms")
+        meta_parts.append(f"Duration: {case.get('duration_ms', 0.0):.0f}ms")
         meta_text = " | ".join(meta_parts)
 
         # Use best_score for the bar when multi-trial
-        bar_score = case.best_score if case.has_trials else case.overall_score
-        bar_percent = bar_score * 100
+        bar_percent = (best_score if has_trials else overall_score) * 100
         bar_class = (
             "good" if bar_percent >= 70
             else "medium" if bar_percent >= 40 else "poor"
@@ -508,7 +482,7 @@ class HTMLReporter:
         return f"""
             <div class="case-item">
                 <div class="case-info">
-                    <div class="case-id">{case.case_id}</div>
+                    <div class="case-id">{escape(str(case.get("case_id", "")))}</div>
                     <div class="case-meta">{meta_text}</div>
                 </div>
                 <div class="score-bar">
