@@ -96,10 +96,10 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 ┌────────────────────────────┴────────────────────────────────────────┐
 │                       3. Core Engine Layer                          │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    Grader System (三层评估)                    │   │
+│  │                   Grader System (三层评估)                   │   │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐   │   │
 │  │  │ Code Grader │  │Model Grader │  │ Human Grader        │   │   │
-│  │  │ (确定性检查) │  │(LLM-as-Judge)│  │ (人工标注/复核)      │   │   │
+│  │  │ (确定性检查)│  │ (LLM Judge) │  │ (人工标注/复核)     │   │   │
 │  │  └─────────────┘  └─────────────┘  └─────────────────────┘   │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────┐  │
@@ -108,17 +108,17 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 │  └──────────────┘  └──────────────┘  └──────────────┘  └─────────┘  │
 │  ┌──────────────┐  ┌──────────────┐                                 │
 │  │ Sandbox Mgr  │  │ Environment  │                                 │
-│  │ (隔离执行)    │  │ (状态管理)    │                                 │
+│  │ (隔离执行)   │  │ (状态管理)   │                                 │
 │  └──────────────┘  └──────────────┘                                 │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────────┐
 │                      4. Agent Adapter Layer                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ ┌────────┐  │
-│  │ ComfyUI  │  │ SD WebUI │  │ Midjourney│  │ DALL-E  │ │ Custom │  │
+│  │ ComfyUI  │  │ SD WebUI │  │Midjourney│  │ DALL-E   │ │ Custom │  │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ └────────┘  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────┐                       │
-│  │ Coding   │  │  LLM     │  │ Environment  │                       │
+│  │ Image    │  │ Coding   │  │ Environment  │                       │
 │  └──────────┘  └──────────┘  └──────────────┘                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -127,8 +127,10 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 > 以及 **Integrations**（消费 Agent 自产的轨迹，适合自跑的 LLM Agent——见 [docs/integrations.md](docs/integrations.md)）。
 > 二者产出的都是同一个 Transcript，下游评分/指标完全共用。
 >
-> 图中 ComfyUI / SD WebUI / Midjourney / DALL-E 为可对接的目标示意；当前内置注册的 adapter 是
-> `image` / `coding` / `environment`，其余通过 `@register_adapter` 自定义接入。
+> 图中上排（ComfyUI / SD WebUI / Midjourney / DALL-E / Custom）是可对接的**目标**示意，下排是
+> **当前内置注册的三个 adapter**：`image` / `coding` / `environment`——其余目标通过
+> `@register_adapter` 自定义接入。注意 `adapters/llm.py` 不是 adapter：它提供 LLM 调用 mixin
+> 与模型定价表，供 Model Grader 和自定义 adapter 复用。
 
 ### CLI 命令总览
 
@@ -146,19 +148,31 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass init [output.yaml]` | 生成场景模板 |
 | `compass docs [topic]` | 在终端里打印 Compass 自身文档（raw markdown，可管道）；不带参数列出主题 |
 | `compass list` | 列出已注册的 grader 和 adapter |
-| `compass baseline set/list` | 回归基线管理：把某 case 的产物存为基线 |
-| `compass checkpoint list` | 列出 trace 目录下的运行断点（配合 `compass test --resume`） |
+| `compass baseline set/compare/list` | 回归基线管理：把某 case 的产物存为基线，再拿当前产物与之逐哈希比对 |
+| `compass checkpoint list/clean` | 列出 trace 目录下的运行断点（配合 `compass test --resume`）；`clean` 清理断点文件，默认只删已完成的 |
 
 ## 安装
 
-```bash
-# 使用 uv 安装
-uv pip install compass-qa
+> Compass **尚未发布到 PyPI**（当前处于内部试用阶段），只能从源码装。不要 `pip install compass-qa`——
+> 那个名字不在我们手上，装到的不会是这个项目。
 
-# 或从源码安装
-git clone https://github.com/your-org/compass.git
+**A. 试用 / 开发 Compass 本身**——在 checkout 里直接跑：
+
+```bash
+git clone <内部仓库地址>/compass.git
 cd compass
 uv sync
+uv run compass --help
+```
+
+`uv sync` 建好 `.venv` 并把 `compass` 命令装进去。本文档后续示例都写成裸 `compass ...`；
+在 checkout 里请前缀 `uv run`（或 `source .venv/bin/activate` 后直接用）。
+
+**B. 在你自己的项目里用**——推荐这种，自定义 grader 和你的业务代码同处一个环境：
+
+```bash
+uv pip install -e /path/to/compass     # 可编辑安装，Compass 更新后无需重装
+compass list                           # 验证：应列出 41 个 grader 和 3 个 adapter
 ```
 
 ## 快速开始
@@ -289,7 +303,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 |------|------|------|
 | **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、41 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
-| **Grader 体系** | 三层体系（Code/Model/Human）、全部 39 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
+| **Grader 体系** | 三层体系（Code/Model/Human）、全部 41 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
 | **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
 | **接入外部 Agent** | OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
@@ -347,25 +361,36 @@ Transcript / Model grader、自定义 Adapter、黑盒 Agent 的 ToolCall 获取
 compass/
 ├── src/compass/
 │   ├── cli/                  # CLI 入口
+│   ├── docs_index.py         # 随包分发的文档索引（撑起 compass docs）
 │   ├── core/
 │   │   ├── scenario.py       # 场景定义
-│   │   ├── runner.py         # 测试运行器（含审计溯源盖章）
+│   │   ├── runner.py         # 测试运行器（含审计溯源盖章、round-major 多试验调度）
 │   │   ├── transcript.py     # Transcript / Outcome / ToolCall 协议
+│   │   ├── artifacts.py      # 类型化产物（Image / Code / Text …，插件式注册）
+│   │   ├── artifact_store.py # 产物落盘与回归基线（compass baseline）
 │   │   ├── trial.py          # 试验管理
 │   │   ├── result.py         # 结果数据结构
 │   │   ├── metrics.py        # pass@k / pass^k 计算
+│   │   ├── regrade.py        # 离线评分与判分器指纹（compass grade）
 │   │   ├── checkpoint.py     # 断点续跑（场景指纹）
+│   │   ├── fileio.py         # 崩溃安全的原子写入（临时文件 + fsync + replace）
 │   │   └── sweep.py          # 参数扫描
 │   ├── graders/              # 评分器（Transcript/Outcome 分离设计）
 │   │   ├── base.py           # 基类、GraderScope、GradeContext
 │   │   ├── registry.py       # 评分器注册表
 │   │   ├── code/             # Code Graders（common / coding / data / image）
 │   │   ├── model/            # Model Graders（semantic / vlm / rubric / trajectory / groundedness...）
-│   │   └── human/            # Human Graders（human_review / pairwise）
-│   ├── adapters/             # Agent 适配器（image / coding / environment）
+│   │   └── human/            # Human Graders（human_review / pairwise + 一致性 κ/α、锚点校准）
+│   ├── adapters/             # Agent 适配器（image / coding / environment；llm.py 是 mixin 与定价，非 adapter）
 │   ├── integrations/         # 外部轨迹导入（openai_agents / pi / otlp / claude_agent）
 │   ├── sandbox/              # 沙箱执行
-│   └── report/               # 报告与分析（analyzer / console / html / compare）
+│   └── report/               # 报告与分析
+│       ├── analyzer.py       # 分维度诊断、失败模式、改进建议
+│       ├── console.py        # Rich 终端输出
+│       ├── html.py           # HTML 报告（取数与渲染分离）
+│       ├── compare.py        # 配对比较（翻转 + 置信区间 + MDE）
+│       ├── leaderboard.py    # 多模型排行榜（compass test -m）
+│       └── site.py           # 静态站发布与实时查看（compass site）
 ├── tests/
 ├── docs/                     # 专题文档（见"核心特性与文档导航"）
 ├── examples/
@@ -374,7 +399,9 @@ compass/
 
 ## 路线图
 
-Phase 1（MVP）与 Phase 2（核心功能）已全部完成；Phase 3+ 聚焦沙箱隔离增强、多模态 Artifact、Web Dashboard 与 CI/CD 集成。详细清单见 [docs/roadmap.md](docs/roadmap.md)。
+Phase 1（MVP）、Phase 2（核心功能）已全部完成，Phase 3（增强）只剩"更多图像 Adapter"未做——且已主动降优先级：自跑的 Agent 走**导入轨迹**比被外部驱动更合适。原路线图之后的那批基座化工作（轨迹接入、`compass grade` 执行/评分解耦、ToolCall 协议 2.0、观察标签与指标、静态站）归档在 Phase 5。
+
+**当前未做**：Web Dashboard 的常驻服务形态（静态站 `compass site` 已交付）、现成的 CI/CD 流水线模板（退出码门禁已有）、"LLM 判官 vs 人工标注"的校准工具（κ / α 测量原语已有）。详细清单见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 参考资料
 

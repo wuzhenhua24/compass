@@ -57,8 +57,12 @@
   - [x] coding/（Coding Agent）
   - [x] data/（Data Agent）
   - [x] image/（Image Agent）
-- [ ] Transcript 完整记录与持久化
-- [ ] HTML 测试报告增强
+- [x] Transcript 完整记录与持久化
+  - [x] `Transcript.save/load` 双格式（JSON 全量结构 + JSONL 事件流）、TranscriptRecorder
+  - [x] `compass test --trace-dir/--trace-format`、`compass trace` 查看
+- [x] HTML 测试报告增强
+  - [x] HTMLReporter：Transcript/Outcome 双轴散点、分类分解、场景卡片
+  - [x] 取数与渲染分离（`render_document`），同一份文档供 HTML 与静态站复用
 
 ### Phase 3 - 增强
 - [x] EnvironmentAdapter（Environment-as-Code，参考 Stripe Agent Benchmark）
@@ -67,12 +71,45 @@
 - [x] Best-of-k 评分展示（参考 Stripe best-of-3 评估模式）
 - [x] 答案泄漏检测（Leak Detection，参考 Stripe UUID 嵌入方案）
 - [ ] 更多 Adapter (SD WebUI, DALL-E)
-- [ ] Human Grader 接口完善
+  - 已降优先级：自跑的 Agent 走**导入轨迹**（Integrations）比被外部驱动更合适，
+    投入转向了 pi / OTLP / Claude / OpenAI Agents SDK 四种轨迹接入
+- [x] Human Grader 接口完善
+  - [x] 评分者一致性：Cohen's κ / Krippendorff's α（`graders/human/agreement.py`）
+  - [x] 锚点校准会话（`graders/human/calibration.py`）、`pairwise_comparison` 成对比较
 - [x] 环境隔离 (Sandbox)
-- [ ] 并行执行优化
+- [x] 并行执行优化
+  - [x] worker 上限由信号量约束；多试验用例走 round-major 调度
+  - [x] 断点续跑按 trial 粒度补齐（top-up 而非重跑），中断后样本仍均衡
 
 ### Phase 4 - 完善
 - [ ] Web Dashboard
+  - 静态站那一半已交付：`compass site build/serve`（多仓库可 build 进同一目录，
+    索引累积、带趋势线）；常驻服务/数据库形态未做
 - [ ] CI/CD 集成
-- [ ] 基准测试对比
+  - 门禁原语已有：`compass test` / `compass grade` 按全通过与否返回 0/1 退出码；
+    尚无现成的 Action / 流水线模板
+- [x] 基准测试对比
+  - [x] `compass compare` 配对比较（case 翻转 + 置信区间 + MDE）
+  - [x] `compass test -m` 多模型排行榜（每行标准误 + top 2 配对检验）
+  - [x] `compass baseline set/compare/list` 产物级回归基线
 - [ ] 模型校准工具
+  - 已有测量原语（任意两个评分者之间的 κ / α），但尚未做成"LLM 判官 vs 人工标注"的校准工具
+
+### Phase 5 - 基座化（原路线图之后交付）
+
+把 Compass 从"一个评测工具"推到"评测基座"的那批工作，按主题归档：
+
+- **轨迹接入**：OpenAI Agents SDK / pi JSONL / OTLP·OpenInference / Claude Agent SDK 四种轨迹归一成
+  Transcript；`compass import` 自动识别格式（见 [integrations.md](integrations.md)）
+- **执行与评分解耦**：`compass grade` 给已落盘轨迹打分，判分器内容指纹自动标记过期评分，
+  多套 grader 可并排评同一批轨迹（见 [analysis.md](analysis.md)）
+- **ToolCall 协议演进**：turn_index / agent_name 升为一等字段（多 Agent），
+  `state_delta` 槽位 + 同名守卫 grader，run_id / config_hash 审计溯源（协议 2.0）
+- **评测卫生**：harness 失败移出 pass rate 分母；`score=None` 表示"未测量"而非 0 分；
+  原子写入 + 防御性读取
+- **观察维度**：中性标签（tags）与定量指标（metrics）双轨聚合，LLM 判官支持受控词表
+- **扩展面**：`external_checker` 让任何可执行文件成为 grader；grader 列表变成共享 workspace 的
+  流水线（`creates:` / `required:` 中止）
+- **过程侧判官**：`trajectory_judge`（调用链是否合理）、`groundedness`（答案是否被工具观察支撑）
+- **结果分发**：`compass site build/serve` 静态站与趋势线；`compass docs` 在终端读框架自身文档
+- **文档结构**：README 收敛为骨架，细节拆进 docs/ 专题文档 + 单页 cheatsheet

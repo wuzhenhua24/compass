@@ -306,12 +306,13 @@ graders:
 
 ### 内置评分器的 Scope 分布
 
-全部 39 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
+全部 41 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
 
 **通用 + 过程（common / transcript）**
 
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
+| `exact_match` | Code | Outcome | 输出与期望值精确比对（`expected` 文本 / `expected_json` 结构），`expected.equals` / `equals_json` 简写展开成它 |
 | `json_schema` | Code | Outcome | JSON Schema 校验，支持部分合规评分 |
 | `structure_check` | Code | Outcome | 结构化格式校验（JSON/YAML/XML/TOML） |
 | `style_convention` | Code | Outcome | 输出风格校验：模板段落、必需/禁止短语、正则模式、命名规范 |
@@ -324,6 +325,7 @@ graders:
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
 | `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3） |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
+| `external_checker` | Code | Both | 把**任何可执行文件**变成 grader（shell / 二进制 / `npm test`），契约是进程边界：env 进、stdout JSON 出、exit code 判定——见本文"子进程 Checker"一节 |
 
 **Coding Agent**
 
