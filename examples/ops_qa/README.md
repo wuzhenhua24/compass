@@ -38,7 +38,7 @@
 ```
 examples/ops_qa/
 ├── dataset.yaml               # 四类样本的通用模板（配 fixtures，可离线跑）
-├── dataset.ops-qa-bot.yaml    # 对着 ops-qa-bot 真实 docs 生成的起始数据集（跑真实 bot 用）
+├── dataset.ops-qa-bot.yaml    # 仿 ops-qa-bot docs 形态的虚构起始数据集（跑真实 bot 用）
 ├── graders.py                 # 四个领域 grader：key_facts / retrieval_hit / no_write_ops / abstention
 ├── fixtures.py                # 每题的 canned 运行（Claude stream-json wire dict）→ 离线可跑
 ├── eval.py                    # 评估编排：跑 agent → 重建 → 按类型选 grader → 报告
@@ -53,10 +53,12 @@ uv run python examples/ops_qa/eval.py
 
 用 `dataset.yaml` + `fixtures.py` 里预置的运行演示整条流水线，输出每题的 gate 通过情况与逐项得分。
 
-## 对着真实 docs 的起始数据集
+## 仿真实文档形态的起始数据集
 
-`dataset.ops-qa-bot.yaml` 是照着 `ops-qa-bot/docs/` 的真实内容生成的 19 条起始样本
-（Redis 7.2.4 / MySQL 8.0.35+MHA / Kafka 3.6.1，`key_facts` 均可在文档里查到），覆盖：
+`dataset.ops-qa-bot.yaml` 是 19 条起始样本，数据**全部虚构**，只是形态仿照一个典型
+ops-qa-bot 的 `docs/`（Redis 7.2.4 / MySQL 8.0.35+MHA / Kafka 3.6.1）。编得具体是刻意的：
+doc-grounded 问答的样本必须有可核对的事实，`key_facts` 才有东西可断言——泛泛的假数据
+校验不了。接你自己的 bot 时把这些值替换成实际文档里的即可。覆盖：
 
 - **answerable**：redis/mysql/kafka 的版本拓扑、内存告警、慢查询、备份、消费延迟等；
   外加 **nginx**——它的文档维护在飞书，所以检索走 `query_feishu_doc` 工具而非本地 `Read`

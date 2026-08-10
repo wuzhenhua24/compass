@@ -1,6 +1,12 @@
-# Ops QA Bot — 起始数据集（对着 ops-qa-bot/docs 的真实内容生成）
+# Ops QA Bot — 起始数据集（虚构数据，形态仿照一个典型 ops-qa-bot 的 docs/）
 #
-# 组件（据 docs/INDEX.md）：
+# 下面的组件、版本、拓扑、阈值全是**编的**，不对应任何真实环境。之所以编得这么
+# 具体，是因为 doc-grounded 问答的评测样本必须有可核对的事实：`key_facts` 要断言
+# "7.2.4""3 主 3 从"这种能在答案里查到的字符串，泛泛的假数据（"某个版本""若干
+# 节点"）根本没法校验，模板也就失去了示范价值。换成你自己的文档时，把这些值逐一
+# 替换即可，四类样本的结构不用动。
+#
+# 组件（对应一份假想的 docs/INDEX.md）：
 #   Redis  local  docs/redis/   （7.2.4, Cluster 3主3从, 内存告警 75%/85%）
 #   MySQL  local  docs/mysql/   （8.0.35, 一主两从 + MHA, 备份保留 14 天）
 #   Kafka  local  docs/kafka/   （3.6.1 KRaft, 5 broker, 默认副本 3）
@@ -8,10 +14,10 @@
 #
 # 这是**跑真实 bot**用的（无 fixtures）：把 eval.py 的 run_agent 换成真实调用后，
 #   uv run python examples/ops_qa/eval.py dataset.ops-qa-bot.yaml
-# key_facts 均取自文档里能查到的真实事实；请按你的实际文档校订 reference_answer。
+# key_facts 取自上面那份假想文档；接你自己的 bot 时请按实际文档校订 reference_answer。
 
 name: "Ops QA Bot — grounded starter set"
-description: "对着 ops-qa-bot 真实 docs 生成的四类样本起始数据集"
+description: "四类样本起始数据集；数据虚构，形态仿照典型 ops-qa-bot 的 docs"
 trials: 3
 
 cases:
