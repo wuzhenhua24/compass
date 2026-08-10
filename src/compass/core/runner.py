@@ -1062,6 +1062,7 @@ class Compass:
                             or getattr(grader, "version", "")
                         ),
                         metadata=grade_result.details,
+                        tags=grade_result.tags,
                         failure_tags=grade_result.failure_tags,
                         error=grade_result.error,
                     )

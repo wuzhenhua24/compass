@@ -46,6 +46,9 @@ class EvaluatorResult:
     skipped: bool = False
     skip_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Neutral observations about what was seen, emitted pass or fail.
+    # Presence-only: an absent tag means "not observed", not "false".
+    tags: list[str] = field(default_factory=list)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     error: str | None = None
 
@@ -78,6 +81,7 @@ class EvaluatorResult:
             "skipped": self.skipped,
             "skip_reason": self.skip_reason,
             "metadata": self.metadata,
+            "tags": self.tags,
             "failure_tags": self.failure_tags,
             "error": self.error,
         }
@@ -147,6 +151,17 @@ class CaseResult:
             for r in self.evaluator_results
             if r.scored and not r.skipped
         }
+
+    @property
+    def observed_tags(self) -> list[str]:
+        """Union of what this case's graders observed.
+
+        Distinct from ``tags``, which is the static classification you wrote in
+        the scenario YAML: these are emitted at grading time and describe what
+        actually happened in *this* run. Derived rather than stored, so it can
+        never drift from the grader results it summarizes.
+        """
+        return sorted({t for r in self.evaluator_results for t in r.tags})
 
 
 @dataclass
@@ -231,6 +246,7 @@ class EvalResult:
                     "breakdown": r.breakdown,
                     "duration_ms": r.duration_ms,
                     "tags": r.tags,
+                    "observed_tags": r.observed_tags,
                     "category": r.category,
                     "error": r.error,
                     "grader_fingerprint": r.grader_fingerprint,

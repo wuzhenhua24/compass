@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+import re
 from typing import Any, Type
 import uuid
 
@@ -313,6 +314,21 @@ def generate_leak_marker(prefix: str = "COMPASS_LEAK") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+def normalize_tag(tag: str) -> str:
+    """Normalize an observation tag to lowercase snake_case.
+
+    Applied at the ``GradeResult`` boundary rather than trusted to each
+    grader: tags are only useful if ``Correct Bicycle`` and
+    ``correct_bicycle`` land in the same bucket when aggregated.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", str(tag).lower()).strip("_")
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    """Normalize, de-duplicate and sort a list of observation tags."""
+    return sorted({t for t in (normalize_tag(x) for x in tags) if t})
+
+
 @dataclass
 class GradeResult:
     """Result from a grader.
@@ -322,6 +338,13 @@ class GradeResult:
     the same as ``score=0.0`` ("measured, and it is bad"), and the aggregate
     keeps them apart: an unscored grader is left out of the score denominator
     instead of silently dragging the mean toward zero.
+
+    ``tags`` are neutral observations about *what was seen*, emitted whether
+    the grader passed or failed — ``failure_tags`` only explain failures.
+    Semantics are deliberately presence-only: an absent tag means "not
+    observed", **not** "false". Reports aggregate them as counts and shares,
+    which turns a pile of scores into a behavioural profile ("62% of answers
+    cited a document", "9% showed no bicycle at all").
     """
 
     name: str = ""
@@ -337,11 +360,19 @@ class GradeResult:
 
     # Detailed results
     details: dict[str, Any] = field(default_factory=dict)
+    # Neutral observations, emitted pass or fail. Presence-only.
+    tags: list[str] = field(default_factory=list)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     reasoning: str = ""
 
     # Error handling
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        # Normalize at the boundary so no grader can leak an un-normalized tag
+        # into the aggregate.
+        if self.tags:
+            self.tags = normalize_tags(self.tags)
 
     @property
     def scored(self) -> bool:
@@ -368,6 +399,7 @@ class GradeResult:
             "weight": self.weight,
             "weighted_score": self.weighted_score,
             "details": self.details,
+            "tags": self.tags,
             "failure_tags": self.failure_tags,
             "reasoning": self.reasoning,
             "error": self.error,

@@ -601,6 +601,9 @@ def _build_record(
         "spec_fingerprint": fingerprint,
         "passed": passed,
         "score": score,
+        # Union of what the graders observed — cheap faceting without having
+        # to walk into every grade_result.
+        "tags": sorted({t for r in evaluator_results for t in r.tags}),
         "grade_results": [r.to_dict() for r in evaluator_results],
         # Files the graders produced while scoring — the visual/derived
         # evidence behind the verdict, which `details` cannot hold.

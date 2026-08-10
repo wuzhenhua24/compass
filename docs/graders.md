@@ -91,6 +91,75 @@ traces/
 
 `compass grade` 的证据落在 `grades/<set>/<trace>/`，并在评分记录的 `evidence` 字段里列出文件名。Python 侧：`ArtifactStore(trace_dir).list_grade_evidence(case_id)`。没有任何 grader 写入时，空目录会被自动清理。
 
+## 观察标签（Observed Tags）：从"失败统计"到"行为画像"
+
+`failure_tags` 回答「为什么挂了」。**观察标签**回答「看见了什么」——**通过的样本也打**，于是报告能给出行为分布，而不只是失败清单：
+
+```
+                Observed Tags (presence-only)
+┏━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓
+┃ Tag              ┃ Runs ┃ Share ┃ Pass Rate ┃
+┡━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩
+│ short_answer     │    4 │   67% │       25% │  ← 可行动：短回答通过率低
+│ cited_a_document │    3 │   50% │      100% │
+│ hedged           │    2 │   33% │        0% │
+└──────────────────┴──────┴───────┴───────────┘
+```
+
+`Pass Rate` 那一列是重点：**「打了这个标签的样本更容易挂」通常就是那条可行动的结论**，而单纯的失败标签统计给不出它。
+
+### 语义：presence-only
+
+标签**只表示"观察到"**——某个样本上没有这个标签，意思是**没观察到**，**不等于"否"**。这条约束让开放词表也能安全聚合：你可以随时新增一个标签，历史样本不会因为"缺这个标签"被误读成负例。
+
+### 在 grader 里产出标签
+
+```python
+return GradeResult(
+    name=self.name, ...,
+    passed=ok, score=score,
+    tags=["cited_a_document", "short_answer"],   # 中性观察，通过与否都打
+    failure_tags=[] if ok else ["no_citation"],  # 只在失败时解释原因
+)
+```
+
+标签在 `GradeResult` 构造时**自动归一化**为小写 snake_case 并去重排序——`"Correct Bicycle Shape!"` → `correct_bicycle_shape`。这是在边界上强制的，不依赖每个 grader 自觉：标签只有能落进同一个桶才有聚合价值。
+
+### 数据流
+
+| 层 | 字段 | 含义 |
+|---|---|---|
+| `GradeResult.tags` | grader 产出 | 这个 grader 观察到什么 |
+| `EvaluatorResult.tags` | 透传 | 同上 |
+| `CaseResult.observed_tags` | **并集**（派生属性） | 这个 case 本次运行观察到什么 |
+| `AnalysisReport.observed_tag_analysis` | 聚合 | count / share / pass_rate / 来源 grader |
+
+> **注意别和 `CaseResult.tags` 搞混**：那是你在 scenario YAML 里写死的**静态分类**（用于分桶筛选，如 `[backend, smoke]`）；`observed_tags` 是**运行时观察**。两者语义完全不同，所以用了不同名字。
+
+### LLM 判官：受控词表
+
+判官如果每次自由发挥措辞，产出的标签**跨 run 无法聚合**——那比不收集更糟。所以 `rubric` grader 的 `tags:` 配置会被直接编译进 JSON Schema 的 `enum`，判官只能从固定词表里选：
+
+```yaml
+graders:
+  - name: rubric
+    type: model
+    config:
+      criteria:
+        - name: accuracy
+          description: "答案是否准确"
+      tags:                      # 受控词表 → schema enum
+        - cited_a_document
+        - hedged
+        - refused_politely
+        - invented_a_fact
+```
+
+- **不配 `tags:` 就完全不问标签** —— 既有 rubric 配置零影响，也不多花 token。
+- 判官若无视 enum 返回了词表外的标签，会被**丢弃**——一个漏出去的标签会污染整张聚合表。
+
+`compass grade` 的评分记录里也带 `tags`（并集），方便直接用 `jq` 做筛选。
+
 ## 三层 Grader 体系
 
 ```

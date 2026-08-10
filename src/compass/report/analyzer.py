@@ -144,7 +144,10 @@ class AnalysisReport:
     agreement: dict[str, Any] = field(default_factory=dict)
     dual_axis_data: list[dict[str, Any]] = field(default_factory=list)
     category_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Static classification tags from the scenario YAML, bucketed
     tag_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Neutral observations emitted by graders at grading time, as shares
+    observed_tag_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
@@ -160,6 +163,7 @@ class AnalysisReport:
             "dual_axis_data": self.dual_axis_data,
             "category_analysis": self.category_analysis,
             "tag_analysis": self.tag_analysis,
+            "observed_tag_analysis": self.observed_tag_analysis,
         }
 
 
@@ -189,6 +193,7 @@ class EvalResultAnalyzer:
         failure_tag_analysis = self._analyze_failure_tags()
         category_analysis = self._analyze_by_category()
         tag_analysis = self._analyze_by_tag()
+        observed_tag_analysis = self._analyze_observed_tags()
         recommendations = self._generate_recommendations(
             summary, transcript_analysis, outcome_analysis,
             scope_comparison, failure_tag_analysis,
@@ -205,6 +210,7 @@ class EvalResultAnalyzer:
             dual_axis_data=dual_axis_data,
             category_analysis=category_analysis,
             tag_analysis=tag_analysis,
+            observed_tag_analysis=observed_tag_analysis,
         )
 
     # ------------------------------------------------------------------
@@ -481,6 +487,55 @@ class EvalResultAnalyzer:
             }
 
         return analysis
+
+    # ------------------------------------------------------------------
+    # Observed tag analysis
+    # ------------------------------------------------------------------
+
+    def _analyze_observed_tags(self) -> dict[str, dict[str, Any]]:
+        """Aggregate neutral observation tags into counts and shares.
+
+        Unlike ``_analyze_failure_tags``, this counts **every** task — a tag on
+        a passing run is exactly as informative. That is what turns a pile of
+        scores into a behavioural profile: "62% of answers cited a document",
+        "9% produced no bicycle at all".
+
+        Shares are over all tasks, and the semantics are presence-only: a tag
+        missing from a task means it was not observed, not that it is false.
+        Pass rate per tag is reported too, since "the runs tagged X fail more"
+        is usually the actionable finding.
+        """
+        total = len(self.results)
+        if not total:
+            return {}
+
+        tag_data: dict[str, dict[str, Any]] = {}
+        for result in self.results:
+            seen = {t for gr in result.grade_results for t in gr.tags}
+            for tag in seen:
+                entry = tag_data.setdefault(
+                    tag, {"count": 0, "passed": 0, "graders": set(), "task_ids": []}
+                )
+                entry["count"] += 1
+                entry["passed"] += int(result.passed)
+                entry["graders"].update(
+                    gr.name for gr in result.grade_results if tag in gr.tags
+                )
+                if len(entry["task_ids"]) < 10:
+                    entry["task_ids"].append(result.task_id)
+
+        return {
+            tag: {
+                "count": data["count"],
+                "share": data["count"] / total,
+                "pass_rate": data["passed"] / data["count"],
+                "graders": sorted(data["graders"]),
+                "task_ids": data["task_ids"],
+            }
+            for tag, data in sorted(
+                tag_data.items(), key=lambda x: (-x[1]["count"], x[0])
+            )
+        }
 
     # ------------------------------------------------------------------
     # Category analysis

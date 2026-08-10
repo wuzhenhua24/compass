@@ -99,8 +99,17 @@ class RubricEvaluation:
         )
 
 
-def _build_evaluation_schema(criteria: list[Criterion]) -> dict[str, Any]:
-    """Build JSON Schema for structured evaluation output."""
+def _build_evaluation_schema(
+    criteria: list[Criterion], allowed_tags: list[str] | None = None
+) -> dict[str, Any]:
+    """Build JSON Schema for structured evaluation output.
+
+    When ``allowed_tags`` is given, the schema constrains the judge's ``tags``
+    to that exact vocabulary via ``enum``. That is the whole point: a judge
+    inventing its own wording each run produces tags that cannot be aggregated
+    across runs, which is worse than not collecting them. Omit the config and
+    no tags are requested at all — no extra tokens, no behaviour change.
+    """
     criteria_properties = {}
     for criterion in criteria:
         criteria_properties[criterion.name] = {
@@ -121,9 +130,21 @@ def _build_evaluation_schema(criteria: list[Criterion]) -> dict[str, Any]:
             "additionalProperties": False,
         }
 
+    properties: dict[str, Any] = {}
+    if allowed_tags:
+        properties["tags"] = {
+            "type": "array",
+            "items": {"type": "string", "enum": list(allowed_tags)},
+            "description": (
+                "Every tag from the allowed list that is true of this output. "
+                "Omit a tag when it is not observed; do not invent new ones."
+            ),
+        }
+
     return {
         "type": "object",
         "properties": {
+            **properties,
             "overall_score": {
                 "type": "number",
                 "minimum": 0,
@@ -274,8 +295,17 @@ class RubricGrader(ModelGrader):
         # Structured prompt template (optional)
         self._template = RubricPromptTemplate.from_config(self.config)
 
+        # Controlled tag vocabulary (optional). Without one the judge is not
+        # asked for tags at all — free-form tags drift between runs and cannot
+        # be aggregated, so an open vocabulary here would be a trap.
+        self.allowed_tags = [str(t) for t in self.config.get("tags", [])]
+
         # Build schema once
-        self._schema = _build_evaluation_schema(self.criteria) if self.criteria else None
+        self._schema = (
+            _build_evaluation_schema(self.criteria, self.allowed_tags)
+            if self.criteria
+            else None
+        )
 
     def _extract_content(self, context: GradeContext) -> str | None:
         """Extract content to evaluate from context."""
@@ -352,6 +382,12 @@ class RubricGrader(ModelGrader):
                 grader_scope=self.grader_scope,
                 passed=passed,
                 score=evaluation.overall_score,
+                # Normalized and vocabulary-checked: a judge that ignores the
+                # enum cannot smuggle an unaggregatable tag into the report.
+                tags=[
+                    t for t in evaluation_data.get("tags", [])
+                    if t in self.allowed_tags
+                ],
                 reasoning=evaluation.overall_reasoning,
                 details={
                     "criteria_results": [

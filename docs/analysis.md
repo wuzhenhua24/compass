@@ -208,6 +208,20 @@ Compass 提供内置的结果分析引擎，延续 Transcript / Outcome 分离�
 
 这种对比是 Transcript / Outcome 分离设计带来的独特分析能力——只有将两个维度独立评分，才能发现"过程与结果不匹配"的深层问题。
 
+### 观察标签分布（行为画像）
+
+`analyze` 除了失败聚类，还会输出 **Observed Tags** 表——grader 在评分时打的中性观察标签，**通过的样本也计入**：
+
+```
+│ short_answer     │    4 │   67% │       25% │  ← 67% 的回答很短，而它们只有 25% 通过
+│ cited_a_document │    3 │   50% │      100% │
+│ hedged           │    2 │   33% │        0% │
+```
+
+`Pass Rate` 是可行动的那一列：**「打了这个标签的样本更容易挂」**通常就是结论本身，而失败计数给不出它。语义是 presence-only（未出现 = 未观察到，不等于"否"）。
+
+产出方式与 LLM 判官的受控词表见 [graders.md](graders.md) 的"观察标签"。结构化数据在 `AnalysisReport.observed_tag_analysis`（`count` / `share` / `pass_rate` / `graders` / `task_ids`）。
+
 ### 失败模式识别
 
 自动聚合所有失败用例中的评分器失败组合，按频率排名：

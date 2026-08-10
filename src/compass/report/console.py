@@ -5,6 +5,8 @@ analysis reports as formatted terminal output with tables, panels,
 and color-coded indicators.
 """
 
+from typing import Any
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -33,6 +35,7 @@ class ConsoleReporter:
         self._render_grader_analysis(
             "Outcome Graders", report.outcome_analysis,
         )
+        self._render_observed_tags(report.observed_tag_analysis)
         self._render_failure_patterns(report.failure_patterns)
         self._render_failure_tags(report.failure_tag_analysis)
         self._render_recommendations(report.recommendations)
@@ -296,6 +299,41 @@ class ConsoleReporter:
     # ------------------------------------------------------------------
     # Failure tags
     # ------------------------------------------------------------------
+
+    def _render_observed_tags(self, tag_analysis: dict[str, dict[str, Any]]) -> None:
+        """Render the behavioural profile: what graders observed, as shares.
+
+        Counts every task, passing or not — a tag on a successful run carries
+        as much information as one on a failure. The per-tag pass rate is the
+        actionable column: "the runs tagged X fail more often".
+        """
+        if not tag_analysis:
+            return
+
+        table = Table(title="Observed Tags (presence-only)", border_style="cyan")
+        table.add_column("Tag", style="bold")
+        table.add_column("Runs", justify="right")
+        table.add_column("Share", justify="right")
+        table.add_column("Pass Rate", justify="right")
+        table.add_column("From Graders")
+
+        for i, (tag, data) in enumerate(tag_analysis.items(), 1):
+            if i > 15:
+                break
+            pass_rate = data.get("pass_rate", 0.0)
+            style = "red" if pass_rate < 0.5 else "green" if pass_rate >= 0.9 else ""
+            table.add_row(
+                tag,
+                str(data.get("count", 0)),
+                f"{data.get('share', 0.0):.0%}",
+                f"[{style}]{pass_rate:.0%}[/{style}]" if style else f"{pass_rate:.0%}",
+                ", ".join(data.get("graders", [])),
+            )
+
+        self.console.print(table)
+        self.console.print(
+            "[dim]presence-only：标签未出现表示「未观察到」，不代表「否」[/dim]"
+        )
 
     def _render_failure_tags(self, tag_analysis: dict[str, dict]) -> None:
         """Render failure tag distribution table."""
