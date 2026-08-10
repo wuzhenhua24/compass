@@ -7,6 +7,7 @@ Analyzes grading results across multiple tasks, providing:
 - Actionable recommendations based on Transcript/Outcome score gaps
 """
 
+import math
 import statistics
 from dataclasses import dataclass, field
 from typing import Any
@@ -148,6 +149,8 @@ class AnalysisReport:
     tag_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Neutral observations emitted by graders at grading time, as shares
     observed_tag_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Grader-emitted metrics: numbers as mean ± stderr, booleans as rates
+    metrics_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
@@ -164,6 +167,7 @@ class AnalysisReport:
             "category_analysis": self.category_analysis,
             "tag_analysis": self.tag_analysis,
             "observed_tag_analysis": self.observed_tag_analysis,
+            "metrics_analysis": self.metrics_analysis,
         }
 
 
@@ -194,6 +198,7 @@ class EvalResultAnalyzer:
         category_analysis = self._analyze_by_category()
         tag_analysis = self._analyze_by_tag()
         observed_tag_analysis = self._analyze_observed_tags()
+        metrics_analysis = self._analyze_metrics()
         recommendations = self._generate_recommendations(
             summary, transcript_analysis, outcome_analysis,
             scope_comparison, failure_tag_analysis,
@@ -211,6 +216,7 @@ class EvalResultAnalyzer:
             category_analysis=category_analysis,
             tag_analysis=tag_analysis,
             observed_tag_analysis=observed_tag_analysis,
+            metrics_analysis=metrics_analysis,
         )
 
     # ------------------------------------------------------------------
@@ -536,6 +542,56 @@ class EvalResultAnalyzer:
                 tag_data.items(), key=lambda x: (-x[1]["count"], x[0])
             )
         }
+
+    def _analyze_metrics(self) -> dict[str, dict[str, Any]]:
+        """Aggregate grader-emitted metrics across tasks.
+
+        The quantitative half of "what did we observe" — tags say *what* was
+        seen, metrics say *how much*. Numbers become mean ± stderr, booleans
+        become rates, because a flag averaged as 0.83 reads as a score rather
+        than "true 83% of the time".
+
+        Only tasks that actually reported a metric enter its aggregate, so
+        ``count`` is part of the answer: a mean over 3 of 40 cases is a very
+        different claim from a mean over all 40.
+        """
+        collected: dict[str, list[Any]] = {}
+        for result in self.results:
+            for grade in result.grade_results:
+                for name, value in (grade.metrics or {}).items():
+                    collected.setdefault(name, []).append(value)
+
+        analysis: dict[str, dict[str, Any]] = {}
+        for name, values in sorted(collected.items()):
+            # bool is a subclass of int — check it first, and only call the
+            # metric a rate when *every* observation was a flag.
+            if all(isinstance(v, bool) for v in values):
+                true_count = sum(1 for v in values if v)
+                analysis[name] = {
+                    "kind": "rate",
+                    "count": len(values),
+                    "rate": true_count / len(values),
+                    "true_count": true_count,
+                }
+                continue
+
+            numbers = [float(v) for v in values]
+            mean = statistics.mean(numbers)
+            stderr = (
+                statistics.stdev(numbers) / math.sqrt(len(numbers))
+                if len(numbers) > 1
+                else 0.0
+            )
+            analysis[name] = {
+                "kind": "number",
+                "count": len(numbers),
+                "mean": mean,
+                "stderr": stderr,
+                "min": min(numbers),
+                "max": max(numbers),
+            }
+
+        return analysis
 
     # ------------------------------------------------------------------
     # Category analysis

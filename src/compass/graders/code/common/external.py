@@ -276,8 +276,6 @@ class ExternalCheckerGrader(CodeGrader):
             score = float(score)
 
         details: dict[str, Any] = dict(info.get("details") or {})
-        if info.get("metrics"):
-            details["metrics"] = info["metrics"]
         details["exit_code"] = code
 
         error = None
@@ -302,6 +300,10 @@ class ExternalCheckerGrader(CodeGrader):
             passed=passed,
             score=score,
             tags=list(info.get("tags") or []),
+            # First-class, not folded into details: the aggregate reads these,
+            # and anything the aggregate reads must not live in the checker's
+            # own namespace.
+            metrics=dict(info.get("metrics") or {}),
             failure_tags=[] if passed else ["checker_failed"],
             reasoning=str(info.get("notes") or ""),
             details=details,

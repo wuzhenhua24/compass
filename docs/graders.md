@@ -204,6 +204,33 @@ smevals 里，一个失败但没给分的 check 会让整个 Grade **unscored**�
 
 标签**只表示"观察到"**——某个样本上没有这个标签，意思是**没观察到**，**不等于"否"**。这条约束让开放词表也能安全聚合：你可以随时新增一个标签，历史样本不会因为"缺这个标签"被误读成负例。
 
+### 另一半：`metrics`（定量观察）
+
+`tags` 回答「看见了什么」（分类），`metrics` 回答「多少」（定量）。两者都是中性观察，通过与否都产出：
+
+```python
+return GradeResult(
+    ...,
+    tags=["cited_a_document"],                       # 分类
+    metrics={"word_count": 42, "cited_source": True},  # 定量
+)
+```
+
+聚合规则按类型分开——**数值算 mean ± stderr，布尔算比率**：
+
+```
+                 Grader Metrics
+┃ Metric       ┃        Value ┃       Range ┃ n ┃
+│ cited_source │          75% │    3/4 true │ 4 │   ← 布尔 → 比率
+│ precision    │ 0.150 ±0.041 │ 0.05 … 0.25 │ 4 │   ← 数值 → 均值 ± 标准误
+```
+
+把布尔平均成 `0.83` 会被读成「分数」而不是「83% 的样本为真」，所以两者分开呈现。
+
+只有**真正上报了**该 metric 的 case 进入它的聚合，`n` 因此是答案的一部分：40 个 case 里 3 个的均值，和 40 个全报的均值，是两种完全不同的断言。
+
+只有数值和布尔会被保留——字符串、嵌套对象无法聚合，会在 `GradeResult` 构造时被丢弃（它们属于 `details`）。
+
 ### 在 grader 里产出标签
 
 ```python
@@ -221,10 +248,11 @@ return GradeResult(
 
 | 层 | 字段 | 含义 |
 |---|---|---|
-| `GradeResult.tags` | grader 产出 | 这个 grader 观察到什么 |
-| `EvaluatorResult.tags` | 透传 | 同上 |
+| `GradeResult.tags` / `.metrics` | grader 产出 | 这个 grader 观察到什么 / 多少 |
+| `EvaluatorResult.tags` / `.metrics` | 透传 | 同上 |
 | `CaseResult.observed_tags` | **并集**（派生属性） | 这个 case 本次运行观察到什么 |
 | `AnalysisReport.observed_tag_analysis` | 聚合 | count / share / pass_rate / 来源 grader |
+| `AnalysisReport.metrics_analysis` | 聚合 | 数值 mean±stderr / min / max；布尔 rate；均带 count |
 
 > **注意别和 `CaseResult.tags` 搞混**：那是你在 scenario YAML 里写死的**静态分类**（用于分桶筛选，如 `[backend, smoke]`）；`observed_tags` 是**运行时观察**。两者语义完全不同，所以用了不同名字。
 

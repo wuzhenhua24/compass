@@ -49,6 +49,9 @@ class EvaluatorResult:
     # Neutral observations about what was seen, emitted pass or fail.
     # Presence-only: an absent tag means "not observed", not "false".
     tags: list[str] = field(default_factory=list)
+    # Quantitative observations: numbers aggregate as mean ± stderr,
+    # booleans as rates. Core-owned, like tags — the aggregate reads them.
+    metrics: dict[str, Any] = field(default_factory=dict)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     error: str | None = None
 
@@ -82,6 +85,7 @@ class EvaluatorResult:
             "skip_reason": self.skip_reason,
             "metadata": self.metadata,
             "tags": self.tags,
+            "metrics": self.metrics,
             "failure_tags": self.failure_tags,
             "error": self.error,
         }

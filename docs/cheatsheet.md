@@ -197,7 +197,8 @@ class MyCheck(CodeGrader):
             grader_scope=self.grader_scope,
             passed=ok,
             score=1.0 if ok else 0.0,      # 测不出来时用 None，别用 0.0
-            tags=["cited_a_doc"] if ok else [],   # 中性观察，通过也打
+            tags=["cited_a_doc"] if ok else [],   # 分类观察，通过也打
+            metrics={"word_count": 42, "cited": ok},  # 定量观察：数值→mean±stderr，布尔→比率
             failure_tags=[] if ok else ["no_keyword"],
             details={"任意结构化诊断": 1},
         )

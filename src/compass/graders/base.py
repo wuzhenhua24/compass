@@ -344,6 +344,25 @@ def normalize_tags(tags: list[str]) -> list[str]:
     return sorted({t for t in (normalize_tag(x) for x in tags) if t})
 
 
+def normalize_metrics(metrics: dict[str, Any]) -> dict[str, float | bool]:
+    """Keep only what can actually be aggregated: numbers and booleans.
+
+    A metric is a measurement to be averaged across runs. A string or a nested
+    object cannot be, and silently carrying one into the aggregate would
+    produce either a crash or a meaningless number — so it is dropped here and
+    belongs in ``details`` instead.
+    """
+    kept: dict[str, float | bool] = {}
+    for key, value in metrics.items():
+        # bool is a subclass of int: check it first or every flag becomes 1/0
+        # and loses its "report me as a rate" meaning.
+        if isinstance(value, bool):
+            kept[normalize_tag(key) or str(key)] = value
+        elif isinstance(value, (int, float)):
+            kept[normalize_tag(key) or str(key)] = float(value)
+    return kept
+
+
 @dataclass
 class GradeResult:
     """Result from a grader.
@@ -354,8 +373,10 @@ class GradeResult:
     keeps them apart: an unscored grader is left out of the score denominator
     instead of silently dragging the mean toward zero.
 
-    ``tags`` are neutral observations about *what was seen*, emitted whether
-    the grader passed or failed — ``failure_tags`` only explain failures.
+    ``tags`` and ``metrics`` are the two halves of "what did we observe":
+    tags are categorical (*what was seen*), metrics are quantitative (*how
+    much*). Both are emitted whether the grader passed or failed —
+    ``failure_tags`` only explain failures.
     Semantics are deliberately presence-only: an absent tag means "not
     observed", **not** "false". Reports aggregate them as counts and shares,
     which turns a pile of scores into a behavioural profile ("62% of answers
@@ -377,6 +398,9 @@ class GradeResult:
     details: dict[str, Any] = field(default_factory=dict)
     # Neutral observations, emitted pass or fail. Presence-only.
     tags: list[str] = field(default_factory=list)
+    # Quantitative observations, aggregated across runs: numbers become
+    # mean ± stderr, booleans become rates.
+    metrics: dict[str, float | bool] = field(default_factory=dict)
     failure_tags: list[str] = field(default_factory=list)  # Structured failure labels
     reasoning: str = ""
 
@@ -388,6 +412,8 @@ class GradeResult:
         # into the aggregate.
         if self.tags:
             self.tags = normalize_tags(self.tags)
+        if self.metrics:
+            self.metrics = normalize_metrics(self.metrics)
 
     @property
     def scored(self) -> bool:
@@ -415,6 +441,7 @@ class GradeResult:
             "weighted_score": self.weighted_score,
             "details": self.details,
             "tags": self.tags,
+            "metrics": self.metrics,
             "failure_tags": self.failure_tags,
             "reasoning": self.reasoning,
             "error": self.error,

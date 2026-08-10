@@ -224,6 +224,18 @@ Compass 提供内置的结果分析引擎，延续 Transcript / Outcome 分离�
 
 产出方式与 LLM 判官的受控词表见 [graders.md](graders.md) 的"观察标签"。结构化数据在 `AnalysisReport.observed_tag_analysis`（`count` / `share` / `pass_rate` / `graders` / `task_ids`）。
 
+### Grader 指标聚合
+
+grader 通过 `GradeResult.metrics` 产出的定量观察会按类型分别聚合——**数值 mean ± stderr，布尔比率**：
+
+```
+┃ Metric       ┃        Value ┃       Range ┃ n ┃
+│ cited_source │          75% │    3/4 true │ 4 │
+│ precision    │ 0.150 ±0.041 │ 0.05 … 0.25 │ 4 │
+```
+
+`n` 是答案的一部分：只有真正上报该 metric 的 case 进入聚合，40 个里 3 个的均值不该被读成 40 个的均值。结构化数据在 `AnalysisReport.metrics_analysis`。
+
 ### 失败模式识别
 
 自动聚合所有失败用例中的评分器失败组合，按频率排名：

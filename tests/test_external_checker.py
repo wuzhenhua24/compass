@@ -122,7 +122,10 @@ class TestResultContract:
         assert result.score == pytest.approx(0.75)
         # Normalized by the GradeResult boundary, as for any other grader
         assert result.tags == ["has_circle", "wearing_a_hat"]
-        assert result.details["metrics"] == {"elements": 3}
+        # metrics is a first-class field, not buried in the checker's details:
+        # the aggregate reads it, so it cannot live in the user namespace.
+        assert result.metrics == {"elements": 3.0}
+        assert "metrics" not in result.details
         assert result.details["raw"] == 7
         assert result.reasoning == "looks fine"
 

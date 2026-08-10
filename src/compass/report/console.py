@@ -36,6 +36,7 @@ class ConsoleReporter:
             "Outcome Graders", report.outcome_analysis,
         )
         self._render_observed_tags(report.observed_tag_analysis)
+        self._render_metrics(report.metrics_analysis)
         self._render_failure_patterns(report.failure_patterns)
         self._render_failure_tags(report.failure_tag_analysis)
         self._render_recommendations(report.recommendations)
@@ -334,6 +335,35 @@ class ConsoleReporter:
         self.console.print(
             "[dim]presence-only：标签未出现表示「未观察到」，不代表「否」[/dim]"
         )
+
+    def _render_metrics(self, metrics: dict[str, dict[str, Any]]) -> None:
+        """Render grader-emitted metrics — the quantitative half of observation.
+
+        Numbers as mean ± stderr, booleans as rates: averaging a flag into
+        "0.83" would read as a score rather than "true 83% of the time".
+        """
+        if not metrics:
+            return
+
+        table = Table(title="Grader Metrics", border_style="magenta")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value", justify="right")
+        table.add_column("Range", justify="right")
+        table.add_column("n", justify="right", style="dim")
+
+        for name, data in metrics.items():
+            if data.get("kind") == "rate":
+                value = f"{data['rate']:.0%}"
+                spread = f"{data['true_count']}/{data['count']} true"
+            else:
+                stderr = data.get("stderr", 0.0)
+                value = f"{data['mean']:.3f}"
+                if stderr:
+                    value += f" ±{stderr:.3f}"
+                spread = f"{data['min']:.3g} … {data['max']:.3g}"
+            table.add_row(name, value, spread, str(data.get("count", 0)))
+
+        self.console.print(table)
 
     def _render_failure_tags(self, tag_analysis: dict[str, dict]) -> None:
         """Render failure tag distribution table."""

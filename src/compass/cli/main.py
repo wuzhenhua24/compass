@@ -755,6 +755,7 @@ def analyze(results_path: str, output: Optional[str]):
                         weight=gr_data.get("weight", 1.0),
                         details=gr_data.get("details") or gr_data.get("metadata", {}),
                         tags=gr_data.get("tags", []),
+                        metrics=gr_data.get("metrics", {}),
                         failure_tags=gr_data.get("failure_tags", []),
                         reasoning=gr_data.get("reasoning", ""),
                         error=gr_data.get("error"),

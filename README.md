@@ -15,7 +15,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
 - **执行与评分解耦**：轨迹是不可变证据，`compass grade` 给已落盘的轨迹打分——改判分器不用重跑 Agent，多套 grader 可并排评同一批样本；判分器指纹自动标记过期评分（见 [docs/analysis.md](docs/analysis.md)）
 - **评测卫生**：harness 失败不算模型失败（移出 pass rate 分母）、未打分 ≠ 0 分（判官超时不会伪装成低分，但也不许签发"通过"）、多试验轮转采样 + 补齐语义（中断后样本均衡，pass^k 不被偏样本污染）
-- **观察标签**：grader 产出中性标签（通过的样本也打，presence-only），报告聚合成占比 + 每标签通过率——「短回答占 67%、其中只有 25% 通过」这类行为画像，失败统计给不出；LLM 判官支持受控词表（编译进 schema enum，跨 run 可聚合）
+- **观察标签与指标**：grader 产出中性标签与定量指标（通过的样本也打）——标签聚合成占比 + 每标签通过率，指标按类型聚合（数值 mean±stderr、布尔比率）——「短回答占 67%、其中只有 25% 通过」这类行为画像，失败统计给不出；LLM 判官支持受控词表（编译进 schema enum，跨 run 可聚合）
 - **子进程 Checker**：`external_checker` 让**任何可执行文件**成为 grader（shell / Go 二进制 / `npm test`），契约是进程边界（env 进、stdout JSON 出、exit code 判定），checker 无需 import Compass——扩展面从「会写 Python」扩到「会写脚本」
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
