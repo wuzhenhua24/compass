@@ -22,7 +22,6 @@ from compass.graders.model.rubric import RubricGrader
 from compass.graders.model.semantic import SemanticMatchGrader
 from compass.graders.model.vlm import VLMJudgeGrader
 
-
 # ===================================================================
 # Answer resolution
 # ===================================================================

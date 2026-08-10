@@ -4,7 +4,7 @@ from typing import Any
 
 from PIL import Image
 
-from compass.graders.base import ModelGrader, GradeContext, GradeResult, GraderScope, GraderType
+from compass.graders.base import GradeContext, GradeResult, GraderScope, GraderType, ModelGrader
 from compass.graders.registry import register_grader
 
 

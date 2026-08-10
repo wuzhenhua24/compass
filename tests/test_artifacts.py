@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -25,7 +23,6 @@ from compass.core.artifacts import (
 )
 from compass.core.transcript import Outcome, Transcript
 from compass.graders.base import GradeContext
-
 
 # ===================================================================
 # Registry tests
@@ -71,7 +68,7 @@ class TestArtifactRegistry:
                 }
 
             @classmethod
-            def from_dict(cls, data: dict[str, Any]) -> "CustomArtifact":
+            def from_dict(cls, data: dict[str, Any]) -> CustomArtifact:
                 return cls(
                     value=data.get("value", 0),
                     metadata=data.get("metadata", {}),
@@ -435,7 +432,8 @@ class TestTranscriptSaveLoadArtifacts:
                 "metadata": {},
                 "artifacts": [
                     {"artifact_type": "unknown_future_type", "data": "stuff"},
-                    {"artifact_type": "text", "content": "kept", "format": "plain", "word_count": 1},
+                    {"artifact_type": "text", "content": "kept",
+                     "format": "plain", "word_count": 1},
                 ],
             },
             "timing": {

@@ -9,17 +9,15 @@ from pathlib import Path
 import pytest
 
 from compass.core.transcript import (
+    TOOLCALL_PROTOCOL_VERSION,
     CostInfo,
     TokenUsage,
     ToolCall,
     Transcript,
-    TOOLCALL_PROTOCOL_VERSION,
-    ToolNameInfo,
-    parse_tool_name,
     format_tool_name,
+    parse_tool_name,
     validate_tool_name,
 )
-
 
 # ===================================================================
 # CostInfo tests

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from compass.adapters.base import Adapter, AgentInput, AgentOutput
 from compass.adapters.registry import register_adapter
-from compass.core.artifacts import CodeArtifact, ExecutionResult, GeneratedFile
+from compass.core.artifacts import CodeArtifact
 from compass.sandbox import get_sandbox_class
 
 

@@ -3,11 +3,16 @@
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from compass.core.metrics import TrialMetrics, calculate_metrics
+
+#: A trial body: called with no arguments, awaited for the trial's raw result
+#: tuple. Kept loose because runner and tests supply different result shapes.
+RunFn = Callable[[], Awaitable[Any]]
 
 
 @dataclass
@@ -174,7 +179,7 @@ class TrialManager:
     async def run_trials(
         self,
         task_id: str,
-        run_fn,
+        run_fn: RunFn,
         expect: str = "pass",
         expect_reason: str = "",
         input_data: dict[str, Any] | None = None,
@@ -207,7 +212,7 @@ class TrialManager:
         task_result.trials = trials
         return task_result
 
-    async def _run_sequential(self, task_id: str, run_fn) -> list[TrialResult]:
+    async def _run_sequential(self, task_id: str, run_fn: RunFn) -> list[TrialResult]:
         """Run trials sequentially."""
         results = []
         for i in range(self.num_trials):
@@ -215,7 +220,7 @@ class TrialManager:
             results.append(trial)
         return results
 
-    async def _run_parallel(self, task_id: str, run_fn) -> list[TrialResult]:
+    async def _run_parallel(self, task_id: str, run_fn: RunFn) -> list[TrialResult]:
         """Run trials in parallel with semaphore."""
         semaphore = asyncio.Semaphore(self.max_workers)
 
@@ -230,7 +235,7 @@ class TrialManager:
         self,
         task_id: str,
         trial_number: int,
-        run_fn,
+        run_fn: RunFn,
     ) -> TrialResult:
         """Execute a single trial.
 
@@ -248,7 +253,8 @@ class TrialManager:
         try:
             result = await run_fn()
 
-            # Unpack result - expecting tuple of (passed, score, grader_results, outcome, env, transcript?)
+            # Unpack result - expecting tuple of
+            # (passed, score, grader_results, outcome, env, transcript?)
             transcript_id = None
             if isinstance(result, tuple):
                 passed, score, grader_results, outcome, env, *rest = result

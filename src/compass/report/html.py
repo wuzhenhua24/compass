@@ -91,7 +91,8 @@ class HTMLReporter:
             box-sizing: border-box;
         }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                Oxygen, Ubuntu, sans-serif;
             background: #f5f5f5;
             color: #333;
             line-height: 1.6;
@@ -438,12 +439,14 @@ class HTMLReporter:
         case_items = "\n".join(
             self._render_case_item(case) for case in scenario["cases"]
         )
+        # Kept on one line in the template: whitespace inside the badge renders.
+        badge = f'{scenario["passed_cases"]}/{scenario["total_cases"]} passed'
 
         return f"""
         <div class="scenario-card">
             <div class="scenario-header">
                 <h2>{escape(scenario["name"])}</h2>
-                <span class="badge {status_class}">{scenario["passed_cases"]}/{scenario["total_cases"]} passed</span>
+                <span class="badge {status_class}">{badge}</span>
             </div>
             <div class="case-list">
                 {case_items}

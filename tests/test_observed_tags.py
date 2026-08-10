@@ -41,7 +41,7 @@ from compass.graders.base import (
     normalize_tag,
     normalize_tags,
 )
-from compass.graders.model.rubric import _build_evaluation_schema, Criterion
+from compass.graders.model.rubric import Criterion, _build_evaluation_schema
 from compass.graders.registry import register_grader
 from compass.report.analyzer import EvalResultAnalyzer, TaskEvalResult
 

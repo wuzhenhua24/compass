@@ -84,7 +84,7 @@ class TechnicalQualityGrader(CodeGrader):
             },
         )
 
-    def _run_check(self, check_type: str, image: Image.Image) -> tuple[float, dict]:
+    def _run_check(self, check_type: str, image: Image.Image) -> tuple[float, dict[str, Any]]:
         """Run a specific check."""
         match check_type:
             case "resolution":
@@ -100,13 +100,13 @@ class TechnicalQualityGrader(CodeGrader):
             case _:
                 return 1.0, {}
 
-    def _check_resolution(self, image: Image.Image) -> tuple[float, dict]:
+    def _check_resolution(self, image: Image.Image) -> tuple[float, dict[str, Any]]:
         width, height = image.size
         total_pixels = width * height
         score = 1.0 if total_pixels >= self.min_resolution else total_pixels / self.min_resolution
         return score, {"width": width, "height": height, "total_pixels": total_pixels}
 
-    def _check_sharpness(self, image: Image.Image) -> tuple[float, dict]:
+    def _check_sharpness(self, image: Image.Image) -> tuple[float, dict[str, Any]]:
         gray = image.convert("L")
         pixels = list(gray.getdata())
         width, height = gray.size
@@ -132,7 +132,7 @@ class TechnicalQualityGrader(CodeGrader):
         score = min(1.0, sharpness / self.min_sharpness)
         return score, {"sharpness_value": sharpness, "min_required": self.min_sharpness}
 
-    def _check_noise(self, image: Image.Image) -> tuple[float, dict]:
+    def _check_noise(self, image: Image.Image) -> tuple[float, dict[str, Any]]:
         gray = image.convert("L")
         pixels = list(gray.getdata())
         width, height = gray.size
@@ -158,14 +158,14 @@ class TechnicalQualityGrader(CodeGrader):
         score = max(0.0, 1.0 - noise_estimate / self.max_noise)
         return score, {"noise_estimate": noise_estimate, "max_allowed": self.max_noise}
 
-    def _check_contrast(self, image: Image.Image) -> tuple[float, dict]:
+    def _check_contrast(self, image: Image.Image) -> tuple[float, dict[str, Any]]:
         gray = image.convert("L")
         min_val, max_val = gray.getextrema()
         contrast = max_val - min_val
         score = min(1.0, contrast / self.min_contrast)
         return score, {"min_value": min_val, "max_value": max_val, "contrast": contrast}
 
-    def _check_brightness(self, image: Image.Image) -> tuple[float, dict]:
+    def _check_brightness(self, image: Image.Image) -> tuple[float, dict[str, Any]]:
         gray = image.convert("L")
         pixels = list(gray.getdata())
         avg_brightness = sum(pixels) / len(pixels) if pixels else 128

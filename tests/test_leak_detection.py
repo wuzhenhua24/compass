@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from compass.core.transcript import Outcome, Transcript, ToolCall
+from compass.core.transcript import Outcome, ToolCall, Transcript
 from compass.graders.base import (
     GradeContext,
-    GradeResult,
     GraderScope,
-    GraderType,
     LeakCheckResult,
     generate_leak_marker,
 )
 from compass.graders.registry import get_grader
-
 
 # ===================================================================
 # generate_leak_marker helper

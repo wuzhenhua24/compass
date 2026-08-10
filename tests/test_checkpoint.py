@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from compass.core.checkpoint import (
     CheckpointStore,
     RunCheckpoint,
-    find_checkpoints,
-    scenario_fingerprint,
     _case_result_to_dict,
     _dict_to_case_result,
     _safe_filename,
+    find_checkpoints,
+    scenario_fingerprint,
 )
 from compass.core.result import CaseResult, EvaluatorResult, TestStatus
-
 
 # ===================================================================
 # Helper factories
@@ -58,7 +55,6 @@ def _make_scenario():
     """Create a minimal Scenario for fingerprinting tests."""
     from compass.core.scenario import (
         AgentConfig,
-        AggregationConfig,
         GraderConfig,
         InputConfig,
         Scenario,

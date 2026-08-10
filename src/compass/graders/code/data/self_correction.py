@@ -112,7 +112,9 @@ class SelfCorrectionGrader(CodeGrader):
         if findings["retry_count"] <= self.max_retries:
             retry_score = 1.0
         else:
-            retry_score = max(0, 1 - (findings["retry_count"] - self.max_retries) / self.max_retries)
+            retry_score = max(
+                0, 1 - (findings["retry_count"] - self.max_retries) / self.max_retries
+            )
         score_components.append(retry_score)
 
         final_score = sum(score_components) / len(score_components)

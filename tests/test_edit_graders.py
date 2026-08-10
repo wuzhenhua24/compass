@@ -29,7 +29,6 @@ from compass.graders.code.image.edit_locality import EditLocalityGrader
 from compass.graders.code.image.edit_preservation import EditPreservationGrader
 from compass.graders.model.edit_correctness import EditCorrectnessGrader
 
-
 # =====================================================================
 # Fixtures
 # =====================================================================
@@ -115,7 +114,9 @@ class TestComputeDiffImage:
         extrema = diff.getextrema()
         assert all(mx == 0 for _, mx in extrema)
 
-    def test_different_images_nonzero(self, original_image: Image.Image, edited_global: Image.Image):
+    def test_different_images_nonzero(
+        self, original_image: Image.Image, edited_global: Image.Image
+    ):
         diff = compute_diff_image(original_image, edited_global)
         extrema = diff.getextrema()
         assert any(mx > 0 for _, mx in extrema)

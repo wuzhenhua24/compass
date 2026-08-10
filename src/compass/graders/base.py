@@ -9,17 +9,17 @@ Key design principle (from Anthropic "Demystifying Evals for AI Agents"):
   - Combined graders:   evaluate both together (efficiency vs quality tradeoff)
 """
 
+import re
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-import re
-from typing import Any, Type
-import uuid
+from typing import Any
 
 from PIL import Image
 
-from compass.core.artifacts import Artifact, ImageArtifact, CodeArtifact, TextArtifact
+from compass.core.artifacts import Artifact, CodeArtifact, ImageArtifact, TextArtifact
 from compass.core.transcript import Outcome, Transcript
 
 
@@ -149,7 +149,7 @@ class GradeContext:
         return ""
 
     @property
-    def tool_calls(self) -> list:
+    def tool_calls(self) -> list[Any]:
         """Shortcut: tool calls from the transcript."""
         if self.transcript is not None:
             return self.transcript.tool_calls
@@ -163,7 +163,7 @@ class GradeContext:
         return []
 
     @property
-    def state_changes(self) -> list:
+    def state_changes(self) -> list[Any]:
         """Shortcut: state changes flattened across all tool calls."""
         if self.transcript is not None:
             return self.transcript.all_state_changes()
@@ -241,7 +241,7 @@ class GradeContext:
             return self.outcome.get_artifact(TextArtifact)
         return None
 
-    def artifact(self, artifact_type: Type[Artifact]) -> Artifact | None:
+    def artifact(self, artifact_type: type[Artifact]) -> Artifact | None:
         """Generic accessor: first artifact of any registered type."""
         if self.outcome is not None:
             return self.outcome.get_artifact(artifact_type)

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from compass.core.transcript import Outcome, Transcript
 from compass.core.artifacts import TextArtifact
+from compass.core.transcript import Outcome, Transcript
 from compass.graders.base import GradeContext
 from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.model.rubric import (

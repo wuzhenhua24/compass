@@ -3,25 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from compass.adapters.llm import (
+    MODEL_PRICING,
     LLMToolCallMixin,
     ModelPricing,
-    MODEL_PRICING,
-    get_model_pricing,
     calculate_cost,
-    register_pricing,
-    load_pricing_file,
-    load_default_pricing,
-    reset_pricing,
-    extract_usage,
-    extract_openai_usage,
     extract_anthropic_usage,
     extract_google_usage,
+    extract_openai_usage,
+    extract_usage,
+    get_model_pricing,
+    load_default_pricing,
+    load_pricing_file,
+    register_pricing,
+    reset_pricing,
 )
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall
 
@@ -300,7 +299,9 @@ class TestTokenExtraction:
 
     def test_extract_usage_dispatches_by_provider(self):
         """extract_usage dispatches to correct extractor."""
-        openai_response = {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+        openai_response = {
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
         anthropic_response = {"usage": {"input_tokens": 20, "output_tokens": 10}}
 
         openai_tokens = extract_usage("openai", openai_response)

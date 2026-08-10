@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Type
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,10 @@ class Artifact(ABC):
 # Registry
 # ---------------------------------------------------------------------------
 
-_artifact_registry: dict[str, Type[Artifact]] = {}
+_artifact_registry: dict[str, type[Artifact]] = {}
 
 
-def register_artifact(artifact_type: str):
+def register_artifact(artifact_type: str) -> Callable[[type[Artifact]], type[Artifact]]:
     """Decorator to register an Artifact subclass.
 
     Example:
@@ -62,7 +63,7 @@ def register_artifact(artifact_type: str):
             ...
     """
 
-    def decorator(cls: Type[Artifact]) -> Type[Artifact]:
+    def decorator(cls: type[Artifact]) -> type[Artifact]:
         cls.artifact_type = artifact_type
         _artifact_registry[artifact_type] = cls
         return cls
@@ -70,7 +71,7 @@ def register_artifact(artifact_type: str):
     return decorator
 
 
-def get_artifact_class(artifact_type: str) -> Type[Artifact]:
+def get_artifact_class(artifact_type: str) -> type[Artifact]:
     """Look up an Artifact class by its registered type string.
 
     Raises:

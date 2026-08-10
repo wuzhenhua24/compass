@@ -4,7 +4,7 @@ from typing import Any
 
 from PIL import Image
 
-from compass.graders.base import ModelGrader, GradeContext, GradeResult, GraderScope, GraderType
+from compass.graders.base import GradeContext, GradeResult, GraderScope, GraderType, ModelGrader
 from compass.graders.registry import register_grader
 
 
@@ -104,8 +104,8 @@ class AestheticScoreGrader(ModelGrader):
             return
 
         try:
-            import torch
             import open_clip
+            import torch
 
             # Load CLIP model for feature extraction
             self._clip_model, _, self._preprocess = open_clip.create_model_and_transforms(

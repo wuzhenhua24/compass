@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
-from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
+from compass.core.result import CaseResult, EvalResult, TestStatus
 from compass.core.scenario import (
-    AggregationConfig,
-    GraderConfig,
     InputConfig,
     Scenario,
     TestCase,
@@ -16,7 +12,6 @@ from compass.graders.base import GradeResult, GraderScope, GraderType
 from compass.report.analyzer import AnalysisReport, EvalResultAnalyzer, TaskEvalResult
 from compass.report.console import ConsoleReporter
 from compass.report.html import HTMLReporter
-
 
 # ===================================================================
 # Scenario model tests

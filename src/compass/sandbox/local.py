@@ -162,11 +162,11 @@ class LocalSandbox(Sandbox):
         # Check that the resolved path is within workdir
         try:
             target.relative_to(workdir)
-        except ValueError:
+        except ValueError as exc:
             raise PathTraversalError(
                 f"Path traversal detected: '{relative_path}' resolves to "
                 f"'{target}' which is outside sandbox '{workdir}'"
-            )
+            ) from exc
 
         if must_exist and not target.exists():
             raise FileNotFoundError(f"File not found in sandbox: {relative_path}")

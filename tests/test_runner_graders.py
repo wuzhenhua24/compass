@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from compass.adapters.base import Adapter, AgentInput, AgentOutput
-from compass.adapters.registry import register_adapter, unregister_adapter
-from compass.core.artifacts import CodeArtifact, ExecutionResult, GeneratedFile
-from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
+from compass.adapters.registry import register_adapter
+from compass.core.result import EvalResult, EvaluatorResult, TestStatus
 from compass.core.runner import Compass
 from compass.core.scenario import (
     AgentConfig,
@@ -18,7 +16,6 @@ from compass.core.scenario import (
     Scenario,
     TestCase,
 )
-
 
 # ===================================================================
 # Helpers
@@ -38,7 +35,6 @@ def _make_scenario(
     metrics: MetricsConfig | None = None,
 ) -> Scenario:
     """Build a minimal Scenario for testing."""
-    from typing import Literal
     case = TestCase(
         id="case_1",
         input=case_input or InputConfig(

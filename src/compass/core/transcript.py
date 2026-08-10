@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from compass.core.artifacts import (
     Artifact,
@@ -20,6 +20,8 @@ from compass.core.artifacts import (
 from compass.core.fileio import atomic_write_json, atomic_write_text
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -240,7 +242,7 @@ class CostInfo:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CostInfo":
+    def from_dict(cls, data: dict[str, Any]) -> CostInfo:
         return cls(
             total_usd=data.get("total_usd", 0.0),
             input_cost_usd=data.get("input_cost_usd"),
@@ -273,7 +275,7 @@ class TokenUsage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TokenUsage":
+    def from_dict(cls, data: dict[str, Any]) -> TokenUsage:
         return cls(
             input_tokens=data.get("input_tokens", 0),
             output_tokens=data.get("output_tokens", 0),
@@ -327,7 +329,7 @@ class StateChange:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StateChange":
+    def from_dict(cls, data: dict[str, Any]) -> StateChange:
         """Create from dictionary."""
         return cls(
             kind=data.get("kind", ""),
@@ -454,7 +456,7 @@ class ToolCall:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ToolCall":
+    def from_dict(cls, data: dict[str, Any]) -> ToolCall:
         """Reconstruct ToolCall from dict (handles both protocol and legacy fields)."""
         tool_name = data.get("tool_name") or data.get("tool", "")
         input_data = data.get("input") or data.get("args", {})
@@ -552,14 +554,14 @@ class Outcome:
     # Artifact accessors
     # ------------------------------------------------------------------
 
-    def get_artifact(self, artifact_type: Type[Artifact]) -> Artifact | None:
+    def get_artifact(self, artifact_type: type[Artifact]) -> Artifact | None:
         """Return the first artifact matching the given type, or None."""
         for a in self.artifacts:
             if isinstance(a, artifact_type):
                 return a
         return None
 
-    def get_artifacts(self, artifact_type: Type[Artifact]) -> list[Artifact]:
+    def get_artifacts(self, artifact_type: type[Artifact]) -> list[Artifact]:
         """Return all artifacts matching the given type."""
         return [a for a in self.artifacts if isinstance(a, artifact_type)]
 
@@ -607,7 +609,7 @@ class Environment:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Environment":
+    def from_dict(cls, data: dict[str, Any]) -> Environment:
         """Create from dictionary."""
         return cls(
             model_version=data.get("model_version", ""),
@@ -1043,7 +1045,7 @@ class Transcript:
         return path
 
     @classmethod
-    def from_jsonl(cls, jsonl_content: str) -> "Transcript":
+    def from_jsonl(cls, jsonl_content: str) -> Transcript:
         """Reconstruct Transcript from JSONL event stream.
 
         Args:
@@ -1083,7 +1085,7 @@ class Transcript:
         transcript.start_time = datetime.fromtimestamp(started["ts"])
 
         # Collect tool_call events (match started with completed by call_id)
-        started_events: dict[str, dict] = {}
+        started_events: dict[str, dict[str, Any]] = {}
         for e in events:
             if e["type"] == "tool_call.started":
                 started_events[e["call_id"]] = e
@@ -1143,7 +1145,7 @@ class Transcript:
         return transcript
 
     @classmethod
-    def load_jsonl(cls, path: str | Path) -> "Transcript":
+    def load_jsonl(cls, path: str | Path) -> Transcript:
         """Load transcript from JSONL event stream file.
 
         Args:
@@ -1167,11 +1169,11 @@ class Transcript:
         return path
 
     @classmethod
-    def load(cls, path: str | Path) -> "Transcript":
+    def load(cls, path: str | Path) -> Transcript:
         """Load transcript from JSON file."""
         path = Path(path)
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
 
         # Check protocol version (warn if newer than current)
@@ -1269,7 +1271,12 @@ class TranscriptRecorder:
         self.transcript.start_time = datetime.now()
         return self.transcript
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Stop recording."""
         self.transcript.end_time = datetime.now()
         self.transcript.total_duration_ms = (time.time() - self._start_time) * 1000

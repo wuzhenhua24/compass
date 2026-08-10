@@ -177,7 +177,8 @@ class StyleConventionGrader(CodeGrader):
 
         # Length constraints (support both min_length/max_length and min_chars/max_chars)
         self.min_length = self.config.get("min_length") or self.config.get("min_chars", 0)
-        self.max_length = self.config.get("max_length") or self.config.get("max_chars", 0)  # 0 = unlimited
+        # 0 = unlimited
+        self.max_length = self.config.get("max_length") or self.config.get("max_chars", 0)
         self.min_words = self.config.get("min_words", 0)
         self.max_words = self.config.get("max_words", 0)
         self.min_lines = self.config.get("min_lines", 0)
@@ -325,7 +326,7 @@ class StyleConventionGrader(CodeGrader):
             reasoning=self._build_reasoning(violations, checks_passed, total_checks),
         )
 
-    def _check_sections(self, content: str) -> dict:
+    def _check_sections(self, content: str) -> dict[str, Any]:
         """Check for required sections."""
         violations = []
 
@@ -338,7 +339,6 @@ class StyleConventionGrader(CodeGrader):
             return s.strip().lower() if not self.case_sensitive else s.strip()
 
         found_normalized = [normalize(s) for s in found_sections]
-        required_normalized = [normalize(s) for s in self.required_sections]
 
         # Check each required section exists
         missing_sections = []
@@ -362,7 +362,10 @@ class StyleConventionGrader(CodeGrader):
             if found_indices != sorted(found_indices):
                 violations.append({
                     "type": "section_order",
-                    "message": f"Sections not in required order. Expected: {self.required_sections}",
+                    "message": (
+                        "Sections not in required order. "
+                        f"Expected: {self.required_sections}"
+                    ),
                     "severity": "medium",
                 })
 
@@ -372,7 +375,7 @@ class StyleConventionGrader(CodeGrader):
             "found_sections": found_sections,
         }
 
-    def _check_required_phrases(self, content: str) -> dict:
+    def _check_required_phrases(self, content: str) -> dict[str, Any]:
         """Check for required phrases."""
         violations = []
         check_content = content if self.case_sensitive else content.lower()
@@ -392,7 +395,7 @@ class StyleConventionGrader(CodeGrader):
 
         return {"passed": len(violations) == 0, "violations": violations}
 
-    def _check_forbidden_phrases(self, content: str) -> dict:
+    def _check_forbidden_phrases(self, content: str) -> dict[str, Any]:
         """Check for forbidden phrases."""
         violations = []
         check_content = content if self.case_sensitive else content.lower()
@@ -412,7 +415,7 @@ class StyleConventionGrader(CodeGrader):
 
         return {"passed": len(violations) == 0, "violations": violations}
 
-    def _check_required_patterns(self, content: str) -> dict:
+    def _check_required_patterns(self, content: str) -> dict[str, Any]:
         """Check for required regex patterns."""
         violations = []
 
@@ -437,7 +440,7 @@ class StyleConventionGrader(CodeGrader):
 
         return {"passed": len(violations) == 0, "violations": violations}
 
-    def _check_forbidden_patterns(self, content: str) -> dict:
+    def _check_forbidden_patterns(self, content: str) -> dict[str, Any]:
         """Check for forbidden regex patterns."""
         violations = []
 
@@ -463,7 +466,7 @@ class StyleConventionGrader(CodeGrader):
 
         return {"passed": len(violations) == 0, "violations": violations}
 
-    def _check_length_constraints(self, content: str) -> dict:
+    def _check_length_constraints(self, content: str) -> dict[str, Any]:
         """Check length constraints."""
         violations = []
         checks_performed = 0
@@ -535,7 +538,7 @@ class StyleConventionGrader(CodeGrader):
             "checks_performed": checks_performed,
         }
 
-    def _check_markdown(self, content: str) -> dict:
+    def _check_markdown(self, content: str) -> dict[str, Any]:
         """Check markdown formatting conventions."""
         violations = []
 
@@ -583,7 +586,10 @@ class StyleConventionGrader(CodeGrader):
             if bare_urls:
                 violations.append({
                     "type": "bare_url",
-                    "message": f"Found {len(bare_urls)} bare URL(s) - should use markdown link format",
+                    "message": (
+                        f"Found {len(bare_urls)} bare URL(s) - "
+                        "should use markdown link format"
+                    ),
                     "severity": "low",
                 })
 
@@ -600,7 +606,7 @@ class StyleConventionGrader(CodeGrader):
 
         return {"passed": len(violations) == 0, "violations": violations}
 
-    def _check_naming_conventions(self, content: str) -> dict:
+    def _check_naming_conventions(self, content: str) -> dict[str, Any]:
         """Check naming conventions in code."""
         violations = []
 
@@ -694,7 +700,7 @@ class StyleConventionGrader(CodeGrader):
         return {"passed": len(violations) == 0, "violations": violations}
 
     def _build_reasoning(
-        self, violations: list[dict], checks_passed: list[str], total_checks: int
+        self, violations: list[dict[str, Any]], checks_passed: list[str], total_checks: int
     ) -> str:
         """Build human-readable reasoning string."""
         if not violations:

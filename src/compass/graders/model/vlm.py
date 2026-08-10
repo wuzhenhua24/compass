@@ -22,7 +22,8 @@ class VLMJudgeGrader(ModelGrader):
     grader_type = GraderType.MODEL
     grader_scope = GraderScope.OUTCOME
 
-    DEFAULT_SYSTEM_PROMPT = """You are an image quality evaluator. Analyze the given image against the provided criteria.
+    DEFAULT_SYSTEM_PROMPT = """\
+You are an image quality evaluator. Analyze the given image against the provided criteria.
 
 For each criterion, respond with:
 - PASS if the criterion is clearly met
@@ -123,7 +124,10 @@ Finally, give an overall score from 0.0 to 1.0 based on how well the image meets
                 return {
                     "score": 0.5,
                     "criterion_results": {c: "UNKNOWN" for c in criteria},
-                    "reasoning": "PLACEHOLDER MODE - no API key configured. Results are not meaningful.",
+                    "reasoning": (
+                        "PLACEHOLDER MODE - no API key configured. "
+                        "Results are not meaningful."
+                    ),
                 }
             raise NotImplementedError(
                 "VLM API key not configured. Set OPENAI_API_KEY environment variable "
@@ -158,7 +162,8 @@ For each criterion, state PASS, PARTIAL, or FAIL with a brief explanation.
 Then provide an overall score from 0.0 to 1.0.
 
 Respond in JSON format:
-{{"score": <float>, "criterion_results": {{"<criterion>": "PASS|PARTIAL|FAIL", ...}}, "reasoning": "<explanation>"}}"""
+{{"score": <float>, "criterion_results": {{"<criterion>": "PASS|PARTIAL|FAIL", ...}}, \
+"reasoning": "<explanation>"}}"""
 
         try:
             import httpx
@@ -180,7 +185,9 @@ Respond in JSON format:
                                     {"type": "text", "text": user_prompt},
                                     {
                                         "type": "image_url",
-                                        "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                                        "image_url": {
+                                            "url": f"data:image/png;base64,{image_base64}"
+                                        },
                                     },
                                 ],
                             },
@@ -214,8 +221,10 @@ Respond in JSON format:
                     "reasoning": content,
                 }
 
-        except ImportError:
-            raise NotImplementedError("httpx is required for VLM API calls. Install with: pip install httpx")
+        except ImportError as exc:
+            raise NotImplementedError(
+                "httpx is required for VLM API calls. Install with: pip install httpx"
+            ) from exc
 
     def _image_to_base64(self, image: Image.Image) -> str:
         """Convert PIL Image to base64 string."""

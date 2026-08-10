@@ -1,14 +1,14 @@
 """Adapter registry for managing agent adapters."""
 
-from typing import Type
+
+from collections.abc import Callable
 
 from compass.adapters.base import Adapter
 
+_adapter_registry: dict[str, type[Adapter]] = {}
 
-_adapter_registry: dict[str, Type[Adapter]] = {}
 
-
-def register_adapter(name: str):
+def register_adapter(name: str) -> Callable[[type[Adapter]], type[Adapter]]:
     """Decorator to register an adapter.
 
     Args:
@@ -23,7 +23,7 @@ def register_adapter(name: str):
             ...
     """
 
-    def decorator(cls: Type[Adapter]) -> Type[Adapter]:
+    def decorator(cls: type[Adapter]) -> type[Adapter]:
         cls.name = name
         _adapter_registry[name] = cls
         return cls
@@ -31,7 +31,7 @@ def register_adapter(name: str):
     return decorator
 
 
-def get_adapter(name: str) -> Type[Adapter]:
+def get_adapter(name: str) -> type[Adapter]:
     """Get an adapter by name.
 
     Args:

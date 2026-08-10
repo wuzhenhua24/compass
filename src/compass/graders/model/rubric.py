@@ -74,7 +74,9 @@ class RubricEvaluation:
     suggestions: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_structured_output(cls, data: dict[str, Any], criteria: list[Criterion]) -> RubricEvaluation:
+    def from_structured_output(
+        cls, data: dict[str, Any], criteria: list[Criterion]
+    ) -> RubricEvaluation:
         """Parse structured output from LLM into RubricEvaluation."""
         criteria_results = []
         criteria_scores = data.get("criteria_scores", {})
@@ -208,7 +210,8 @@ def _build_evaluation_prompt(
             context_info=context_info,
         )
 
-    return f"""You are an expert evaluator. Evaluate the following content against the provided rubric.
+    return f"""\
+You are an expert evaluator. Evaluate the following content against the provided rubric.
 
 ## Evaluation Criteria
 
@@ -430,8 +433,11 @@ class RubricGrader(ModelGrader):
         """Call OpenAI API with structured output."""
         try:
             from openai import AsyncOpenAI
-        except ImportError:
-            raise ImportError("openai package required for OpenAI provider. Install with: pip install openai")
+        except ImportError as exc:
+            raise ImportError(
+                "openai package required for OpenAI provider. "
+                "Install with: pip install openai"
+            ) from exc
 
         client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -468,8 +474,11 @@ class RubricGrader(ModelGrader):
         """Call Anthropic API with tool use for structured output."""
         try:
             from anthropic import AsyncAnthropic
-        except ImportError:
-            raise ImportError("anthropic package required for Anthropic provider. Install with: pip install anthropic")
+        except ImportError as exc:
+            raise ImportError(
+                "anthropic package required for Anthropic provider. "
+                "Install with: pip install anthropic"
+            ) from exc
 
         client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 

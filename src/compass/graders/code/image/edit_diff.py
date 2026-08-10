@@ -7,6 +7,7 @@ and edited images, used by EditPreservationGrader and EditLocalityGrader.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
 
@@ -139,7 +140,7 @@ def _histogram_correlation(h1: list[int], h2: list[int]) -> float:
 
 
 def load_edit_mask(
-    context_metadata: dict,
+    context_metadata: dict[str, Any],
     image_size: tuple[int, int],
 ) -> tuple[Image.Image | None, str]:
     """Load an edit region mask from context metadata.

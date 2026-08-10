@@ -16,7 +16,6 @@ from compass.report.leaderboard import (
     slugify,
 )
 
-
 # ===================================================================
 # Helpers
 # ===================================================================
@@ -233,7 +232,10 @@ class TestSerializationAndLabels:
 class TestModelVariants:
     def _scenario(self, name="s"):
         from compass.core.scenario import (
-            AgentConfig, InputConfig, Scenario, TestCase,
+            AgentConfig,
+            InputConfig,
+            Scenario,
+            TestCase,
         )
 
         return Scenario(

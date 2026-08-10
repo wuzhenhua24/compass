@@ -45,7 +45,7 @@ class ConsoleReporter:
     # Summary
     # ------------------------------------------------------------------
 
-    def _render_summary(self, summary: dict) -> None:
+    def _render_summary(self, summary: dict[str, Any]) -> None:
         """Render summary statistics panel."""
         total = summary.get("total_tasks", 0)
         passed = summary.get("passed_tasks", 0)
@@ -96,7 +96,7 @@ class ConsoleReporter:
     # ------------------------------------------------------------------
 
     def _render_category_analysis(
-        self, category_analysis: dict[str, dict],
+        self, category_analysis: dict[str, dict[str, Any]],
     ) -> None:
         """Render per-category breakdown table."""
         if not category_analysis:
@@ -136,7 +136,7 @@ class ConsoleReporter:
     # ------------------------------------------------------------------
 
     def _render_tag_analysis(
-        self, tag_analysis: dict[str, dict],
+        self, tag_analysis: dict[str, dict[str, Any]],
     ) -> None:
         """Render per-tag breakdown table."""
         if not tag_analysis:
@@ -171,7 +171,7 @@ class ConsoleReporter:
     # Scope comparison
     # ------------------------------------------------------------------
 
-    def _render_scope_comparison(self, comparison: dict) -> None:
+    def _render_scope_comparison(self, comparison: dict[str, Any]) -> None:
         """Render Transcript vs Outcome comparison panel."""
         avg_t = comparison.get("avg_transcript_score", 0.0)
         avg_o = comparison.get("avg_outcome_score", 0.0)
@@ -179,9 +179,6 @@ class ConsoleReporter:
         description = comparison.get("description", "")
 
         bar_width = 30
-
-        t_filled = int(avg_t * bar_width)
-        o_filled = int(avg_o * bar_width)
 
         t_bar = self._score_bar(avg_t, bar_width)
         o_bar = self._score_bar(avg_o, bar_width)
@@ -210,7 +207,7 @@ class ConsoleReporter:
     # ------------------------------------------------------------------
 
     def _render_grader_analysis(
-        self, title: str, analysis: dict[str, dict],
+        self, title: str, analysis: dict[str, dict[str, Any]],
     ) -> None:
         """Render per-grader analysis table."""
         if not analysis:
@@ -261,7 +258,7 @@ class ConsoleReporter:
     # Failure patterns
     # ------------------------------------------------------------------
 
-    def _render_failure_patterns(self, patterns: list[dict]) -> None:
+    def _render_failure_patterns(self, patterns: list[dict[str, Any]]) -> None:
         """Render failure pattern table."""
         if not patterns:
             self.console.print(
@@ -365,7 +362,7 @@ class ConsoleReporter:
 
         self.console.print(table)
 
-    def _render_failure_tags(self, tag_analysis: dict[str, dict]) -> None:
+    def _render_failure_tags(self, tag_analysis: dict[str, dict[str, Any]]) -> None:
         """Render failure tag distribution table."""
         if not tag_analysis:
             return
@@ -416,7 +413,7 @@ class ConsoleReporter:
     # Dual axis scatter plot (ASCII)
     # ------------------------------------------------------------------
 
-    def _render_dual_axis_chart(self, dual_axis_data: list[dict]) -> None:
+    def _render_dual_axis_chart(self, dual_axis_data: list[dict[str, Any]]) -> None:
         """Render an ASCII scatter plot of Outcome (X) vs Transcript (Y) scores."""
         if not dual_axis_data:
             return

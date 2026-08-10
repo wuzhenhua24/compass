@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from compass.graders.model.prompt_template import RubricPromptTemplate
 
 

@@ -42,7 +42,6 @@ from compass.graders.base import (
 )
 from compass.graders.registry import register_grader
 
-
 # ===================================================================
 # Test doubles
 # ===================================================================

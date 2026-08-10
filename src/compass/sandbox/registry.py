@@ -1,13 +1,14 @@
 """Sandbox registry for managing sandbox implementations."""
 
-from typing import Type
+
+from collections.abc import Callable
 
 from compass.sandbox.base import Sandbox
 
-_sandbox_registry: dict[str, Type[Sandbox]] = {}
+_sandbox_registry: dict[str, type[Sandbox]] = {}
 
 
-def register_sandbox(name: str):
+def register_sandbox(name: str) -> Callable[[type[Sandbox]], type[Sandbox]]:
     """Decorator to register a Sandbox subclass.
 
     Args:
@@ -22,14 +23,14 @@ def register_sandbox(name: str):
             ...
     """
 
-    def decorator(cls: Type[Sandbox]) -> Type[Sandbox]:
+    def decorator(cls: type[Sandbox]) -> type[Sandbox]:
         _sandbox_registry[name] = cls
         return cls
 
     return decorator
 
 
-def get_sandbox_class(name: str) -> Type[Sandbox]:
+def get_sandbox_class(name: str) -> type[Sandbox]:
     """Look up a Sandbox class by its registered name.
 
     Args:

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript, Outcome
+from compass.core.transcript import CostInfo, Outcome, TokenUsage, ToolCall, Transcript
 from compass.graders.base import GradeContext
 from compass.graders.code.common.transcript_graders import (
     CostBudgetGrader,
     LoopDetectionGrader,
 )
-
 
 # ===================================================================
 # CostBudgetGrader tests

@@ -98,6 +98,75 @@ warn_return_any = true
 warn_unused_ignores = true
 strict = true
 
+# Optional dependencies: each is imported inside a try/except ImportError and the
+# grader degrades when it is absent, so they are deliberately not in [project]
+# dependencies. Without this, mypy reports them as missing on every dev machine.
+[[tool.mypy.overrides]]
+module = [
+    "anthropic.*",
+    "duckdb.*",
+    "jsonschema.*",
+    "open_clip.*",
+    "openai.*",
+    "tomli.*",
+    "tomllib.*",
+    "yaml.*",
+]
+ignore_missing_imports = true
+
+# ── Type-checking ratchet ──
+#
+# `mypy src/compass` is green, and 53 of 84 modules are genuinely strict-clean:
+# anything not listed below is gated, so new code and edits to clean modules
+# cannot regress. The modules listed here still carry ~110 findings and are
+# quarantined rather than fixed.
+#
+# Those findings are NOT strictness artifacts — plain mypy with every optional
+# check off still reports 86 of them. They share one root cause: values read out
+# of `dict[str, Any]` payloads (grader `findings`, `trial_metrics`, parsed JSON)
+# flow into typed positions, so mypy sees `Any`/`object` where a float or a list
+# is required. A sample was audited and none were real bugs, but mypy cannot
+# verify them either.
+#
+# Burning this list down means modelling those payloads (TypedDict) rather than
+# casting at each boundary. Do it per module: delete the entry, fix what mypy
+# then reports, keep the suite green. Do not add new entries.
+[[tool.mypy.overrides]]
+module = [
+    "compass.adapters.coding",
+    "compass.adapters.environment",
+    "compass.cli.main",
+    "compass.core.artifact_store",
+    "compass.core.result",
+    "compass.core.sweep",
+    "compass.core.transcript",
+    "compass.graders.base",
+    "compass.graders.code.coding.functional",
+    "compass.graders.code.coding.integration",
+    "compass.graders.code.coding.quality",
+    "compass.graders.code.coding.security",
+    "compass.graders.code.common.structure",
+    "compass.graders.code.common.style",
+    "compass.graders.code.common.transcript_graders",
+    "compass.graders.code.data._utils",
+    "compass.graders.code.data.data_correctness",
+    "compass.graders.code.data.query_quality",
+    "compass.graders.code.data.reasoning_trace",
+    "compass.graders.code.data.self_correction",
+    "compass.graders.code.data.sql_equivalence",
+    "compass.graders.code.image.assertions",
+    "compass.graders.code.image.edit_diff",
+    "compass.graders.code.image.edit_locality",
+    "compass.graders.code.image.technical",
+    "compass.graders.model.aesthetic",
+    "compass.graders.model.rubric",
+    "compass.graders.model.safety",
+    "compass.graders.model.semantic",
+    "compass.report.analyzer",
+    "compass.report.console",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -2,8 +2,9 @@
 
 import math
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Any
 
 
 @dataclass
@@ -149,7 +150,7 @@ class TrialMetrics:
         self,
         pass_at_k: list[int] | None = None,
         include_consistency: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Convert to a metrics dictionary.
 
         Args:

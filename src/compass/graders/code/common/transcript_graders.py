@@ -487,7 +487,9 @@ class LoopDetectionGrader(CodeGrader):
                 "severity": "critical",
             })
             max_repeats = max(p["repeats"] for p in excessive_patterns)
-            severity_scores.append(max(0.0, 1.0 - (max_repeats / self.max_sequence_repeats - 1.0) * 0.3))
+            severity_scores.append(
+                max(0.0, 1.0 - (max_repeats / self.max_sequence_repeats - 1.0) * 0.3)
+            )
         else:
             severity_scores.append(1.0)
 
@@ -531,7 +533,7 @@ class LoopDetectionGrader(CodeGrader):
             reasoning=self._build_reasoning(issues, len(tool_calls)),
         )
 
-    def _count_tools(self, tool_calls: list) -> dict[str, int]:
+    def _count_tools(self, tool_calls: list[Any]) -> dict[str, int]:
         """Count occurrences of each tool."""
         counts: dict[str, int] = {}
         for tc in tool_calls:
@@ -539,7 +541,7 @@ class LoopDetectionGrader(CodeGrader):
             counts[tool] = counts.get(tool, 0) + 1
         return counts
 
-    def _find_exact_repetitions(self, tool_calls: list) -> dict[str, int]:
+    def _find_exact_repetitions(self, tool_calls: list[Any]) -> dict[str, int]:
         """Find exact call repetitions (same tool + same input)."""
         import json
         signatures: dict[str, int] = {}
@@ -554,7 +556,7 @@ class LoopDetectionGrader(CodeGrader):
                 signatures[tc.tool] = signatures.get(tc.tool, 0) + 1
         return {k: v for k, v in signatures.items() if v > 1}
 
-    def _detect_sequence_patterns(self, tool_calls: list) -> list[dict]:
+    def _detect_sequence_patterns(self, tool_calls: list[Any]) -> list[dict[str, Any]]:
         """Detect repeating sequence patterns like A→B→C→A→B→C."""
         if len(tool_calls) < self.min_pattern_length * 2:
             return []
@@ -597,7 +599,7 @@ class LoopDetectionGrader(CodeGrader):
         detected_patterns.sort(key=lambda p: p["repeats"] * p["length"], reverse=True)
         return detected_patterns
 
-    def _find_output_repetitions(self, tool_calls: list) -> list[dict]:
+    def _find_output_repetitions(self, tool_calls: list[Any]) -> list[dict[str, Any]]:
         """Find cases where same output is produced multiple times."""
         import json
         output_map: dict[str, list[int]] = {}
@@ -626,7 +628,7 @@ class LoopDetectionGrader(CodeGrader):
 
         return sorted(repetitions, key=lambda x: x["occurrences"], reverse=True)
 
-    def _build_reasoning(self, issues: list[dict], total_calls: int) -> str:
+    def _build_reasoning(self, issues: list[dict[str, Any]], total_calls: int) -> str:
         """Build human-readable reasoning string."""
         if not issues:
             return f"No loop or wasteful patterns detected in {total_calls} tool calls"

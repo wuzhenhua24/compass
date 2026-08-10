@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from compass.core.transcript import Outcome, ToolCall, Transcript
 from compass.graders.base import GradeContext, GraderScope, GraderType
 from compass.graders.code.common.transcript_graders import TurnCountGrader
 from compass.graders.registry import _grader_registry, get_grader
-
 
 # ===================================================================
 # Helpers

@@ -9,11 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters import get_adapter, AgentInput, AgentOutput
+from compass.adapters import AgentInput, get_adapter
 from compass.core.checkpoint import CheckpointStore, scenario_fingerprint
 from compass.core.regrade import grader_fingerprint
 from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
-from compass.core.sweep import expand_sweeps
 from compass.core.scenario import (
     AggregationConfig,
     GraderConfig,
@@ -23,9 +22,10 @@ from compass.core.scenario import (
     ShortCircuitMode,
     TestCase,
 )
+from compass.core.sweep import expand_sweeps
 from compass.core.transcript import Outcome, Transcript, TranscriptRecorder
-from compass.core.trial import TrialManager, TaskResult, TrialResult
-from compass.graders import get_grader, GradeContext, GradeResult
+from compass.core.trial import TaskResult, TrialManager, TrialResult
+from compass.graders import GradeContext, get_grader
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +297,9 @@ class Compass:
         fingerprint = grader_fingerprint(scenario, case)
 
         try:
-            passed, score, evaluator_results, output_data, _, transcript = await self._run_single_trial(
+            (
+                passed, score, evaluator_results, output_data, _, transcript
+            ) = await self._run_single_trial(
                 scenario, case, run_id=run_id, config_hash=config_hash,
                 workspace=self._grade_workspace(trace_dir, case.id),
             )
@@ -458,7 +460,7 @@ class Compass:
 
         trial_key = f"{case.id}_trial{trial_number}"
 
-        async def run_fn():
+        async def run_fn() -> tuple[Any, ...]:
             result = await self._run_single_trial(
                 scenario, case, run_id=run_id, config_hash=config_hash,
                 workspace=self._grade_workspace(trace_dir, trial_key),
@@ -687,7 +689,7 @@ class Compass:
 
     def _save_trace(
         self,
-        transcript,
+        transcript: Transcript,
         trace_dir: Path,
         case_id: str,
         trace_format: str,
@@ -727,14 +729,14 @@ class Compass:
             transcript.save(trace_dir / f"{safe_case_id}.json")
 
     @staticmethod
-    def _load_reference_images(paths: dict[str, str]) -> dict:
+    def _load_reference_images(paths: dict[str, str]) -> dict[str, Any]:
         """Load PIL Images from a name-to-path mapping.
 
         Skips entries that fail to load and logs a warning.
         """
         from PIL import Image
 
-        images: dict = {}
+        images: dict[str, Any] = {}
         for name, path in paths.items():
             try:
                 images[name] = Image.open(path).copy()
@@ -1038,12 +1040,20 @@ class Compass:
 
                 # Handle both enum and string types for grader_type/grader_scope
                 if grader_type is not None:
-                    grader_type_value = grader_type.value if hasattr(grader_type, "value") else str(grader_type)
+                    grader_type_value = (
+                        grader_type.value
+                        if hasattr(grader_type, "value")
+                        else str(grader_type)
+                    )
                 else:
                     grader_type_value = config.type.value
 
                 if grader_scope is not None:
-                    grader_scope_value = grader_scope.value if hasattr(grader_scope, "value") else str(grader_scope)
+                    grader_scope_value = (
+                        grader_scope.value
+                        if hasattr(grader_scope, "value")
+                        else str(grader_scope)
+                    )
                 else:
                     grader_scope_value = "outcome"
 

@@ -53,8 +53,8 @@ def compare_values(actual: Any, expected: Any, tolerance: float = 1e-6) -> bool:
 
 
 def compare_rows(
-    actual_rows: list[dict],
-    expected_rows: list[dict],
+    actual_rows: list[dict[str, Any]],
+    expected_rows: list[dict[str, Any]],
     key_columns: list[str] | None = None,
     tolerance: float = 1e-6,
     ignore_order: bool = True,
@@ -89,7 +89,7 @@ def compare_rows(
 
     if ignore_order and key_columns:
         # Match rows by key columns
-        def get_key(row: dict) -> tuple:
+        def get_key(row: dict[str, Any]) -> tuple[Any, ...]:
             return tuple(row.get(k) for k in key_columns)
 
         actual_by_key = {get_key(r): r for r in actual_rows}
@@ -120,14 +120,16 @@ def compare_rows(
 
     elif ignore_order:
         # Sort and compare (for simple cases without key columns)
-        def sort_key(row: dict) -> tuple:
+        def sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
             return tuple(sorted(str(v) for v in row.values()))
 
         sorted_actual = sorted(actual_rows, key=sort_key)
         sorted_expected = sorted(expected_rows, key=sort_key)
 
+        # strict=False: a row-count mismatch is already recorded as a difference
+        # above, and comparison deliberately continues to surface more of them.
         for i, (actual_row, expected_row) in enumerate(
-            zip(sorted_actual, sorted_expected)
+            zip(sorted_actual, sorted_expected, strict=False)
         ):
             for col in expected_columns:
                 if not ignore_extra_columns or col in actual_row:
@@ -141,7 +143,7 @@ def compare_rows(
     else:
         # Compare in order
         for i, (actual_row, expected_row) in enumerate(
-            zip(actual_rows, expected_rows)
+            zip(actual_rows, expected_rows, strict=False)
         ):
             for col in expected_columns:
                 if not ignore_extra_columns or col in actual_row:

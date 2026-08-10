@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from compass.adapters.base import AgentInput, AgentOutput
+from compass.adapters.base import AgentInput
 from compass.adapters.coding import CodingAdapter
-from compass.adapters.registry import get_adapter, _adapter_registry
+from compass.adapters.registry import _adapter_registry, get_adapter
 from compass.core.artifacts import CodeArtifact, ExecutionResult, GeneratedFile
-
 
 # ===================================================================
 # Registry tests

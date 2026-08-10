@@ -6,7 +6,6 @@ import pytest
 
 from compass.core.trial import TaskResult, TrialManager, TrialResult
 
-
 # ===================================================================
 # TrialResult tests
 # ===================================================================

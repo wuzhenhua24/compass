@@ -9,8 +9,10 @@ from compass.core.runner import Compass
 from compass.core.scenario import (
     AggregationConfig,
     GraderConfig,
-    GraderType as ScenarioGraderType,
     ShortCircuitMode,
+)
+from compass.core.scenario import (
+    GraderType as ScenarioGraderType,
 )
 from compass.graders.base import (
     CodeGrader,
@@ -21,7 +23,6 @@ from compass.graders.base import (
     ModelGrader,
 )
 from compass.graders.registry import register_grader
-
 
 # ===================================================================
 # Test Graders (track execution order)
@@ -136,7 +137,9 @@ def compass():
 # ===================================================================
 
 
-def make_grader_config(name: str, grader_type: ScenarioGraderType, required: bool = False) -> GraderConfig:
+def make_grader_config(
+    name: str, grader_type: ScenarioGraderType, required: bool = False
+) -> GraderConfig:
     """Create a GraderConfig for testing."""
     return GraderConfig(
         type=grader_type,
@@ -422,9 +425,7 @@ class TestShortCircuitCodePass:
             make_grader_config("_test_model_fail", ScenarioGraderType.MODEL),
         ]
 
-        results = await run_graders_with_mode(
-            compass, configs, ShortCircuitMode.CODE_PASS
-        )
+        await run_graders_with_mode(compass, configs, ShortCircuitMode.CODE_PASS)
 
         # Code runs first, then Model (because Code failed)
         assert execution_log == ["code_fail", "model_pass", "model_fail"]

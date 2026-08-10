@@ -161,7 +161,7 @@ class SqlEquivalenceGrader(CodeGrader):
 
         return None
 
-    async def _execute_sql(self, sql: str) -> list[dict] | None:
+    async def _execute_sql(self, sql: str) -> list[dict[str, Any]] | None:
         """Execute SQL and return results."""
         if self.executor == "mock":
             # Mock executor expects results in executor_config

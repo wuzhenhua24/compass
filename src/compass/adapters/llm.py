@@ -11,7 +11,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from compass.core.transcript import (
     CostInfo,
@@ -399,7 +399,8 @@ def extract_usage(provider: str, response: Any) -> TokenUsage | None:
         usage = response.usage
         return TokenUsage(
             input_tokens=getattr(usage, "input_tokens", 0) or getattr(usage, "prompt_tokens", 0),
-            output_tokens=getattr(usage, "output_tokens", 0) or getattr(usage, "completion_tokens", 0),
+            output_tokens=getattr(usage, "output_tokens", 0)
+            or getattr(usage, "completion_tokens", 0),
             metadata={"provider": provider},
         )
 
@@ -433,7 +434,7 @@ class LLMToolCallMixin:
 
     def _record_llm_call(
         self,
-        agent_input: "AgentInput",
+        agent_input: AgentInput,
         *,
         provider: str,
         model: str,

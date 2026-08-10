@@ -1,17 +1,16 @@
 """Tests for scenario loading."""
 
 import tempfile
-from pathlib import Path
 
 import pytest
 
 from compass.core.scenario import (
+    EvaluatorConfig,
     ExpectedConfig,
     GraderConfig,
     GraderType,
     Scenario,
     TestCase,
-    EvaluatorConfig,
 )
 
 
@@ -548,7 +547,7 @@ class TestGetAggregationForCase:
 
     def test_uses_default_when_case_has_defaults(self):
         """Should use scenario default when case aggregation is all defaults."""
-        from compass.core.scenario import AggregationConfig, ShortCircuitMode
+        from compass.core.scenario import ShortCircuitMode
 
         scenario = Scenario.from_dict({
             "name": "Test",

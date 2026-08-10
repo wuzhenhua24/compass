@@ -13,12 +13,6 @@ Graders:
 - SelfCorrectionGrader: Assess error recovery capability
 """
 
-from compass.graders.code.data.data_correctness import DataCorrectnessGrader
-from compass.graders.code.data.query_quality import QueryQualityGrader
-from compass.graders.code.data.reasoning_trace import ReasoningTraceGrader
-from compass.graders.code.data.self_correction import SelfCorrectionGrader
-from compass.graders.code.data.sql_equivalence import SqlEquivalenceGrader
-
 # Re-export utilities for external use
 from compass.graders.code.data._utils import (
     compare_rows,
@@ -26,6 +20,11 @@ from compass.graders.code.data._utils import (
     extract_sql_from_text,
     normalize_sql,
 )
+from compass.graders.code.data.data_correctness import DataCorrectnessGrader
+from compass.graders.code.data.query_quality import QueryQualityGrader
+from compass.graders.code.data.reasoning_trace import ReasoningTraceGrader
+from compass.graders.code.data.self_correction import SelfCorrectionGrader
+from compass.graders.code.data.sql_equivalence import SqlEquivalenceGrader
 
 __all__ = [
     # Graders

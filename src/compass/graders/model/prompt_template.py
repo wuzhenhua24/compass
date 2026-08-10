@@ -11,6 +11,7 @@ LLM judge consistency and controllability.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -32,7 +33,7 @@ class RubricPromptTemplate:
     verdict_rules: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_config(cls, config: dict) -> RubricPromptTemplate:
+    def from_config(cls, config: dict[str, Any]) -> RubricPromptTemplate:
         """Create a RubricPromptTemplate from a grader config dict.
 
         Reads optional keys ``role``, ``scope_constraints``, and

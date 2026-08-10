@@ -3,25 +3,27 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any
 
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
 from compass import __version__
+from compass.adapters import list_adapters
 from compass.core.runner import Compass
 from compass.core.scenario import Scenario
-from compass.adapters import list_adapters
-from compass.report.html import HTMLReporter
 from compass.report.analyzer import EvalResultAnalyzer, TaskEvalResult, iter_case_dicts
 from compass.report.console import ConsoleReporter
+from compass.report.html import HTMLReporter
 from compass.report.site import DEFAULT_HISTORY
 
 if TYPE_CHECKING:
     from compass.core.regrade import GradeReport
+    from compass.core.result import EvalResult
+    from compass.core.transcript import Transcript
     from compass.report.leaderboard import Leaderboard
 
 
@@ -30,7 +32,7 @@ console = Console()
 
 @click.group()
 @click.version_option(version=__version__, prog_name="compass")
-def cli():
+def cli() -> None:
     """Compass - Agent QA Framework.
 
     A universal testing and evaluation framework for AI Agents.
@@ -48,7 +50,8 @@ def cli():
 @click.option("--report", "-r", type=click.Choice(["html", "json"]), help="Generate report")
 @click.option("--output", "-o", type=click.Path(), help="Report output path")
 @click.option("--trace-dir", type=click.Path(), help="Directory to save execution traces")
-@click.option("--trace-format", type=click.Choice(["json", "jsonl"]), default="json", help="Trace file format")
+@click.option("--trace-format", type=click.Choice(["json", "jsonl"]), default="json",
+              help="Trace file format")
 @click.option("--resume", is_flag=True, help="Resume from last checkpoint (requires --trace-dir)")
 @click.option(
     "--model", "-m", "models", multiple=True,
@@ -61,20 +64,20 @@ def cli():
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def test(
     scenario: str,
-    case: tuple,
-    stage: tuple,
-    category: tuple,
+    case: tuple[Any, ...],
+    stage: tuple[Any, ...],
+    category: tuple[Any, ...],
     parallel: bool,
     workers: int,
-    report: Optional[str],
-    output: Optional[str],
-    trace_dir: Optional[str],
+    report: str | None,
+    output: str | None,
+    trace_dir: str | None,
     trace_format: str,
     resume: bool,
     models: tuple[str, ...],
     model_key: str,
     verbose: bool,
-):
+) -> None:
     """Run test scenarios.
 
     SCENARIO can be a YAML file or directory containing scenario files.
@@ -163,7 +166,13 @@ def test(
                     status = "[green]PASS[/green]"
                 else:
                     status = "[red]FAIL[/red]"
-                progress.update(task, description=f"{scn.name}: {status} ({result.passed_cases}/{result.evaluated_cases})")
+                progress.update(
+                    task,
+                    description=(
+                        f"{scn.name}: {status} "
+                        f"({result.passed_cases}/{result.evaluated_cases})"
+                    ),
+                )
 
                 if verbose:
                     _print_result_details(result)
@@ -233,7 +242,7 @@ def test(
 
 
 def _model_variants(
-    scenarios: list, models: list[str], model_key: str
+    scenarios: list[Any], models: list[str], model_key: str
 ) -> list[tuple[str, Scenario]]:
     """Expand scenarios into one labelled run per model.
 
@@ -316,7 +325,7 @@ def _print_leaderboard(board: "Leaderboard") -> None:
 @click.option("--prompt", "-p", required=True, help="Prompt to evaluate against")
 @click.option("--graders", "-g", default="semantic_match", help="Comma-separated graders")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-def eval(image: str, prompt: str, graders: str, verbose: bool):
+def eval(image: str, prompt: str, graders: str, verbose: bool) -> None:
     """Evaluate a single image using graders.
 
     IMAGE is the path to the image file to evaluate.
@@ -326,8 +335,9 @@ def eval(image: str, prompt: str, graders: str, verbose: bool):
         compass eval image.png -p "landscape" -g semantic_match,aesthetic_score
     """
     from PIL import Image as PILImage
-    from compass.graders import get_grader, GradeContext, GradeResult
+
     from compass.core.transcript import Outcome
+    from compass.graders import GradeContext, GradeResult, get_grader
 
     console.print(Panel(f"[bold]Compass Image Grader[/bold]\nImage: {image}"))
 
@@ -371,13 +381,16 @@ def eval(image: str, prompt: str, graders: str, verbose: bool):
     if results:
         avg_score = sum(r.score for r in results) / len(results)
         all_passed = all(r.passed for r in results)
-        console.print(f"\n[bold]Overall:[/bold] {'[green]PASS[/green]' if all_passed else '[red]FAIL[/red]'} (avg score: {avg_score:.3f})")
+        verdict = "[green]PASS[/green]" if all_passed else "[red]FAIL[/red]"
+        console.print(
+            f"\n[bold]Overall:[/bold] {verdict} (avg score: {avg_score:.3f})"
+        )
 
 
 @cli.command()
 @click.argument("topic", required=False)
 @click.option("--all", "show_all", is_flag=True, help="Print every topic, concatenated")
-def docs(topic: Optional[str], show_all: bool) -> None:
+def docs(topic: str | None, show_all: bool) -> None:
     """Print Compass's documentation.
 
     So the terminal is enough — for a person, or for an agent driving the CLI.
@@ -434,14 +447,14 @@ def docs(topic: Optional[str], show_all: bool) -> None:
 
 
 @cli.command("list")
-def list_registered():
+def list_registered() -> None:
     """List available graders and adapters.
 
     Named ``list_registered`` rather than ``list``: a module-level function
     called ``list`` shadows the builtin for every other command in this file,
     which silently turned ``list(...)`` calls into invocations of this command.
     """
-    from compass.graders import list_graders, GraderType
+    from compass.graders import GraderType, list_graders
 
     console.print("\n[bold]Available Graders:[/bold]")
 
@@ -472,7 +485,7 @@ def list_registered():
 
 @cli.command()
 @click.argument("output", type=click.Path(), default="scenario.yaml")
-def init(output: str):
+def init(output: str) -> None:
     """Create a new scenario template."""
     template = """name: "My Test Scenario"
 description: "Description of what this scenario tests"
@@ -570,15 +583,16 @@ cases:
 )
 @click.option("--case", "-c", multiple=True, help="Only grade these case IDs")
 @click.option("--regrade", is_flag=True, help="Discard existing grades in this set and redo them")
-@click.option("--output", "-o", type=click.Path(), help="Save results as JSON (analyze/compare input)")
+@click.option("--output", "-o", type=click.Path(),
+              help="Save results as JSON (analyze/compare input)")
 @click.option("--verbose", "-v", is_flag=True, help="Show per-grader breakdown")
 def grade(
     traces: str,
     scenario: str,
-    grade_set: Optional[str],
+    grade_set: str | None,
     case: tuple[str, ...],
     regrade: bool,
-    output: Optional[str],
+    output: str | None,
     verbose: bool,
 ) -> None:
     """Grade recorded transcripts without re-running the agent.
@@ -708,7 +722,7 @@ def _print_grade_diagnostics(report: "GradeReport") -> None:
 @cli.command()
 @click.argument("results_path", type=click.Path(exists=True))
 @click.option("--output", "-o", type=click.Path(), help="Save report as JSON")
-def analyze(results_path: str, output: Optional[str]):
+def analyze(results_path: str, output: str | None) -> None:
     """Analyze evaluation results with Transcript/Outcome breakdown.
 
     RESULTS_PATH is a JSON file or directory containing evaluation result files.
@@ -814,7 +828,7 @@ def analyze(results_path: str, output: Optional[str]):
 @click.argument("results_b", type=click.Path(exists=True))
 @click.option("--output", "-o", type=click.Path(), help="Save comparison report as JSON")
 @click.option("--json", "as_json", is_flag=True, help="Print raw JSON instead of tables")
-def compare(results_a: str, results_b: str, output: Optional[str], as_json: bool):
+def compare(results_a: str, results_b: str, output: str | None, as_json: bool) -> None:
     """Paired comparison of two evaluation runs (A = baseline, B = candidate).
 
     Pairs cases by id, lists pass/fail flips in both directions, and reports
@@ -941,7 +955,7 @@ def compare(results_a: str, results_b: str, output: Optional[str], as_json: bool
 @click.argument("trace_file", type=click.Path(exists=True))
 @click.option("--steps", "-s", is_flag=True, help="Show tool call input/output details")
 @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
-def trace(trace_file: str, steps: bool, as_json: bool):
+def trace(trace_file: str, steps: bool, as_json: bool) -> None:
     """View an execution transcript.
 
     TRACE_FILE is a JSON or JSONL trace file saved by `compass test --trace-dir`.
@@ -1141,7 +1155,7 @@ def trace(trace_file: str, steps: bool, as_json: bool):
     help="Saved transcript format",
 )
 @click.option("--json", "as_json", is_flag=True, help="Print reconstructed transcript(s) as JSON")
-def import_(source: str, fmt: str, output: str | None, output_format: str, as_json: bool):
+def import_(source: str, fmt: str, output: str | None, output_format: str, as_json: bool) -> None:
     """Import an external agent trace into Compass transcript(s).
 
     SOURCE is an offline trace file (or a directory of pi sessions):
@@ -1259,7 +1273,7 @@ def _detect_trace_format(path: Path) -> str | None:
     return None
 
 
-def _print_import_summary(transcripts) -> None:
+def _print_import_summary(transcripts: list["Transcript"]) -> None:
     """Print a compact per-transcript summary table."""
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right", width=3)
@@ -1288,11 +1302,13 @@ def _print_import_summary(transcripts) -> None:
     console.print(table)
 
 
-def _save_transcripts(transcripts, output: Path, output_format: str) -> list:
+def _save_transcripts(
+    transcripts: list["Transcript"], output: Path, output_format: str
+) -> list[Any]:
     """Save transcript(s) to a file or directory; return the written paths."""
     import re
 
-    def _write(t, path: Path) -> None:
+    def _write(t: "Transcript", path: Path) -> None:
         if output_format == "jsonl":
             t.save_jsonl(path)
         else:
@@ -1315,7 +1331,7 @@ def _save_transcripts(transcripts, output: Path, output_format: str) -> list:
     return saved
 
 
-def _print_result_details(result):
+def _print_result_details(result: "EvalResult") -> None:
     """Print detailed results for a scenario."""
     for case in result.case_results:
         status = "[green]PASS[/green]" if case.passed else "[red]FAIL[/red]"
@@ -1333,7 +1349,7 @@ def _print_result_details(result):
             console.print(f"      {eval_status} {eval_result.name}: {eval_result.score:.3f}")
 
 
-def _print_summary_table(results):
+def _print_summary_table(results: list["EvalResult"]) -> None:
     """Print summary table of all results."""
     if not results:
         return
@@ -1393,7 +1409,7 @@ def _print_summary_table(results):
 
 
 @cli.group()
-def baseline():
+def baseline() -> None:
     """Manage regression testing baselines."""
     pass
 
@@ -1401,7 +1417,7 @@ def baseline():
 @baseline.command("set")
 @click.argument("trace_dir", type=click.Path(exists=True))
 @click.argument("case_id")
-def baseline_set(trace_dir: str, case_id: str):
+def baseline_set(trace_dir: str, case_id: str) -> None:
     """Set a case's current artifacts as baseline.
 
     Copies the artifacts from the latest trial of CASE_ID into
@@ -1421,7 +1437,7 @@ def baseline_set(trace_dir: str, case_id: str):
 @baseline.command("compare")
 @click.argument("trace_dir", type=click.Path(exists=True))
 @click.argument("case_id")
-def baseline_compare(trace_dir: str, case_id: str):
+def baseline_compare(trace_dir: str, case_id: str) -> None:
     """Compare current artifacts with baseline for CASE_ID."""
     from compass.core.artifact_store import ArtifactStore
 
@@ -1442,7 +1458,7 @@ def baseline_compare(trace_dir: str, case_id: str):
 
 @baseline.command("list")
 @click.argument("trace_dir", type=click.Path(exists=True))
-def baseline_list(trace_dir: str):
+def baseline_list(trace_dir: str) -> None:
     """List all baselines in TRACE_DIR."""
     baselines_dir = Path(trace_dir) / "baselines"
     if not baselines_dir.is_dir():
@@ -1473,15 +1489,16 @@ def baseline_list(trace_dir: str):
 
 
 @cli.group()
-def checkpoint():
+def checkpoint() -> None:
     """Manage evaluation checkpoints."""
     pass
 
 
 @checkpoint.command("list")
 @click.argument("search_dir", type=click.Path(exists=True), default=".")
-@click.option("--no-recursive", is_flag=True, help="Only search the given directory, not subdirectories")
-def checkpoint_list(search_dir: str, no_recursive: bool):
+@click.option("--no-recursive", is_flag=True,
+              help="Only search the given directory, not subdirectories")
+def checkpoint_list(search_dir: str, no_recursive: bool) -> None:
     """List checkpoints found under SEARCH_DIR.
 
     Searches recursively by default. Shows run ID, scenario name, status,
@@ -1547,10 +1564,12 @@ def checkpoint_list(search_dir: str, no_recursive: bool):
 
 @checkpoint.command("clean")
 @click.argument("search_dir", type=click.Path(exists=True), default=".")
-@click.option("--all", "clean_all", is_flag=True, help="Remove ALL checkpoints, not just completed ones")
+@click.option("--all", "clean_all", is_flag=True,
+              help="Remove ALL checkpoints, not just completed ones")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
-@click.option("--no-recursive", is_flag=True, help="Only search the given directory, not subdirectories")
-def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive: bool):
+@click.option("--no-recursive", is_flag=True,
+              help="Only search the given directory, not subdirectories")
+def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive: bool) -> None:
     """Remove checkpoint files to free disk space.
 
     By default only removes checkpoints with status "completed".
@@ -1571,7 +1590,7 @@ def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive
         return
 
     # Filter targets
-    targets: list = []
+    targets: list[Any] = []
     for store in stores:
         try:
             cp = store.get_checkpoint()
@@ -1592,7 +1611,10 @@ def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive
         except ValueError:
             display_dir = str(store.dir)
 
-        status_str = "[green]completed[/green]" if cp.status == "completed" else "[yellow]in_progress[/yellow]"
+        status_str = (
+            "[green]completed[/green]" if cp.status == "completed"
+            else "[yellow]in_progress[/yellow]"
+        )
         console.print(
             f"  {display_dir}  run={cp.run_id}  "
             f"scenario={cp.scenario_name}  status={status_str}  progress={cp.progress}"
@@ -1604,18 +1626,21 @@ def checkpoint_clean(search_dir: str, clean_all: bool, force: bool, no_recursive
 
     # Clean
     total_deleted = 0
-    for store, cp in targets:
+    for store, _cp in targets:
         try:
             deleted = store.clean()
             total_deleted += deleted
         except Exception as e:
             console.print(f"  [red]Error cleaning {store.dir}: {e}[/red]")
 
-    console.print(f"\n[green]Cleaned {len(targets)} checkpoint(s) ({total_deleted} files removed)[/green]")
+    console.print(
+        f"\n[green]Cleaned {len(targets)} checkpoint(s) "
+        f"({total_deleted} files removed)[/green]"
+    )
 
 
 @cli.group()
-def site():
+def site() -> None:
     """Publish results as a shareable static site."""
     pass
 
@@ -1640,7 +1665,7 @@ def site_build(
     trace_dir: str | None,
     include_details: bool,
     history: int,
-):
+) -> None:
     """Build (or refresh) a run in a static site.
 
     RESULTS is a results JSON written by `compass test --report json` or
@@ -1746,7 +1771,7 @@ def site_serve(
     name: str | None,
     trace_dir: str | None,
     include_details: bool | None,
-):
+) -> None:
     """Serve results as a site, reading from disk on every request.
 
     SOURCES are results JSON files, directories of them (``*.json``, not

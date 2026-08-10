@@ -10,7 +10,6 @@ import json
 import re
 from typing import Any
 
-from compass.core.artifacts import CodeArtifact
 from compass.graders.base import (
     CodeGrader,
     GradeContext,

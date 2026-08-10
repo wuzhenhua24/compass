@@ -424,7 +424,7 @@ class Scenario(BaseModel):
     def from_yaml(cls, path: str | Path) -> "Scenario":
         """Load scenario from YAML file."""
         path = Path(path)
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return cls.model_validate(data)
 

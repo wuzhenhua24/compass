@@ -6,7 +6,7 @@ import pytest
 
 from compass.core.artifacts import CodeArtifact, GeneratedFile
 from compass.core.transcript import Outcome
-from compass.graders.base import GradeContext, GradeResult, GraderType
+from compass.graders.base import GradeContext, GradeResult
 from compass.graders.code.coding.quality import LintGrader, TypeCheckGrader
 from compass.graders.registry import get_grader
 

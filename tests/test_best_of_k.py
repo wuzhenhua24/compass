@@ -9,7 +9,6 @@ from compass.core.result import CaseResult, EvalResult, TestStatus
 from compass.graders.base import GradeResult, GraderScope, GraderType
 from compass.report.analyzer import EvalResultAnalyzer, TaskEvalResult
 
-
 # ===================================================================
 # TrialMetrics.best_of_k
 # ===================================================================

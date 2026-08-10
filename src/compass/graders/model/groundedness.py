@@ -110,7 +110,7 @@ class GroundednessGrader(RubricGrader):
 
     # -- evidence selection -------------------------------------------------
 
-    def _evidence_calls(self, context: GradeContext) -> list:
+    def _evidence_calls(self, context: GradeContext) -> list[Any]:
         calls = context.tool_calls
         if self.evidence_tools:
             calls = [

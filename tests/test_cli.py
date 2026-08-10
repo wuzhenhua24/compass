@@ -1,11 +1,9 @@
 """Tests for CLI functionality."""
 
 import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
 
-import yaml
 import pytest
+import yaml
 
 from compass.core.scenario import Scenario
 from compass.graders import GradeContext, GradeResult, GraderType
@@ -17,13 +15,10 @@ class TestInitCommand:
     def test_init_template_is_valid_yaml(self):
         """The init template should be valid YAML."""
         # Import the template from main.py
-        from compass.cli.main import init
 
         # Extract the template string (it's defined inside the init function)
         # We need to test it by running the command
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "test_scenario.yaml"
-
+        with tempfile.TemporaryDirectory():
             # Simulate the init command by writing the template
             template = """name: "My Test Scenario"
 description: "Description of what this scenario tests"
@@ -235,8 +230,8 @@ class TestEvalCommand:
     def test_eval_uses_grader_not_evaluator(self):
         """The eval command should use graders, not evaluators."""
         # Verify the function signature uses --graders not --evaluators
+
         from compass.cli.main import eval as eval_cmd
-        import click
 
         # Get the Click command options
         param_names = [p.name for p in eval_cmd.params]
@@ -245,10 +240,10 @@ class TestEvalCommand:
 
     def test_eval_creates_grade_context_with_outcome(self):
         """The eval command should create a GradeContext with Outcome."""
-        from compass.core.transcript import Outcome
-
         # Create a mock image
         from PIL import Image
+
+        from compass.core.transcript import Outcome
         img = Image.new("RGB", (100, 100), color="red")
 
         # Create outcome
@@ -265,9 +260,10 @@ class TestEvalCommand:
     @pytest.mark.asyncio
     async def test_eval_calls_grader_grade_method(self):
         """The eval command should call grader.grade(), not evaluator.evaluate()."""
-        from compass.graders import get_grader
-        from compass.core.transcript import Outcome
         from PIL import Image
+
+        from compass.core.transcript import Outcome
+        from compass.graders import get_grader
 
         # Create mock image and context
         img = Image.new("RGB", (100, 100))
@@ -301,7 +297,7 @@ class TestListCommand:
 
     def test_list_graders_can_filter_by_type(self):
         """list_graders should support filtering by grader type."""
-        from compass.graders import list_graders, GraderType
+        from compass.graders import list_graders
 
         code_graders = list_graders(GraderType.CODE)
         model_graders = list_graders(GraderType.MODEL)

@@ -2,17 +2,16 @@
 
 import pytest
 
+from compass.core.transcript import Outcome, Transcript
 from compass.graders import get_grader
 from compass.graders.base import GradeContext
 from compass.graders.code.data import (
-    SqlEquivalenceGrader,
     DataCorrectnessGrader,
     QueryQualityGrader,
     ReasoningTraceGrader,
     SelfCorrectionGrader,
+    SqlEquivalenceGrader,
 )
-from compass.core.transcript import Outcome, Transcript, ToolCall
-
 
 # =============================================================================
 # SqlEquivalenceGrader Tests
@@ -433,7 +432,10 @@ class TestReasoningTraceGrader:
         context = GradeContext(
             prompt="test",
             outcome=Outcome(output_data={
-                "reasoning": "The first query failed with an error. Let me retry with a different approach.",
+                "reasoning": (
+                    "The first query failed with an error. "
+                    "Let me retry with a different approach."
+                ),
                 "sql": "SELECT * FROM users",
             }),
         )

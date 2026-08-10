@@ -1,14 +1,16 @@
 """Grader registry for managing grader plugins."""
 
-from typing import Type
+
+from collections.abc import Callable
 
 from compass.graders.base import Grader, GraderType
 
+_grader_registry: dict[str, type[Grader]] = {}
 
-_grader_registry: dict[str, Type[Grader]] = {}
 
-
-def register_grader(name: str, grader_type: GraderType | None = None):
+def register_grader(
+    name: str, grader_type: GraderType | None = None
+) -> Callable[[type[Grader]], type[Grader]]:
     """Decorator to register a grader.
 
     Args:
@@ -24,7 +26,7 @@ def register_grader(name: str, grader_type: GraderType | None = None):
             ...
     """
 
-    def decorator(cls: Type[Grader]) -> Type[Grader]:
+    def decorator(cls: type[Grader]) -> type[Grader]:
         cls.name = name
         if grader_type:
             cls.grader_type = grader_type
@@ -34,7 +36,7 @@ def register_grader(name: str, grader_type: GraderType | None = None):
     return decorator
 
 
-def get_grader(name: str) -> Type[Grader]:
+def get_grader(name: str) -> type[Grader]:
     """Get a grader by name.
 
     Args:

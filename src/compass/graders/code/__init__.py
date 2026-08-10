@@ -8,16 +8,6 @@ Organized by agent type:
 """
 
 # Common graders
-from compass.graders.code.common import (
-    CostBudgetGrader,
-    EfficiencyGrader,
-    JsonSchemaGrader,
-    LatencyBudgetGrader,
-    SqlSyntaxGrader,
-    StructureCheckGrader,
-    ToolUsageGrader,
-)
-
 # Coding Agent graders
 from compass.graders.code.coding import (
     DiffAccuracyGrader,
@@ -28,6 +18,15 @@ from compass.graders.code.coding import (
     SecurityScanGrader,
     TestRunnerGrader,
     TypeCheckGrader,
+)
+from compass.graders.code.common import (
+    CostBudgetGrader,
+    EfficiencyGrader,
+    JsonSchemaGrader,
+    LatencyBudgetGrader,
+    SqlSyntaxGrader,
+    StructureCheckGrader,
+    ToolUsageGrader,
 )
 
 # Data Agent graders

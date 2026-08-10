@@ -2,6 +2,7 @@
 
 import pytest
 
+from compass.core.transcript import Outcome
 from compass.graders import get_grader
 from compass.graders.base import GradeContext
 from compass.graders.code.common.structure import (
@@ -9,8 +10,6 @@ from compass.graders.code.common.structure import (
     SqlSyntaxGrader,
     StructureCheckGrader,
 )
-from compass.core.transcript import Outcome
-
 
 # =============================================================================
 # JsonSchemaGrader Tests

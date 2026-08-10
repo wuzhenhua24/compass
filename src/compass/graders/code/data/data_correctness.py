@@ -95,7 +95,7 @@ class DataCorrectnessGrader(CodeGrader):
         return None
 
     def _compare_dict_results(
-        self, actual: dict, expected: dict
+        self, actual: dict[str, Any], expected: dict
     ) -> GradeResult:
         """Compare dictionary results."""
         errors = []
@@ -152,7 +152,7 @@ class DataCorrectnessGrader(CodeGrader):
         )
 
     def _compare_list_results(
-        self, actual: list, expected: list
+        self, actual: list[Any], expected: list
     ) -> GradeResult:
         """Compare list results."""
         match, differences = compare_rows(

@@ -14,7 +14,7 @@ from compass.graders.base import CodeGrader, GradeContext, GradeResult, GraderSc
 from compass.graders.registry import register_grader
 
 
-def _extract_content(context: GradeContext, source: str) -> str | dict | None:
+def _extract_content(context: GradeContext, source: str) -> str | dict[str, Any] | None:
     """Extract content from context based on source specification.
 
     Args:
@@ -150,7 +150,7 @@ class JsonSchemaGrader(CodeGrader):
         if isinstance(self.schema, str):
             import os
             if os.path.exists(self.schema):
-                with open(self.schema, "r", encoding="utf-8") as f:
+                with open(self.schema, encoding="utf-8") as f:
                     self.schema = json.load(f)
             else:
                 # Treat as inline JSON string
@@ -160,7 +160,7 @@ class JsonSchemaGrader(CodeGrader):
         if self.strict and isinstance(self.schema, dict):
             self._apply_strict_mode(self.schema)
 
-    def _apply_strict_mode(self, schema: dict) -> None:
+    def _apply_strict_mode(self, schema: dict[str, Any]) -> None:
         """Recursively set additionalProperties: false for objects."""
         if schema.get("type") == "object":
             schema.setdefault("additionalProperties", False)
@@ -190,8 +190,8 @@ class JsonSchemaGrader(CodeGrader):
         return text
 
     def _get_schema_fields(
-        self, schema: dict, prefix: str = "", required_fields: set | None = None
-    ) -> list[dict]:
+        self, schema: dict[str, Any], prefix: str = "", required_fields: set[Any] | None = None
+    ) -> list[dict[str, Any]]:
         """Extract all fields from schema with their metadata.
 
         Returns list of field info dicts with keys:
@@ -233,18 +233,19 @@ class JsonSchemaGrader(CodeGrader):
 
         return fields
 
-    def _categorize_errors(self, errors: list, data: Any) -> dict:
+    def _categorize_errors(self, errors: list[Any], data: Any) -> dict[str, Any]:
         """Categorize validation errors by type and field.
 
         Returns:
             {
                 "by_field": {"field_path": [errors]},
-                "by_type": {"missing": [...], "type_error": [...], "constraint": [...], "other": [...]},
+                "by_type": {"missing": [...], "type_error": [...],
+                            "constraint": [...], "other": [...]},
                 "failed_fields": set of field paths that failed,
             }
         """
-        by_field: dict[str, list] = {}
-        by_type: dict[str, list] = {
+        by_field: dict[str, list[Any]] = {}
+        by_type: dict[str, list[Any]] = {
             "missing": [],      # Required field missing
             "type_error": [],   # Wrong type
             "constraint": [],   # Constraint violation (min, max, pattern, etc.)
@@ -295,8 +296,8 @@ class JsonSchemaGrader(CodeGrader):
         }
 
     def _calculate_partial_score(
-        self, schema_fields: list[dict], failed_fields: set[str], data: Any
-    ) -> tuple[float, dict]:
+        self, schema_fields: list[dict[str, Any]], failed_fields: set[str], data: Any
+    ) -> tuple[float, dict[str, Any]]:
         """Calculate partial compliance score.
 
         Returns:
@@ -333,7 +334,11 @@ class JsonSchemaGrader(CodeGrader):
             })
 
         score = earned_weight / total_weight if total_weight > 0 else 1.0
-        return score, {"fields": field_results, "total_weight": total_weight, "earned_weight": earned_weight}
+        return score, {
+            "fields": field_results,
+            "total_weight": total_weight,
+            "earned_weight": earned_weight,
+        }
 
     def _get_nested_value(self, data: Any, path: str) -> Any:
         """Get nested value from data using dot-separated path."""
@@ -409,7 +414,10 @@ class JsonSchemaGrader(CodeGrader):
 
         # No errors - perfect score
         if not errors:
-            schema_fields = self._get_schema_fields(self.schema) if isinstance(self.schema, dict) else []
+            schema_fields = (
+                self._get_schema_fields(self.schema)
+                if isinstance(self.schema, dict) else []
+            )
             return GradeResult(
                 name=self.name,
                 grader_type=self.grader_type,
@@ -440,7 +448,10 @@ class JsonSchemaGrader(CodeGrader):
             field_details = None
         else:
             # Partial or weighted scoring
-            schema_fields = self._get_schema_fields(self.schema) if isinstance(self.schema, dict) else []
+            schema_fields = (
+                self._get_schema_fields(self.schema)
+                if isinstance(self.schema, dict) else []
+            )
             score, field_details = self._calculate_partial_score(
                 schema_fields, error_analysis["failed_fields"], data
             )
@@ -510,7 +521,8 @@ class JsonSchemaGrader(CodeGrader):
             reasoning = f"Schema validation failed with {len(errors)} error(s)"
         else:
             reasoning = (
-                f"Partial compliance: {field_compliance['passed']}/{field_compliance['total']} fields valid "
+                f"Partial compliance: {field_compliance['passed']}"
+                f"/{field_compliance['total']} fields valid "
                 f"(score: {score:.2f}, threshold: {self.pass_threshold})"
             )
 
@@ -834,8 +846,8 @@ class StructureCheckGrader(CodeGrader):
         elif self.format == "yaml":
             try:
                 import yaml
-            except ImportError:
-                raise ImportError("pyyaml not installed. Run: pip install pyyaml")
+            except ImportError as exc:
+                raise ImportError("pyyaml not installed. Run: pip install pyyaml") from exc
             return yaml.safe_load(content)
 
         elif self.format == "toml":
@@ -844,15 +856,15 @@ class StructureCheckGrader(CodeGrader):
             except ImportError:
                 try:
                     import tomli as tomllib  # Fallback
-                except ImportError:
-                    raise ImportError("tomli not installed. Run: pip install tomli")
+                except ImportError as exc:
+                    raise ImportError("tomli not installed. Run: pip install tomli") from exc
             return tomllib.loads(content)
 
         elif self.format == "xml":
             try:
                 import xml.etree.ElementTree as ET
-            except ImportError:
-                raise ImportError("xml.etree not available")
+            except ImportError as exc:
+                raise ImportError("xml.etree not available") from exc
             return ET.fromstring(content)
 
         raise ValueError(f"Unknown format: {self.format}")
@@ -871,7 +883,6 @@ class StructureCheckGrader(CodeGrader):
             return []
 
         try:
-            import jsonschema
             from jsonschema import Draft7Validator
         except ImportError:
             return ["jsonschema not installed for schema validation"]

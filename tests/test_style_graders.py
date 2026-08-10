@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from compass.core.transcript import Transcript, Outcome
+from compass.core.transcript import Outcome, Transcript
 from compass.graders.base import GradeContext
 from compass.graders.code.common.style import StyleConventionGrader
 
@@ -556,5 +556,6 @@ I'm not sure, but here are some thoughts.
         result = await grader.grade(context)
 
         assert "content_stats" in result.details
-        assert result.details["content_stats"]["words"] == 7  # Word one two three four. Second line.
+        # Word one two three four. Second line.
+        assert result.details["content_stats"]["words"] == 7
         assert result.details["content_stats"]["lines"] == 2

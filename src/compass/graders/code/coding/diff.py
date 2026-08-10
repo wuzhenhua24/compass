@@ -70,7 +70,10 @@ class DiffAccuracyGrader(CodeGrader):
                 grader_scope=self.grader_scope,
                 passed=False,
                 score=0.0,
-                error="No reference available (need reference_artifact or metadata['expected_files'])",
+                error=(
+                    "No reference available "
+                    "(need reference_artifact or metadata['expected_files'])"
+                ),
             )
 
         # Build lookup from generated files
