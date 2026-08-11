@@ -544,3 +544,73 @@ class TestLoopDetectionIgnoresLLMTurns:
 
         assert result.passed is True
         assert result.details["total_tool_calls"] == 0
+
+
+class TestCostBudgetWithCachedTokens:
+    """Regression: making total_tokens honest about cache broke max_tokens.
+
+    Before cached traffic was counted, `total_tokens` was implicitly "uncached
+    tokens" and the 100k default was calibrated against that. Counting the
+    cache changed what an existing knob compared, and a clean four-turn Claude
+    Code run — nine cents, 93 fresh tokens, 322k of cache reads — started
+    failing its budget as a runaway.
+    """
+
+    @staticmethod
+    def _context(*, cost, fresh, cached):
+        transcript = Transcript(task_id="t", trial_id="t")
+        transcript.tool_calls = [
+            ToolCall(
+                tool_name="llm.generation",
+                tool_type="llm",
+                cost=CostInfo(total_usd=cost),
+                tokens=TokenUsage(
+                    input_tokens=fresh, output_tokens=0, cache_read_tokens=cached
+                ),
+            )
+        ]
+        return GradeContext(transcript=transcript, outcome=Outcome())
+
+    # Numbers from a real `run.py -m haiku -c fix_rounding`.
+    REAL = {"cost": 0.0890, "fresh": 93, "cached": 321_966}
+
+    @pytest.mark.asyncio
+    async def test_a_clean_cached_run_stays_within_budget(self):
+        result = await CostBudgetGrader({"max_cost_usd": 1.00}).grade(
+            self._context(**self.REAL)
+        )
+        assert result.passed is True
+
+    @pytest.mark.asyncio
+    async def test_details_report_the_bill_and_the_verdict_separately(self):
+        result = await CostBudgetGrader({"max_cost_usd": 1.00}).grade(
+            self._context(**self.REAL)
+        )
+        assert result.details["total_tokens"] == 322_059    # what it processed
+        assert result.details["cached_tokens"] == 321_966
+        assert result.details["budgeted_tokens"] == 93      # what it is judged on
+
+    @pytest.mark.asyncio
+    async def test_fresh_tokens_still_blow_the_budget(self):
+        """The guard must not be blunted — only pointed at the right number."""
+        result = await CostBudgetGrader({"max_tokens": 1000}).grade(
+            self._context(cost=0.01, fresh=5000, cached=0)
+        )
+        assert result.passed is False
+        assert "token_exceeded" in result.failure_tags
+
+    @pytest.mark.asyncio
+    async def test_count_cached_tokens_opts_back_in(self):
+        result = await CostBudgetGrader(
+            {"max_cost_usd": 1.00, "count_cached_tokens": True}
+        ).grade(self._context(**self.REAL))
+        assert result.passed is False
+        assert result.details["budgeted_tokens"] == 322_059
+
+    @pytest.mark.asyncio
+    async def test_cost_is_still_the_real_spend_guard(self):
+        result = await CostBudgetGrader({"max_cost_usd": 0.05}).grade(
+            self._context(**self.REAL)
+        )
+        assert result.passed is False
+        assert "cost_exceeded" in result.failure_tags

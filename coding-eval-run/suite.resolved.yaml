@@ -1,0 +1,206 @@
+# 编程 Agent 评测套件 —— 在你自己的项目上比不同模型 / Prompt
+#
+# 这是要复制走的那份。`coding.yaml` 是两条用例的离线演示，这份是完整形状。
+#
+#   uv run python examples/coding_agent/check.py    # 先验用例（红绿自检）
+#   compass test examples/coding_agent/suite.yaml -m opus -m sonnet
+#
+# 换成你自己的项目要改三处：agent.config.repo、每条 case 的 prompt、以及
+# grader_tests/ 下对应的验收测试。其余照抄。
+#
+# ── 一条铁律 ───────────────────────────────────────────────────────────
+# 验收测试断言了什么接口，prompt 里就必须写清什么接口。测试写
+# `release(stock, sku, quantity)` 而 prompt 只说"加个还库存的功能"，那你
+# 测的是猜函数名的运气，不是工程能力。
+# ──────────────────────────────────────────────────────────────────────
+
+name: "编程 Agent 评测套件"
+description: "同一批需求与 bug，比不同模型 / Prompt 谁做得更对、更稳、更省"
+
+agent:
+  adapter: claude_code
+  config:
+    repo: "/Users/zhenhua/Documents/gitpro/compass/coding-eval-run/repo"           # ← 你的项目；run.py 会填
+    permission_mode: acceptEdits
+    allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash(python:*)"]
+    max_turns: 40
+    timeout: 900
+    # 原始 stream-json 落盘。一次真实运行很贵，而 importer 只映射它认识的事件
+    # 类型——没映射的会计数进 transcript.metadata["unhandled_events"]，但不留
+    # payload。真撞上限流（订阅制跑长对比很可能撞上）时，原始事件在这里，
+    # 不用重跑。也能用 `compass import` 免费重放这次运行。
+    save_stream_to: "/Users/zhenhua/Documents/gitpro/compass/coding-eval-run/streams"
+
+defaults:
+  # 先用 1 跑通链路。真要比模型/Prompt 时调到 3+，用 pass^k 看稳定性——
+  # Claude Code 非确定性很大，单次结果是噪声。
+  trials: 1
+
+# ── 所有 case 共用的过程侧检查 ─────────────────────────────────────────
+# 这些是领域无关的，框架自带。阈值是**占位符**：先不设或放宽跑十来条，
+# 看真实分布再定。抄别人的阈值只会得到一串关于别人项目的自信数字。
+default_graders:
+  - name: state_delta
+    type: code
+    gate: true
+    config:
+      forbid:
+        - {kind: file, target: "tests/*"}   # 不许改测试让测试变绿
+  - name: cost_budget
+    type: code
+    config: {max_cost_usd: 1.00}
+  - name: turn_count
+    type: code
+    config: {max_turns: 25}
+  - name: loop_detection
+    type: code
+    config: {max_exact_repetitions: 2, check_output_repetition: false}
+  - name: tool_usage
+    type: code
+    config: {max_tool_calls: 60, forbidden_tools: ["WebFetch", "WebSearch"]}
+
+default_aggregation:
+  pass_threshold: 0.75
+
+# 每条 case 的正确性由两个 gate 决定：
+#   ① 隐藏验收测试通过（grader_tests/，agent 读不到也改不了）
+#   ② 项目自带的测试套件仍然全绿（回归守卫）
+# 想省字可以把这两条搬进 default_graders——写在 case 里是为了让
+# /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_<id>.py 这个对应关系一眼可见。
+cases:
+
+  # ── 改 bug · 明确 ────────────────────────────────────────────────────
+  # 有复现步骤、改一处。地板题：任何能上线的 agent 都该过。
+  - id: fix_rounding
+    description: "改 bug（明确）：金额舍入留下不足一分的尾数"
+    input:
+      prompt: |
+        pricing.py 的 line_total 用浮点乘法，会留下不足一分的尾数
+        （19.99 x 3 得到 59.969999999999999）。改成按分四舍五入返回。
+        注意 0.125 这种正好落在半分上的值应该进位到 0.13。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_fix_rounding.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 30}}
+
+  # ── 改 bug · 需要定位 ────────────────────────────────────────────────
+  # 症状报在 A（订单金额），根因在 B（promo 的边界判断）。
+  # 测的是读代码定位的能力，不是改代码的能力。
+  - id: bug_locate_promo_boundary
+    description: "改 bug（需定位）：促销码在阈值边界上不生效"
+    input:
+      prompt: |
+        客服反馈：一笔小计正好 200.00 的订单，用 BULK20 促销码没有打折，
+        但 200.01 的订单可以。BULK20 的规则是"满 200 减 20%"，所以
+        正好 200 应该算满足。
+
+        请修好它。注意规则表里其它促销码可能有同样的问题。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_bug_locate_promo_boundary.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 20}}
+
+  # ── 需求 · 增量 ──────────────────────────────────────────────────────
+  # 在现有模块加个函数，接口由需求给定。
+  - id: add_discount
+    description: "需求（增量）：新增会员等级折扣"
+    input:
+      prompt: |
+        在 pricing.py 里新增 apply_discount(total, tier)：按会员等级打折后
+        返回订单金额。gold 减 15%、silver 减 10%、其它等级不打折；结果保留
+        两位小数（四舍五入，不要银行家舍入）；total 为负时抛 ValueError。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_add_discount.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 40}}
+
+  # ── 需求 · 跨模块 ────────────────────────────────────────────────────
+  # 要同时改 inventory 和 orders，还要守住 inventory 一直声明的不可变约定。
+  # prompt 里写死了两个函数签名——见文件头那条铁律。
+  - id: feature_cross_module_cancel
+    description: "需求（跨模块）：取消订单，把库存还回去"
+    input:
+      prompt: |
+        下单可以扣库存，但没有取消的路径。请补上：
+
+        1. inventory.py 新增 release(stock, sku, quantity) —— reserve 的逆操作，
+           返回更新后的库存 map。数量不是正数时抛 ValueError。
+        2. orders.py 新增 cancel_order(lines, stock) —— 把整单占用的库存还回去，
+           返回更新后的库存 map。
+
+        两个函数都必须遵守这个模块一贯的约定：**不原地修改入参**，并且
+        任一行非法时整单拒绝、什么都不改（和 place_order 的原子性一致）。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_feature_cross_module_cancel.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 60}}
+
+  # ── 陷阱 · 会引发回归 ────────────────────────────────────────────────
+  # 需求本身很简单，但最直观的改法（把 subtotal 重新赋值成折后额）会弄坏
+  # 项目自带测试里"subtotal 是折前金额"这条约定。
+  # **这条 case 只有同时跑两个 gate 才有区分度。**
+  - id: trap_regression_free_shipping
+    description: "陷阱（回归）：免运费门槛改按折后金额判断"
+    input:
+      prompt: |
+        免运费门槛现在按折前小计判断，导致促销后实付不到 50 元的订单也免运费。
+        改成按**折后**金额判断是否达到免运费门槛。
+
+        订单明细里 subtotal 的含义不变，仍然是折前小计。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest /Users/zhenhua/Documents/gitpro/compass/examples/coding_agent/grader_tests/test_trap_regression_free_shipping.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 25}}
+
+  # ══ 以下是待填的槽位 ═════════════════════════════════════════════════
+  # metadata.todo: true 让 check.py 跳过它们。填好后把这一行删掉，
+  # 并补上 grader_tests/test_<id>.py 与 solutions/<id>/。
+
+  # ── 改 bug · 需要定位（第二条）──────────────────────────────────────
+  # 建议挑一个"症状和根因隔了两跳"的真实线上问题。
+  - id: TODO_bug_locate_2
+    description: "TODO：第二条需要定位的 bug"
+    metadata: {todo: true}
+    input:
+      prompt: "TODO"
+
+  # ── 需求 · 增量（第二条）────────────────────────────────────────────
+  - id: TODO_feature_incremental_2
+    description: "TODO：第二条增量需求"
+    metadata: {todo: true}
+    input:
+      prompt: "TODO"
+
+  # ── 陷阱 · 需求有歧义 ────────────────────────────────────────────────
+  # 这类和上面几类**不是一个评法**，别用 pytest 硬评。
+  # 做法：需求在某一维上故意不说清（比如"促销和会员折扣不能叠加"——
+  # 取更优？还是促销优先？），隐藏测试**只断言明确的那部分**，
+  # 另外用 style_convention 的 required_patterns 或 rubric 检查
+  # agent 有没有在最终回复里把它做的假设讲出来。
+  # 非交互模式下 agent 问不了人，所以这里评的是"有没有暴露假设"，
+  # 不是"有没有问"。
+  - id: TODO_trap_ambiguous
+    description: "TODO：需求有歧义时是否暴露假设"
+    metadata: {todo: true}
+    input:
+      prompt: "TODO"

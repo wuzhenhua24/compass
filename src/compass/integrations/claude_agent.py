@@ -297,6 +297,8 @@ class _Builder:
             self._on_result(msg)
         elif kind == "system":
             self._on_system(msg)
+        elif kind == "ratelimit":
+            self._on_rate_limit(msg)
         else:
             # Partial deltas, rate-limit notices, anything the CLI grows next:
             # nothing to reconstruct, but counted rather than dropped.
@@ -508,6 +510,32 @@ class _Builder:
             if val:
                 self.transcript.metadata[key] = val
 
+    # -- rate limits -------------------------------------------------------
+
+    def _on_rate_limit(self, msg: Any) -> None:
+        """Record the CLI's quota notices verbatim, plus a tally by status.
+
+        These matter to a comparison run on a subscription: hitting the window
+        gets requests *rejected* (overage is commonly disabled at the org
+        level), so a partial arm looks like a worse model rather than a run
+        that ran out of quota. A run that was merely told "allowed" and one
+        that was throttled are otherwise indistinguishable in the trace.
+
+        Stored as the provider sent it. The status vocabulary is the CLI's, not
+        something to second-guess here — a grader or a human can read
+        ``status_counts`` and decide what counts as degraded.
+        """
+        info = getattr(msg, "rate_limit_info", None)
+        if not isinstance(info, dict) or not info:
+            return  # nothing was reported, so there is nothing to record
+        record = self.transcript.metadata.setdefault(
+            "rate_limit", {"events": 0, "status_counts": {}, "latest": {}}
+        )
+        record["events"] += 1
+        status = str(info.get("status", "unknown"))
+        record["status_counts"][status] = record["status_counts"].get(status, 0) + 1
+        record["latest"] = dict(info)
+
     # -- system (task lifecycle) ------------------------------------------
 
     def _on_system(self, msg: Any) -> None:
@@ -700,7 +728,12 @@ def _wire_to_obj(data: Any) -> Any:
             task_type=data.get("task_type"),
             session_id=data.get("session_id"),
         )
-    return None  # stream_event / rate_limit_event / unknown
+    if kind == "rate_limit_event":
+        return SimpleNamespace(
+            rate_limit_info=data.get("rate_limit_info") or {},
+            session_id=data.get("session_id"),
+        )
+    return None  # stream_event / unknown
 
 
 def _wire_block(block: dict[str, Any]) -> Any:

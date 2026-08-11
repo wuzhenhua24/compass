@@ -127,6 +127,18 @@ class CostBudgetGrader(CodeGrader):
     Checks:
     - Total estimated cost within budget
     - Total token usage within limits
+
+    **``max_tokens`` counts uncached tokens.** A cached prompt read is priced at
+    a fraction of a fresh one and is a function of how large the agent's system
+    prompt is, not of how hard it worked — so counting it here would measure the
+    harness rather than the agent. A real four-turn Claude Code run processed
+    322k tokens of which 222k were cache reads and 83 were fresh input; against
+    the old 100k default that reads as a runaway, and it was a clean run that
+    cost nine cents. ``max_cost_usd`` is the accurate spend guard, and the
+    provider's own cost figure already prices cached traffic correctly.
+
+    Set ``count_cached_tokens: true`` to compare the full total instead.
+    ``details`` reports both either way.
     """
 
     name = "cost_budget"
@@ -137,6 +149,7 @@ class CostBudgetGrader(CodeGrader):
         super().__init__(config)
         self.max_cost_usd = self.config.get("max_cost_usd", 1.0)
         self.max_tokens = self.config.get("max_tokens", 100_000)
+        self.count_cached_tokens = self.config.get("count_cached_tokens", False)
         self.cost_per_tool: dict[str, float] = self.config.get("cost_per_tool", {})
 
     async def grade(self, context: GradeContext) -> GradeResult:
@@ -166,18 +179,27 @@ class CostBudgetGrader(CodeGrader):
 
         # Estimate tokens from transcript metadata
         total_tokens = 0
+        cached_tokens = 0
         for tc in tool_calls:
             # Prefer tc.tokens (protocol field)
             if tc.tokens is not None:
                 total_tokens += tc.tokens.total_tokens
+                cached_tokens += (
+                    tc.tokens.cache_read_tokens + tc.tokens.cache_creation_tokens
+                )
             else:
                 # Fallback to legacy result field
                 result = tc.result
                 if isinstance(result, dict):
                     total_tokens += result.get("tokens_used", 0)
 
+        # The budget is on fresh work; see the class docstring.
+        budgeted_tokens = (
+            total_tokens if self.count_cached_tokens else total_tokens - cached_tokens
+        )
+
         within_cost = total_cost <= self.max_cost_usd
-        within_tokens = total_tokens <= self.max_tokens if self.max_tokens else True
+        within_tokens = budgeted_tokens <= self.max_tokens if self.max_tokens else True
 
         passed = within_cost and within_tokens
 
@@ -205,7 +227,12 @@ class CostBudgetGrader(CodeGrader):
                 "total_cost_usd": total_cost,
                 "max_cost_usd": self.max_cost_usd,
                 "cost_breakdown": cost_breakdown,
+                # Both, always: the budgeted figure explains the verdict, the
+                # total explains the bill, and they differ by an order of
+                # magnitude on a cached agent.
                 "total_tokens": total_tokens,
+                "cached_tokens": cached_tokens,
+                "budgeted_tokens": budgeted_tokens,
                 "max_tokens": self.max_tokens,
             },
             failure_tags=failure_tags,

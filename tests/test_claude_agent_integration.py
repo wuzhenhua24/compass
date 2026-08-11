@@ -685,13 +685,13 @@ class TestUnhandledEvents:
          "total_cost_usd": 0.01, "result": "done", "permission_denials": []},
     ]
 
-    def test_rate_limit_events_are_counted(self):
+    def test_repeats_of_one_unknown_type_accumulate(self):
         events = self.BASE[:2] + [
-            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}},
-            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+            {"type": "mystery_event", "whatever": 1},
+            {"type": "mystery_event", "whatever": 2},
         ] + self.BASE[2:]
         t = reconstruct_transcript_from_wire(events)
-        assert t.metadata["unhandled_events"]["rate_limit_event"] == 2
+        assert t.metadata["unhandled_events"]["mystery_event"] == 2
 
     def test_an_event_type_that_does_not_exist_yet_is_still_counted(self):
         """Counting by name needs no schema, so the CLI can grow without this
@@ -722,9 +722,9 @@ class TestUnhandledEvents:
         assert "unhandled_events" not in t.metadata
 
     def test_counting_works_on_the_sdk_object_path_too(self):
-        rate_limited = SimpleNamespace(rate_limit_info={"status": "rejected"})
-        t = reconstruct_transcript([*_basic_run(), rate_limited])
-        assert t.metadata["unhandled_events"] == {"ratelimit": 1}
+        partial_delta = SimpleNamespace(event={"type": "content_block_delta"})
+        t = reconstruct_transcript([*_basic_run(), partial_delta])
+        assert t.metadata["unhandled_events"] == {"stream": 1}
 
     def test_an_unrecognised_object_is_counted_under_its_class_name(self):
         class SomeNewMessage:
@@ -737,8 +737,77 @@ class TestUnhandledEvents:
         r = WireReconstructor()
         for event in self.BASE[:2]:
             r.feed(event)
-        r.feed({"type": "rate_limit_event"})
-        assert r.finish().metadata["unhandled_events"] == {"rate_limit_event": 1}
+        r.feed({"type": "mystery_event"})
+        assert r.finish().metadata["unhandled_events"] == {"mystery_event": 1}
 
-        r.feed({"type": "rate_limit_event"})
-        assert r.finish().metadata["unhandled_events"] == {"rate_limit_event": 2}
+        r.feed({"type": "mystery_event"})
+        assert r.finish().metadata["unhandled_events"] == {"mystery_event": 2}
+
+
+class TestRateLimitEvents:
+    """Parsed from a real event captured by save_stream_to during a live run.
+
+    It matters for a comparison on a subscription: overage is commonly disabled
+    at the org level, so hitting the five-hour window gets requests *rejected*.
+    A run that ran out of quota then looks like a worse model rather than an
+    incomplete arm.
+    """
+
+    # Verbatim from coding-eval-run/streams/, `claude -p` on a subscription.
+    REAL_EVENT = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed",
+            "resetsAt": 1786448400,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": False,
+        },
+        "uuid": "b3a63c28-6192-46b7-8bf1-0166fa1aa804",
+        "session_id": "8af748af",
+    }
+
+    BASE = [
+        {"type": "assistant", "session_id": "s", "message": {
+            "role": "assistant", "id": "m", "model": "claude-haiku-4-5",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "text", "text": "done"}]}},
+    ]
+
+    def test_the_provider_payload_is_kept_verbatim(self):
+        """No second-guessing the status vocabulary — it is the CLI's."""
+        t = reconstruct_transcript_from_wire([*self.BASE, self.REAL_EVENT])
+        assert t.metadata["rate_limit"]["latest"] == self.REAL_EVENT["rate_limit_info"]
+
+    def test_statuses_are_tallied(self):
+        throttled = {
+            "type": "rate_limit_event",
+            "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"},
+        }
+        t = reconstruct_transcript_from_wire(
+            [*self.BASE, self.REAL_EVENT, throttled, throttled]
+        )
+        record = t.metadata["rate_limit"]
+        assert record["events"] == 3
+        assert record["status_counts"] == {"allowed": 1, "rejected": 2}
+        assert record["latest"]["status"] == "rejected"
+
+    def test_it_is_no_longer_filed_as_unhandled(self):
+        t = reconstruct_transcript_from_wire([*self.BASE, self.REAL_EVENT])
+        assert "unhandled_events" not in t.metadata
+
+    def test_a_run_with_no_quota_notices_carries_no_key(self):
+        t = reconstruct_transcript_from_wire(self.BASE)
+        assert "rate_limit" not in t.metadata
+
+    def test_an_event_with_no_info_is_ignored(self):
+        t = reconstruct_transcript_from_wire(
+            [*self.BASE, {"type": "rate_limit_event"}]
+        )
+        assert "rate_limit" not in t.metadata
+
+    def test_the_sdk_object_path_records_it_too(self):
+        msg = SimpleNamespace(rate_limit_info=self.REAL_EVENT["rate_limit_info"])
+        t = reconstruct_transcript([*_basic_run(), msg])
+        assert t.metadata["rate_limit"]["status_counts"] == {"allowed": 1}

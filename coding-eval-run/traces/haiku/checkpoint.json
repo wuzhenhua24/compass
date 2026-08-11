@@ -1,0 +1,17 @@
+{
+  "run_id": "64ffd83ea316",
+  "scenario_fingerprint": "d55692a1bb89e614",
+  "scenario_name": "编程 Agent 评测套件 [haiku]",
+  "total_cases": [
+    "fix_rounding"
+  ],
+  "completed_cases": {
+    "fix_rounding": {
+      "file": "fix_rounding.json"
+    }
+  },
+  "completed_trials": {},
+  "status": "completed",
+  "created_at": "2026-08-11T17:04:06.463451",
+  "updated_at": "2026-08-11T17:04:41.228917"
+}
