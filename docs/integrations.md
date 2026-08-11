@@ -139,6 +139,8 @@ transcript = import_claude_stream_json("run.stream.jsonl")   # 复用同一套�
 **设计要点**
 - **消费公开契约而非内部落盘**：SDK 明说磁盘 transcript 是"内部 discriminated union，当作不透明 blob"，所以走稳定的 `Message` 流。
 - **成本用 CLI 权威总额**：CLI 只报一个 `total_cost_usd`（比逐调用美元更准），挂到终局 llm 调用上，`sum_cost`/`cost_budget` 即得全程真实成本——**无需价格表**。
+- **缓存 token 是一等字段，不是 metadata**：编程 agent 的 system prompt 和工具定义会被缓存，所以 Anthropic 报的 `input_tokens` 只是零头。一次真实的 `claude -p "say hi"`：`input_tokens: 10`，而 `cache_read: 18178` + `cache_creation: 7820`。把缓存当 metadata 的话，一次实际吞掉 26,061 token 的运行会报成 **63**——同一次调用，成本列说一回事，token 列说另一回事。现在 `TokenUsage` 有 `cache_read_tokens` / `cache_creation_tokens` 两个一等字段，`total_tokens` 把它们算进去；`input_tokens` 仍然保持"未缓存输入"这个 provider 原义（两者计价不同），要"模型处理过的全部输入"用 `billable_input_tokens`。
+  > 注意两套约定的差别，搞反会静默重复计数：**Anthropic 的 `input_tokens` 不含缓存**（缓存是加法项），而 **OpenInference/OTLP 的 `prompt` 已经含了缓存**，`prompt_details.cache_read` 只是其中的明细。OTLP importer 因此显式传 `total_tokens`，不让它被重新加一遍。
 - **子 agent 归属**：`Task` 工具的 `tool_use_id` 与后续消息的 `parent_tool_use_id` 对上，还原 `agent_name`。
 - **零依赖**：鸭子类型读属性，不 import `claude_agent_sdk`。
 

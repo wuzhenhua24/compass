@@ -382,15 +382,17 @@ def _add_llm_call(
 
     tokens = None
     if prompt_tok or completion_tok or total_tok:
-        token_meta = {}
-        cache_read = _int(span.attrs.get(_TOK_CACHE_READ))
-        if cache_read:
-            token_meta["cache_read"] = cache_read
+        # Convention difference worth stating, because getting it wrong
+        # double-counts silently: OpenInference's ``prompt`` is the *whole*
+        # prompt and ``prompt_details.cache_read`` is a breakdown *within* it,
+        # whereas Anthropic reports ``input_tokens`` with the cache excluded.
+        # So the cache figure is recorded for visibility, and ``total_tokens``
+        # is passed explicitly so it is not recomputed by adding it back in.
         tokens = TokenUsage(
             input_tokens=prompt_tok,
             output_tokens=completion_tok,
             total_tokens=total_tok,
-            metadata=token_meta,
+            cache_read_tokens=_int(span.attrs.get(_TOK_CACHE_READ)),
         )
 
     cost = _cost(span.attrs, model, prompt_tok, completion_tok)

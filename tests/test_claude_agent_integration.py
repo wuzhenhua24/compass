@@ -592,3 +592,73 @@ class TestStateDeltaMapping:
         assert (await grader.grade(
             GradeContext(transcript=edited, outcome=edited.outcome)
         )).passed is False
+
+
+class TestCachedTokens:
+    """Regression: a run's token count was a rounding error of the truth.
+
+    A coding agent's system prompt and tool definitions are cached, so
+    Anthropic reports a handful of uncached ``input_tokens`` next to tens of
+    thousands of cached ones. Treating the cache as metadata made a real
+    26,000-token turn report 63, while the cost column reported the full
+    charge — two numbers about the same call that could not both be right.
+    """
+
+    # Verbatim from a real `claude -p "say hi"` result event.
+    REAL_USAGE = {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 7820,
+        "cache_read_input_tokens": 18178,
+        "output_tokens": 53,
+    }
+
+    def _transcript(self, usage):
+        return reconstruct_transcript_from_wire([
+            {"type": "assistant", "session_id": "s", "message": {
+                "role": "assistant", "id": "m", "model": "claude-haiku-4-5",
+                "usage": usage, "content": [{"type": "text", "text": "Hi!"}]}},
+            {"type": "result", "subtype": "success", "session_id": "s",
+             "is_error": False, "num_turns": 1, "duration_ms": 5116,
+             "total_cost_usd": 0.0177328, "result": "Hi!",
+             "permission_denials": []},
+        ])
+
+    def test_total_accounts_for_every_token_the_model_processed(self):
+        tokens = self._transcript(self.REAL_USAGE).sum_tokens()
+        assert tokens.total_tokens == sum(self.REAL_USAGE.values()) == 26061
+
+    def test_cached_traffic_is_first_class_not_metadata(self):
+        tokens = self._transcript(self.REAL_USAGE).sum_tokens()
+        assert tokens.cache_read_tokens == 18178
+        assert tokens.cache_creation_tokens == 7820
+
+    def test_input_tokens_still_mean_what_the_provider_means(self):
+        """Uncached prompt tokens. Folding the cache in here would misreport
+        what the API said, and the two are priced differently."""
+        tokens = self._transcript(self.REAL_USAGE).sum_tokens()
+        assert tokens.input_tokens == 10
+        assert tokens.billable_input_tokens == 26008
+
+    def test_a_turn_that_is_only_cache_reads_is_still_recorded(self):
+        """Previously dropped: the guard required input or output to be set."""
+        tokens = self._transcript(
+            {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 9000}
+        ).sum_tokens()
+        assert tokens.total_tokens == 9000
+        assert tokens.cache_read_tokens == 9000
+
+    def test_an_uncached_run_is_unchanged(self):
+        tokens = self._transcript(
+            {"input_tokens": 1200, "output_tokens": 30}
+        ).sum_tokens()
+        assert tokens.total_tokens == 1230
+        assert tokens.cache_read_tokens == 0
+
+    def test_cache_survives_a_save_load_round_trip(self, tmp_path):
+        from compass.core.transcript import Transcript
+
+        path = tmp_path / "t.json"
+        self._transcript(self.REAL_USAGE).save(path)
+        tokens = Transcript.load(path).sum_tokens()
+        assert tokens.total_tokens == 26061
+        assert tokens.cache_read_tokens == 18178

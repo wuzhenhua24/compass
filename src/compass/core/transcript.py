@@ -254,23 +254,51 @@ class CostInfo:
 
 @dataclass
 class TokenUsage:
-    """Standardized token usage for a tool call."""
+    """Standardized token usage for a tool call.
+
+    ``input_tokens`` means what the provider means by it: **uncached** prompt
+    tokens. Cached traffic is reported separately by every major provider and
+    is kept separate here, because it is priced differently — a cache read
+    costs a fraction of a fresh input token, a cache write costs more.
+
+    ``total_tokens`` is everything the call processed, cache included. Leaving
+    the cache out of it produced numbers that were not slightly off but
+    unusable: a one-turn Claude Code run reporting 63 tokens when it had
+    actually pushed 26,000 through the model, because a coding agent's system
+    prompt and tool definitions are cached and its fresh input is a handful of
+    tokens. The cost column said one thing and the token column another.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # Cached prompt traffic, kept out of input_tokens on purpose (see above).
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Auto-calculate total if not set but input/output provided
-        if self.total_tokens == 0 and (self.input_tokens or self.output_tokens):
-            self.total_tokens = self.input_tokens + self.output_tokens
+        # Auto-calculate total if not set but some component was provided
+        if self.total_tokens == 0:
+            self.total_tokens = (
+                self.input_tokens
+                + self.output_tokens
+                + self.cache_read_tokens
+                + self.cache_creation_tokens
+            )
+
+    @property
+    def billable_input_tokens(self) -> int:
+        """Every prompt token the model processed, cached or not."""
+        return self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
             "metadata": self.metadata,
         }
 
@@ -280,6 +308,8 @@ class TokenUsage:
             input_tokens=data.get("input_tokens", 0),
             output_tokens=data.get("output_tokens", 0),
             total_tokens=data.get("total_tokens", 0),
+            cache_read_tokens=data.get("cache_read_tokens", 0),
+            cache_creation_tokens=data.get("cache_creation_tokens", 0),
             metadata=data.get("metadata", {}),
         )
 
@@ -706,17 +736,23 @@ class Transcript:
         input_tokens = 0
         output_tokens = 0
         total_tokens = 0
+        cache_read = 0
+        cache_creation = 0
 
         for tc in self.tool_calls:
             if tc.tokens is not None:
                 input_tokens += tc.tokens.input_tokens
                 output_tokens += tc.tokens.output_tokens
                 total_tokens += tc.tokens.total_tokens
+                cache_read += tc.tokens.cache_read_tokens
+                cache_creation += tc.tokens.cache_creation_tokens
 
         return TokenUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
         )
 
     def sum_duration(self) -> float:

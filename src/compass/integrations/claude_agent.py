@@ -704,13 +704,20 @@ def _tokens(usage: Any) -> TokenUsage | None:
         return None
     in_tok = int(usage.get("input_tokens", 0) or 0)
     out_tok = int(usage.get("output_tokens", 0) or 0)
-    if not (in_tok or out_tok):
+    # Cached traffic is first-class, not metadata: a coding agent's system
+    # prompt and tool definitions are cached, so uncached input is a rounding
+    # error next to it and a transcript that ignored it would report a fraction
+    # of a percent of what the run actually processed.
+    cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    if not (in_tok or out_tok or cache_read or cache_creation):
         return None
-    meta: dict[str, Any] = {}
-    for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
-        if usage.get(key):
-            meta[key] = usage[key]
-    return TokenUsage(input_tokens=in_tok, output_tokens=out_tok, metadata=meta)
+    return TokenUsage(
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+    )
 
 
 def _llm_input(msg: Any) -> dict[str, Any]:
