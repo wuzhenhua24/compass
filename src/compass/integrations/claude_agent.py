@@ -204,10 +204,17 @@ class WireReconstructor:
         self._builder = _Builder(task_id=task_id)
 
     def feed(self, event: dict[str, Any]) -> None:
-        """Consume one stream-json wire dict. Unknown event types are ignored."""
+        """Consume one stream-json wire dict.
+
+        Event types this mapping does not model are counted into
+        ``transcript.metadata["unhandled_events"]`` rather than discarded — see
+        :meth:`_Builder.note_unhandled`.
+        """
         obj = _wire_to_obj(event)
-        if obj is not None:
-            self._builder.consume(obj)
+        if obj is None:
+            self._builder.note_unhandled(str(event.get("type") or "unknown"))
+            return
+        self._builder.consume(obj)
 
     def feed_line(self, line: str) -> bool:
         """Consume one raw stdout line. Returns False if it was not JSON.
@@ -275,6 +282,8 @@ class _Builder:
         # Session cwd, reported by the system/init event; used to make file
         # targets relative (and therefore matchable by a stable glob).
         self._cwd: str | None = None
+        # event type -> count, for everything this mapping does not consume
+        self._unhandled: dict[str, int] = {}
 
     # -- dispatch ----------------------------------------------------------
 
@@ -288,8 +297,25 @@ class _Builder:
             self._on_result(msg)
         elif kind == "system":
             self._on_system(msg)
-        # "stream" (partial deltas) / "ratelimit" / "other" carry no
-        # reconstruction value and are ignored.
+        else:
+            # Partial deltas, rate-limit notices, anything the CLI grows next:
+            # nothing to reconstruct, but counted rather than dropped.
+            self.note_unhandled(
+                type(msg).__name__ if kind == "other" else kind
+            )
+
+    def note_unhandled(self, kind: str) -> None:
+        """Record that an event of this type went by without being mapped.
+
+        Only a count — no payload, because the shape is by definition unknown
+        and a stream can carry thousands of partial deltas. A count is enough
+        to answer the question that matters: *did something happen during this
+        run that the transcript does not explain?* A run throttled three times
+        and a run that simply took a while look identical in the trace
+        otherwise, and the first is a harness problem being read as a slow
+        model.
+        """
+        self._unhandled[kind] = self._unhandled.get(kind, 0) + 1
 
     # -- assistant ---------------------------------------------------------
 
@@ -509,6 +535,10 @@ class _Builder:
             self.transcript.set_outcome(
                 output_data={"final_output": self._last_assistant_text}
             )
+        # Rewritten rather than merged: finish() is valid mid-stream and may be
+        # called again later, and these are counts of the whole run so far.
+        if self._unhandled:
+            self.transcript.metadata["unhandled_events"] = dict(self._unhandled)
         return self.transcript
 
     # -- helpers -----------------------------------------------------------

@@ -662,3 +662,83 @@ class TestCachedTokens:
         tokens = Transcript.load(path).sum_tokens()
         assert tokens.total_tokens == 26061
         assert tokens.cache_read_tokens == 18178
+
+
+class TestUnhandledEvents:
+    """Events this mapping does not model are counted, not dropped.
+
+    The motivating case is ``rate_limit_event``: a throttled run and a slow one
+    are indistinguishable in the trace otherwise, so a harness problem reads as
+    a slow model — and on a subscription, where a long comparison run really
+    can hit a usage window, that is the difference between a result and an
+    artefact.
+    """
+
+    BASE = [
+        {"type": "system", "subtype": "init", "session_id": "s", "cwd": "/w"},
+        {"type": "assistant", "session_id": "s", "message": {
+            "role": "assistant", "id": "m", "model": "claude-haiku-4-5",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "text", "text": "working"}]}},
+        {"type": "result", "subtype": "success", "session_id": "s",
+         "is_error": False, "num_turns": 1, "duration_ms": 900,
+         "total_cost_usd": 0.01, "result": "done", "permission_denials": []},
+    ]
+
+    def test_rate_limit_events_are_counted(self):
+        events = self.BASE[:2] + [
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+        ] + self.BASE[2:]
+        t = reconstruct_transcript_from_wire(events)
+        assert t.metadata["unhandled_events"]["rate_limit_event"] == 2
+
+    def test_an_event_type_that_does_not_exist_yet_is_still_counted(self):
+        """Counting by name needs no schema, so the CLI can grow without this
+        importer silently swallowing the new thing."""
+        events = self.BASE[:2] + [
+            {"type": "some_future_event", "payload": {"whatever": 1}}
+        ] + self.BASE[2:]
+        t = reconstruct_transcript_from_wire(events)
+        assert t.metadata["unhandled_events"] == {"some_future_event": 1}
+
+    def test_a_typeless_event_is_counted_as_unknown(self):
+        t = reconstruct_transcript_from_wire(self.BASE[:2] + [{"nope": 1}] + self.BASE[2:])
+        assert t.metadata["unhandled_events"] == {"unknown": 1}
+
+    def test_partial_deltas_are_counted_not_stored(self):
+        """A stream can carry thousands; the count is the whole record."""
+        events = self.BASE[:2] + [
+            {"type": "stream_event", "event": {"type": "content_block_delta"}}
+            for _ in range(200)
+        ] + self.BASE[2:]
+        t = reconstruct_transcript_from_wire(events)
+        assert t.metadata["unhandled_events"] == {"stream_event": 200}
+        assert len(t.tool_calls) == 1  # nothing leaked into the trace
+
+    def test_a_clean_run_carries_no_such_key(self):
+        """Absence is the signal; an empty dict everywhere would be noise."""
+        t = reconstruct_transcript_from_wire(self.BASE)
+        assert "unhandled_events" not in t.metadata
+
+    def test_counting_works_on_the_sdk_object_path_too(self):
+        rate_limited = SimpleNamespace(rate_limit_info={"status": "rejected"})
+        t = reconstruct_transcript([*_basic_run(), rate_limited])
+        assert t.metadata["unhandled_events"] == {"ratelimit": 1}
+
+    def test_an_unrecognised_object_is_counted_under_its_class_name(self):
+        class SomeNewMessage:
+            pass
+
+        t = reconstruct_transcript([*_basic_run(), SomeNewMessage()])
+        assert t.metadata["unhandled_events"] == {"SomeNewMessage": 1}
+
+    def test_counts_are_current_when_finish_is_called_mid_stream(self):
+        r = WireReconstructor()
+        for event in self.BASE[:2]:
+            r.feed(event)
+        r.feed({"type": "rate_limit_event"})
+        assert r.finish().metadata["unhandled_events"] == {"rate_limit_event": 1}
+
+        r.feed({"type": "rate_limit_event"})
+        assert r.finish().metadata["unhandled_events"] == {"rate_limit_event": 2}
