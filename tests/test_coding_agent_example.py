@@ -270,11 +270,35 @@ class TestSuiteShape:
             assert any("{{GRADERS}}" in s for s in scripts), case["id"]
             assert any("pytest tests/" in s for s in scripts), case["id"]
 
-    def test_todo_slots_are_marked_so_check_skips_them(self):
-        todos = [c for c in _suite()["cases"] if c["id"].startswith("TODO_")]
-        assert todos, "the template should ship unfilled slots"
-        for case in todos:
-            assert case.get("metadata", {}).get("todo") is True
+    def test_no_unfilled_slot_is_a_runnable_case(self):
+        """Regression: the slots shipped as real cases with prompt "TODO".
+
+        check.py skipped them on a `metadata.todo` marker, but `compass test`
+        knows no such convention — it ran all three, found no correctness
+        graders, passed the process guards, and scored each 0.997 as a PASS.
+        Both models collected three free points and $0.31 of wasted spend.
+        An unfilled slot has to be *absent*, not marked.
+        """
+        assert check.find_placeholder_cases(_suite()["cases"]) == []
+
+    def test_the_checker_refuses_to_run_with_an_unfilled_slot(self):
+        """And it is an error, not a skip — skipping is what hid it before."""
+        stub = {"id": "TODO_something", "input": {"prompt": "TODO"}}
+        assert check.find_placeholder_cases([stub]) == ["TODO_something"]
+        # Caught by shape too, not just by the id convention.
+        assert check.find_placeholder_cases(
+            [{"id": "looks_real", "input": {"prompt": "  "}}]
+        ) == ["looks_real"]
+        assert check.find_placeholder_cases(
+            [{"id": "fine", "input": {"prompt": "Do a real thing."}}]
+        ) == []
+
+    def test_the_slots_survive_as_commented_templates(self):
+        """Commented out, but still there to fill in — otherwise the guidance
+        about case-type mix has nothing to attach to."""
+        raw = (_EXAMPLE / "suite.yaml").read_text(encoding="utf-8")
+        assert "待填的槽位" in raw
+        assert "# - id: bug_locate_2" in raw
 
     def test_process_guards_are_shared_and_never_gate_on_cost(self):
         suite = _suite()

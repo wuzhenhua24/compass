@@ -69,9 +69,42 @@ class CaseReport:
 # ---------------------------------------------------------------------------
 
 
+def find_placeholder_cases(cases: list[dict]) -> list[str]:
+    """Case ids that look unfilled.
+
+    An unfilled slot must not be a case at all. ``check.py`` can be taught to
+    skip one, but ``compass test`` cannot — it just sees a case with no
+    correctness graders, runs the process guards, and passes. Three such stubs
+    once handed both models a free 0.997 apiece and inflated the pass rate
+    while costing real money. So this is an error, not a skip: comment the slot
+    out until it is ready.
+    """
+    suspicious = []
+    for case in cases:
+        prompt = (case.get("input") or {}).get("prompt", "")
+        if (
+            case["id"].upper().startswith("TODO")
+            or case.get("metadata", {}).get("todo")
+            or prompt.strip().upper() in ("", "TODO")
+        ):
+            suspicious.append(case["id"])
+    return suspicious
+
+
 def load_cases(only: list[str]) -> list[dict]:
     suite = yaml.safe_load(_SUITE.read_text(encoding="utf-8"))
-    cases = [c for c in suite["cases"] if not c.get("metadata", {}).get("todo")]
+    cases = suite["cases"]
+
+    placeholders = find_placeholder_cases(cases)
+    if placeholders:
+        raise SystemExit(
+            f"unfilled slot(s) present as runnable cases: {', '.join(placeholders)}\n"
+            "  `compass test` will run them, and they pass trivially — every "
+            "model gets a free point.\n"
+            "  Comment the slot out in suite.yaml until it has a prompt, "
+            "hidden tests and a reference solution."
+        )
+
     if only:
         by_id = {c["id"]: c for c in cases}
         missing = [c for c in only if c not in by_id]

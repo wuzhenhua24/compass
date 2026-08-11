@@ -37,8 +37,15 @@ defaults:
   trials: 1
 
 # ── 所有 case 共用的过程侧检查 ─────────────────────────────────────────
-# 这些是领域无关的，框架自带。阈值是**占位符**：先不设或放宽跑十来条，
-# 看真实分布再定。抄别人的阈值只会得到一串关于别人项目的自信数字。
+# 这些是领域无关的，框架自带。
+#
+# 下面的阈值来自**一次真实运行的实测分布**（Haiku 4.5 与 Sonnet 5 各跑 5 条，
+# n=10），不是拍脑袋。观测到的最大值：成本 $0.551、LLM 轮次 45、工具调用总数 64、
+# 同一调用最多合理重复 4 次。阈值取观测最大值的 ~2 倍留余量——n=10 看不到真正的尾巴。
+#
+# **换成你自己的项目后这些数字全部作废。** 先把这一整段注释掉跑十来条，
+# 拿到你自己的分布再填。第一版拍脑袋的阈值曾经让一条两个正确性 gate 全过的
+# 用例判负（加权分 0.724 < 0.75）——占位阈值不只是噪声，它会翻转结论。
 default_graders:
   - name: state_delta
     type: code
@@ -46,21 +53,40 @@ default_graders:
     config:
       forbid:
         - {kind: file, target: "tests/*"}   # 不许改测试让测试变绿
+
+  # 以下四个**都不是 gate**：它们回答"这个结果花了多少代价"，不回答"对不对"。
+  # 想让成本超支直接判负，就给它加 gate: true —— 那是一个明确的选择，
+  # 不该由加权分数悄悄替你做主。
   - name: cost_budget
     type: code
-    config: {max_cost_usd: 1.00}
+    config: {max_cost_usd: 1.50}            # 实测最大 $0.551
+
   - name: turn_count
     type: code
-    config: {max_turns: 25}
+    config:
+      max_turns: 80                         # 实测最大 45
+      # 默认 count_filter 是 "all"，数的是**所有工具调用**而不是轮次——
+      # 名字叫 turn 却在数别的东西，很容易把阈值定错一个量级。
+      count_filter: "llm"
+
   - name: loop_detection
     type: code
-    config: {max_exact_repetitions: 2, check_output_repetition: false}
+    config:
+      # 编程 agent 反复跑同一个测试命令是正常工作，不是卡死。
+      # 实测干净运行里同一调用最多重复 4 次。
+      max_exact_repetitions: 6
+      check_output_repetition: false
+
   - name: tool_usage
     type: code
-    config: {max_tool_calls: 60, forbidden_tools: ["WebFetch", "WebSearch"]}
+    config:
+      max_tool_calls: 120                   # 实测最大 64（含 llm.generation）
+      forbidden_tools: ["WebFetch", "WebSearch"]
 
 default_aggregation:
-  pass_threshold: 0.75
+  # 正确性由 gate 判定，过程侧只做诊断。阈值放在这里是为了兜住"过程灾难性失控"
+  # 的情况，而不是让三个非 gate 指标合起来推翻一个两个 gate 都过了的结果。
+  pass_threshold: 0.6
 
 # 每条 case 的正确性由两个 gate 决定：
 #   ① 隐藏验收测试通过（grader_tests/，agent 读不到也改不了）
@@ -172,35 +198,45 @@ cases:
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 25}}
 
-  # ══ 以下是待填的槽位 ═════════════════════════════════════════════════
-  # metadata.todo: true 让 check.py 跳过它们。填好后把这一行删掉，
-  # 并补上 grader_tests/test_<id>.py 与 solutions/<id>/。
-
+  # ══ 待填的槽位 ═══════════════════════════════════════════════════════
+  #
+  # 这些**故意注释掉，不是留成空 case**。
+  #
+  # 第一版把它们写成了带 `metadata: {todo: true}` 的真 case——check.py 会跳过，
+  # 但 `compass test` 不认这个约定，于是三条 prompt 写着 "TODO" 的桩子照跑不误：
+  # 没有 case 级 grader，只有过程侧几个指标，全部轻松通过，**每条 0.997 分记 PASS**。
+  # 两个模型各白拿 3 分，pass rate 凭空虚高，还烧掉 $0.31。
+  #
+  # 这正是 check.py 的 RED 检查要防的"白送分"，我却把它写进了模板本身。
+  # 一个没填的槽位**必须跑不起来**——注释掉是唯一不依赖任何人记得某个约定的做法。
+  #
+  # 填的时候：把对应那段解注释，补上 grader_tests/test_<id>.py 和
+  # solutions/<id>/，然后 `check.py` 跑绿。
+  #
   # ── 改 bug · 需要定位（第二条）──────────────────────────────────────
-  # 建议挑一个"症状和根因隔了两跳"的真实线上问题。
-  - id: TODO_bug_locate_2
-    description: "TODO：第二条需要定位的 bug"
-    metadata: {todo: true}
-    input:
-      prompt: "TODO"
-
+  # 挑一个"症状和根因隔了两跳"的真实线上问题。
+  #
+  # - id: bug_locate_2
+  #   description: "改 bug（需定位）：……"
+  #   input:
+  #     prompt: |
+  #       ……（只描述症状和复现步骤，不要提根因在哪个文件）
+  #   graders:
+  #     - {name: integration_test, type: code, gate: true,
+  #        config: {script: "python -m pytest {{GRADERS}}/test_bug_locate_2.py -q",
+  #                 workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+  #     - {name: integration_test, type: code, gate: true,
+  #        config: {script: "python -m pytest tests/ -q",
+  #                 workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+  #     - {name: diff_size, type: code, config: {max_total_changes: 30}}
+  #
   # ── 需求 · 增量（第二条）────────────────────────────────────────────
-  - id: TODO_feature_incremental_2
-    description: "TODO：第二条增量需求"
-    metadata: {todo: true}
-    input:
-      prompt: "TODO"
-
+  # 同上形状，prompt 换成需求描述，别忘了把验收测试断言的接口签名写进 prompt。
+  #
   # ── 陷阱 · 需求有歧义 ────────────────────────────────────────────────
-  # 这类和上面几类**不是一个评法**，别用 pytest 硬评。
-  # 做法：需求在某一维上故意不说清（比如"促销和会员折扣不能叠加"——
-  # 取更优？还是促销优先？），隐藏测试**只断言明确的那部分**，
-  # 另外用 style_convention 的 required_patterns 或 rubric 检查
-  # agent 有没有在最终回复里把它做的假设讲出来。
-  # 非交互模式下 agent 问不了人，所以这里评的是"有没有暴露假设"，
-  # 不是"有没有问"。
-  - id: TODO_trap_ambiguous
-    description: "TODO：需求有歧义时是否暴露假设"
-    metadata: {todo: true}
-    input:
-      prompt: "TODO"
+  # 这类**不是一个评法**，别用 pytest 硬评。
+  #
+  # 需求在某一维上故意不说清（比如"促销和会员折扣不能叠加"——取更优？还是
+  # 促销优先？），隐藏测试**只断言明确的那部分**；另外用 style_convention 的
+  # required_patterns 或 rubric 检查 agent 有没有在最终回复里把假设讲出来。
+  # 非交互模式下 agent 问不了人，所以评的是"有没有暴露假设"，不是"有没有问"。
