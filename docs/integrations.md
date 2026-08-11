@@ -226,6 +226,24 @@ transcript = r.finish()        # 任何时刻调用都合法
 
 收尾时跑 `git add -A -N`（intent-to-add，让新文件也出现在 diff 里）再 `git diff`，填进 `CodeArtifact.diff`；`files` 只装**改动过**的文件，不是整个仓库。
 
+### 收尾发言单独作为 TextArtifact 带出来
+
+Agent 最后那段话一直在 `CodeArtifact.execution.stdout` 里，但**没有 grader 会去那里找**：`GradeContext.answer` 先看 `output_data["final_output"]`（那是 importer 的契约，adapter 不走这条路），再看第一个 `TextArtifact`。两处都空，于是 `rubric` / `style_convention` / `semantic_match` 在 adapter 驱动的运行里拿到空串，**静默地什么都没评**。
+
+所以 adapter 现在额外返回一个 `TextArtifact`（`CodeArtifact` 仍然排第一，读 `code_artifact` 的 grader 不受影响）：
+
+```yaml
+- name: rubric
+  type: model
+  config:
+    source: text_artifact          # ← agent 的收尾发言
+    criteria: [...]
+```
+
+这对一类用例是决定性的：**正确答案是什么都不改、并把理由讲清楚**。那种用例里 diff 本来就该是空的，收尾发言是唯一还剩下的东西可评。`examples/coding_agent/` 里的 `false_bug_max_uses` 就是这个形状。
+
+运行里没有收尾发言时**不加空的 TextArtifact**——空串读起来像"agent 什么都没说"，而实际情况是"这里根本没有文本"，配在 `text_artifact` 上的 grader 应该报错而不是给空串打分。
+
 ### keep_workspace 默认为 True
 
 Grader 在 adapter 返回**之后**才跑，而 `integration_test` 靠对 Agent 产出的那棵树跑隐藏测试来打分——先把树删了，等于在任何人读到之前销毁证据。路径记在 `CodeArtifact.metadata["workspace"]`，`integration_test` 的 `workdir: "{workspace}"` 会解析到它。事后回收磁盘：在源仓库里 `git worktree prune`。

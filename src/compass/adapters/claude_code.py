@@ -63,7 +63,12 @@ from typing import Any
 
 from compass.adapters.base import Adapter, AgentInput, AgentOutput
 from compass.adapters.registry import register_adapter
-from compass.core.artifacts import CodeArtifact, ExecutionResult, GeneratedFile
+from compass.core.artifacts import (
+    CodeArtifact,
+    ExecutionResult,
+    GeneratedFile,
+    TextArtifact,
+)
 from compass.core.transcript import Transcript
 from compass.integrations.claude_agent import WireReconstructor
 
@@ -305,12 +310,33 @@ class ClaudeCodeAdapter(Adapter):
             metadata=metadata,
         )
 
+        # The agent's closing message, as a text artifact of its own.
+        #
+        # It was already on the CodeArtifact's ``execution.stdout``, but nothing
+        # reads it there: ``GradeContext.answer`` looks at
+        # ``output_data["final_output"]`` and then at the first *TextArtifact*,
+        # so for adapter-driven runs every text grader — ``rubric``,
+        # ``style_convention``, ``semantic_match`` — saw an empty string and
+        # silently judged nothing. That matters for the class of case where the
+        # right move is to *not* edit and say why: with no reachable text there
+        # is nothing left to grade but the (correctly empty) diff.
+        artifacts: list[Any] = [artifact]
+        if run.final_text:
+            artifacts.append(
+                TextArtifact(
+                    content=run.final_text,
+                    format="markdown",
+                    word_count=len(run.final_text.split()),
+                    metadata={"source": "claude_code.final_message"},
+                )
+            )
+
         # A CLI that never produced a parseable event did not run — an empty
         # diff from *that* is a harness failure, not an agent that declined to
         # edit anything, and the two must not score the same.
         if not run.events_seen:
             return AgentOutput(
-                artifacts=[artifact],
+                artifacts=artifacts,
                 metadata=metadata,
                 error=(
                     f"claude CLI produced no stream-json events "
@@ -318,7 +344,7 @@ class ClaudeCodeAdapter(Adapter):
                 ),
             )
 
-        return AgentOutput(artifacts=[artifact], metadata=metadata)
+        return AgentOutput(artifacts=artifacts, metadata=metadata)
 
     # ------------------------------------------------------------------
     # Workspace preparation

@@ -266,6 +266,62 @@ async def test_run_records_steps_and_diff(repo: Path, tmp_path: Path):
     assert artifact.execution.stdout == "Added rate limiting."
 
 
+async def test_the_final_message_is_reachable_by_text_graders(
+    repo: Path, tmp_path: Path
+):
+    """The closing message comes back as a TextArtifact of its own.
+
+    It was always on the CodeArtifact's ``execution.stdout``, but nothing looks
+    for it there: ``GradeContext.answer`` reads ``output_data['final_output']``
+    and then the first TextArtifact, so ``rubric``, ``style_convention`` and
+    ``semantic_match`` all saw an empty string on adapter-driven runs and
+    silently judged nothing. That is fatal for the class of case where the
+    right answer is to change nothing and explain why — with no reachable text
+    the only thing left to grade is a (correctly) empty diff.
+    """
+    from compass.core.artifacts import CodeArtifact, TextArtifact
+    from compass.graders.base import GradeContext
+
+    cli = _make_stub_cli(tmp_path, edits={"app.py": "changed\n"})
+    adapter = ClaudeCodeAdapter({"repo": str(repo), "cli_path": cli})
+    agent_input, transcript = _agent_input()
+
+    output = await adapter.run(agent_input)
+
+    # The code artifact stays first, so graders reading `code_artifact` are
+    # unaffected by the addition.
+    assert isinstance(output.artifacts[0], CodeArtifact)
+    texts = [a for a in output.artifacts if isinstance(a, TextArtifact)]
+    assert [t.content for t in texts] == ["Added rate limiting."]
+
+    transcript.set_outcome(artifacts=output.artifacts)
+    context = GradeContext(transcript=transcript, outcome=transcript.outcome)
+    assert context.answer == "Added rate limiting."
+    assert context.text_artifact is not None
+    assert context.code_artifact is not None
+
+
+async def test_a_run_with_no_closing_message_adds_no_empty_artifact(
+    repo: Path, tmp_path: Path
+):
+    """An empty TextArtifact would say 'the agent stayed silent'. A missing one
+    says 'there is no text here' — which is what a grader pointed at
+    `text_artifact` should report, rather than scoring the empty string."""
+    from compass.core.artifacts import TextArtifact
+
+    events = _stream_events()
+    events[-2]["message"]["content"] = []  # no closing text block
+    events[-1]["result"] = ""
+    cli = _make_stub_cli(tmp_path, events=events, edits={"app.py": "changed\n"})
+    adapter = ClaudeCodeAdapter({"repo": str(repo), "cli_path": cli})
+    agent_input, _ = _agent_input()
+
+    output = await adapter.run(agent_input)
+
+    assert output.error is None
+    assert not [a for a in output.artifacts if isinstance(a, TextArtifact)]
+
+
 async def test_turn_index_and_call_id_survive_the_merge(repo: Path, tmp_path: Path):
     """turn_count and sub-agent attribution read fields a kwargs rebuild drops."""
     cli = _make_stub_cli(tmp_path, edits={"app.py": "changed\n"})
