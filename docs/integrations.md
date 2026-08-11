@@ -143,7 +143,7 @@ transcript = import_claude_stream_json("run.stream.jsonl")   # 复用同一套�
   > 注意两套约定的差别，搞反会静默重复计数：**Anthropic 的 `input_tokens` 不含缓存**（缓存是加法项），而 **OpenInference/OTLP 的 `prompt` 已经含了缓存**，`prompt_details.cache_read` 只是其中的明细。OTLP importer 因此显式传 `total_tokens`，不让它被重新加一遍。
 - **子 agent 归属**：`Task` 工具的 `tool_use_id` 与后续消息的 `parent_tool_use_id` 对上，还原 `agent_name`。
 - **限流通知按原样记录**：`rate_limit_event` 的 `rate_limit_info` 原封不动存进 `transcript.metadata["rate_limit"]`，外加按 status 计数。订阅制下这个很要紧：overage 常常在组织层面被禁用（`overageStatus: rejected`），撞上五小时窗口是**请求被拒**而不是超额计费——于是"配额用完的半截运行"会长得像"这个模型更差"。status 的取值词表是 CLI 的，这里不替它下判断。
-- **其余不认识的事件类型计数、不丢弃**：映射不了的（`rate_limit_event`、`stream_event` 局部增量、以后 CLI 新增的类型）按类型名计数写进 `transcript.metadata["unhandled_events"]`，干净运行则没有这个键。只记数量不留 payload——形状按定义就是未知的，而一条流可能带上千个增量。它回答的是唯一要紧的那个问题：**这次运行有没有发生轨迹解释不了的事？** 被节流三次的运行和单纯跑得慢的运行，除此之外在轨迹里长得一模一样，而前者是 harness 问题被读成了"模型慢"——订阅制下跑长对比撞用量窗口时尤其要紧。
+- **其余不认识的事件类型计数、不丢弃**：映射不了的（`stream_event` 局部增量、以后 CLI 新增的类型）按类型名计数写进 `transcript.metadata["unhandled_events"]`，干净运行则没有这个键。只记数量不留 payload——形状按定义就是未知的，而一条流可能带上千个增量。它回答的是唯一要紧的那个问题：**这次运行有没有发生轨迹解释不了的事？** CLI 以后加了什么，不会被这个 importer 悄悄吞掉。
 - **零依赖**：鸭子类型读属性，不 import `claude_agent_sdk`。
 
 **State delta：记录它改了什么，而不是它说它改了什么**

@@ -104,3 +104,7 @@ docs/*-insights.md
 
 # UV
 .uv/
+
+# Live eval runs (examples/coding_agent/run.py --out). Contains a nested git
+# repo, traces and raw streams — all reproducible, none of it source.
+coding-eval-run/
