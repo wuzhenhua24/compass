@@ -483,3 +483,74 @@ def test_unreadable_system_prompt_file_is_reported():
     adapter = ClaudeCodeAdapter({"append_system_prompt_file": "/nope/missing.md"})
     with pytest.raises(Exception, match="append_system_prompt_file"):
         adapter._build_argv("task")
+
+
+# ---------------------------------------------------------------------------
+# State delta
+# ---------------------------------------------------------------------------
+
+
+def _editing_events(workspace_marker: str) -> list[dict]:
+    """A run that edits one in-remit file and one out-of-remit test file."""
+    return [
+        {"type": "system", "subtype": "init", "session_id": "cc",
+         "cwd": workspace_marker},
+        {"type": "assistant", "session_id": "cc", "message": {
+            "role": "assistant", "id": "m1", "model": "fake", "usage": {},
+            "stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit",
+                 "input": {"file_path": f"{workspace_marker}/app.py"}},
+                {"type": "tool_use", "id": "e2", "name": "Edit",
+                 "input": {"file_path": f"{workspace_marker}/tests/test_app.py"}},
+            ]}},
+        {"type": "user", "session_id": "cc", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "e1", "content": "ok",
+             "is_error": False}]}},
+        {"type": "user", "session_id": "cc", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "e2", "content": "ok",
+             "is_error": False}]}},
+        {"type": "result", "subtype": "success", "session_id": "cc", "is_error": False,
+         "num_turns": 1, "duration_ms": 100, "total_cost_usd": 0.01,
+         "result": "Done.", "permission_denials": []},
+    ]
+
+
+async def test_state_delta_reaches_the_live_transcript(repo: Path, tmp_path: Path):
+    """The whole chain: CLI stream -> reconstructor -> live transcript -> grader."""
+    marker = "/WORKSPACE"
+    cli = _make_stub_cli(
+        tmp_path, events=_editing_events(marker), edits={"app.py": "changed\n"}
+    )
+    agent_input, transcript = _agent_input()
+
+    await ClaudeCodeAdapter({"repo": str(repo), "cli_path": cli}).run(agent_input)
+
+    changes = transcript.all_state_changes()
+    assert [(c.kind, c.op, c.target) for c in changes] == [
+        ("file", "update", "app.py"),
+        ("file", "update", "tests/test_app.py"),
+    ]
+
+    from compass.graders import GradeContext, get_grader
+
+    grader = get_grader("state_delta")({
+        "forbid": [{"kind": "file", "target": "tests/*"}],
+    })
+    result = await grader.grade(
+        GradeContext(transcript=transcript, outcome=transcript.outcome)
+    )
+    assert result.passed is False
+    assert result.details["violations"][0]["call_id"] == "e2"
+
+
+async def test_state_delta_survives_the_object_merge(repo: Path, tmp_path: Path):
+    """state_delta is one of the fields a kwargs rebuild would have dropped."""
+    cli = _make_stub_cli(
+        tmp_path, events=_editing_events("/WORKSPACE"), edits={"app.py": "x\n"}
+    )
+    agent_input, transcript = _agent_input()
+
+    await ClaudeCodeAdapter({"repo": str(repo), "cli_path": cli}).run(agent_input)
+
+    edits = [tc for tc in transcript.tool_calls if tc.tool_name == "Edit"]
+    assert all(len(tc.state_delta) == 1 for tc in edits)

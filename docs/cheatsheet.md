@@ -263,3 +263,5 @@ compass docs <topic>                         # 本文档体系
 | `expect: fail` 的 case「通过」了 | 负向测试：agent 被拦截或 grader 判否即为通过 |
 | sandbox 里跑带凭证的 agent，认证总是失败 | 密钥过滤器拦了 `ANTHROPIC_API_KEY`（前缀+子串双命中），三条注入路径都拦；用 `sandbox_config.env_allow` 显式放行，订阅制凭证还要 `preserve_home: true` |
 | `claude_code` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
+| `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 会记 delta，Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
+| `state_delta` 的 `target` glob 一条都匹配不上 | 用相对 session cwd 的路径（`src/*`），不是绝对路径——worktree 每次都是新的临时目录 |

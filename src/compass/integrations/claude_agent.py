@@ -42,9 +42,40 @@ Mapping (SDK message -> Compass):
   CLI reports one authoritative total rather than per-call dollars)
 - ``parent_tool_use_id`` + ``Task`` calls -> sub-agent attribution
   (``agent_name`` first-class field)
+- a **successful** ``Write`` / ``Edit`` / ``MultiEdit`` / ``NotebookEdit`` ->
+  a ``StateChange`` on that call's ``state_delta`` (see below)
 
 Zero hard dependency on ``claude_agent_sdk``: messages are read by duck-typing
 their attributes, so this works on collected SDK objects without importing them.
+
+**State delta — what the agent changed, not what it said.** Compass defines the
+``StateChange`` slot but leaves *capturing* deltas to importers, and until this
+mapping existed no importer filled it — which left the ``state_delta`` grader
+inert on Claude traces, passing vacuously. The file-editing tools carry their
+target in the tool input, so the mapping is exact rather than inferred::
+
+    graders:
+      - name: state_delta
+        config:
+          forbid: [{kind: file, target: "tests/*"}]   # don't rewrite the tests
+          require: [{kind: file, target: "src/api/*"}]
+
+Three properties worth knowing:
+
+- **Only successful calls count.** The delta is recorded when the tool *result*
+  arrives; a rejected edit or a call whose result never came back records
+  nothing, because nothing changed.
+- **Targets are relative to the session cwd** when the run reports one (the
+  ``system``/``init`` event). This is what makes globs portable: a
+  ``claude_code`` trial works inside a throwaway git worktree, so an absolute
+  target would be a different random path every run. The absolute path is kept
+  on the change's ``metadata``.
+- **Shell-mediated changes are not captured.** An agent that deletes a file with
+  ``Bash(rm ...)`` produces no ``StateChange`` here — reliably parsing shell is
+  not something this layer should pretend to do, and a wrong delta is worse than
+  a missing one. Guard those with a domain grader over ``Bash`` calls (see
+  ``examples/ops_qa``), and read an empty ``state_delta`` as "nothing recorded",
+  never as "nothing changed".
 """
 
 from __future__ import annotations
@@ -56,7 +87,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
+from compass.core.transcript import (
+    CostInfo,
+    StateChange,
+    TokenUsage,
+    ToolCall,
+    Transcript,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +102,24 @@ _SEARCH_TOOLS = frozenset({"web_search", "web_fetch"})
 _CODE_TOOLS = frozenset(
     {"code_execution", "bash_code_execution", "text_editor_code_execution"}
 )
+
+# File-editing tools -> the tool-input key holding the path they change.
+# Only these produce a StateChange; Read/Glob/Grep change nothing, and Bash is
+# deliberately excluded (see the module docstring).
+_FILE_EDIT_TOOLS: dict[str, str] = {
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
+# Edit/MultiEdit/NotebookEdit require the file to already exist, so "update" is
+# the tool contract rather than a guess. Write is the ambiguous one.
+_FILE_EDIT_OPS: dict[str, str] = {
+    "Edit": "update",
+    "MultiEdit": "update",
+    "NotebookEdit": "update",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +272,9 @@ class _Builder:
         self._last_assistant_text: str | None = None
         self._last_model: str | None = None
         self._turn = 0
+        # Session cwd, reported by the system/init event; used to make file
+        # targets relative (and therefore matchable by a stable glob).
+        self._cwd: str | None = None
 
     # -- dispatch ----------------------------------------------------------
 
@@ -349,6 +407,52 @@ class _Builder:
         call.status = "error" if is_error else "ok"
         if is_error:
             call.error = {"message": _truncate(result_text, 500)}
+            return  # a failed edit changed nothing
+        self._record_state_delta(call, result_text)
+
+    def _record_state_delta(self, call: ToolCall, result_text: str) -> None:
+        """Attach the file change a successful editing tool just made.
+
+        Recorded here, at result time, rather than when the call was opened:
+        until the result arrives the change has not happened, and it may never
+        (a denied permission, a truncated run). ``state_delta`` should record
+        what the environment *did*, not what the model asked for.
+        """
+        path_key = _FILE_EDIT_TOOLS.get(call.tool_name)
+        if path_key is None:
+            return
+        raw_path = (call.input or {}).get(path_key)
+        if not isinstance(raw_path, str) or not raw_path:
+            return
+
+        target, absolute = self._relativize(raw_path)
+        metadata: dict[str, Any] = {"tool": call.tool_name}
+        if absolute and absolute != target:
+            metadata["absolute_path"] = absolute
+
+        call.state_delta.append(
+            StateChange(
+                kind="file",
+                op=_FILE_EDIT_OPS.get(call.tool_name) or _write_op(result_text),
+                target=target,
+                metadata=metadata,
+            )
+        )
+
+    def _relativize(self, raw_path: str) -> tuple[str, str]:
+        """(target, absolute) — target relative to the session cwd when possible.
+
+        A ``claude_code`` trial runs in a throwaway worktree, so the absolute
+        path differs every run and no glob a user writes could ever match it.
+        """
+        absolute = raw_path
+        if not self._cwd:
+            return raw_path, absolute
+        try:
+            relative = str(Path(raw_path).relative_to(self._cwd))
+        except ValueError:
+            return raw_path, absolute  # outside the workspace: keep it absolute
+        return relative, absolute
 
     # -- result ------------------------------------------------------------
 
@@ -381,6 +485,15 @@ class _Builder:
     # -- system (task lifecycle) ------------------------------------------
 
     def _on_system(self, msg: Any) -> None:
+        # The init event announces the session's working directory, which is
+        # what makes file targets in the state delta relative and portable.
+        data = getattr(msg, "data", None)
+        if isinstance(data, dict):
+            cwd = data.get("cwd")
+            if isinstance(cwd, str) and cwd and not self._cwd:
+                self._cwd = cwd
+                self.transcript.metadata["cwd"] = cwd
+
         # TaskStarted carries a tool_use_id + human description for a sub-agent.
         tool_use_id = getattr(msg, "tool_use_id", None)
         description = getattr(msg, "description", None) or getattr(msg, "task_type", None)
@@ -445,6 +558,18 @@ def _block_kind(block: Any) -> str:
     if hasattr(block, "text"):
         return "text"
     return "other"
+
+
+def _write_op(result_text: str) -> str:
+    """``create`` or ``update`` for a ``Write``, read off the tool's own result.
+
+    Write is the one editing tool that does both, and its input cannot tell them
+    apart — only the result says whether the file already existed. The check is
+    best-effort on the CLI's wording, defaulting to ``update`` (the file's
+    contents changed, which is true either way). Match on ``target`` rather than
+    ``op`` when you need certainty.
+    """
+    return "create" if "created" in (result_text or "").lower() else "update"
 
 
 def _tool_type(name: str) -> str:

@@ -398,3 +398,197 @@ class TestWireReconstructorStreaming:
         for event in events[3:]:
             r.feed(event)
         assert r.finish().sum_cost().total_usd == pytest.approx(0.0456)
+
+
+class TestStateDeltaMapping:
+    """Successful file edits become StateChanges, so the state_delta grader has
+    something to grade. Before this mapping it passed vacuously on every Claude
+    trace, because no importer ever filled the slot."""
+
+    @staticmethod
+    def _use(tid, name, inp):
+        return {"type": "tool_use", "id": tid, "name": name, "input": inp}
+
+    @staticmethod
+    def _result(tid, text, err=False):
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tid, "content": text,
+             "is_error": err}]}}
+
+    def _run(self, uses, results, *, cwd="/wt"):
+        events = []
+        if cwd is not None:
+            events.append(
+                {"type": "system", "subtype": "init", "session_id": "s", "cwd": cwd}
+            )
+        events.append({"type": "assistant", "session_id": "s", "message": {
+            "role": "assistant", "id": "m1", "model": "x", "usage": {},
+            "content": uses}})
+        events.extend(results)
+        return reconstruct_transcript_from_wire(events)
+
+    def test_edit_records_an_update(self):
+        t = self._run(
+            [self._use("t1", "Edit", {"file_path": "/wt/src/api.py"})],
+            [self._result("t1", "ok")],
+        )
+        (change,) = t.all_state_changes()
+        assert change.kind == "file"
+        assert change.op == "update"
+        assert change.target == "src/api.py"
+        assert change.metadata["tool"] == "Edit"
+
+    def test_every_editing_tool_is_mapped(self):
+        t = self._run(
+            [
+                self._use("t1", "Edit", {"file_path": "/wt/a.py"}),
+                self._use("t2", "MultiEdit", {"file_path": "/wt/b.py"}),
+                self._use("t3", "NotebookEdit", {"notebook_path": "/wt/c.ipynb"}),
+                self._use("t4", "Write", {"file_path": "/wt/d.py"}),
+            ],
+            [self._result(f"t{i}", "ok") for i in range(1, 5)],
+        )
+        assert [c.target for c in t.all_state_changes()] == [
+            "a.py", "b.py", "c.ipynb", "d.py"
+        ]
+
+    def test_read_only_tools_record_nothing(self):
+        t = self._run(
+            [
+                self._use("t1", "Read", {"file_path": "/wt/a.py"}),
+                self._use("t2", "Grep", {"pattern": "x"}),
+                self._use("t3", "Glob", {"pattern": "**/*.py"}),
+            ],
+            [self._result(f"t{i}", "ok") for i in range(1, 4)],
+        )
+        assert t.all_state_changes() == []
+
+    def test_bash_records_nothing_even_when_it_deletes(self):
+        """Parsing shell is not something this layer should guess at — a wrong
+        delta is worse than a missing one."""
+        t = self._run(
+            [self._use("t1", "Bash", {"command": "rm -rf tests/"})],
+            [self._result("t1", "")],
+        )
+        assert t.all_state_changes() == []
+
+    def test_a_failed_edit_changes_nothing(self):
+        t = self._run(
+            [self._use("t1", "Edit", {"file_path": "/wt/src/api.py"})],
+            [self._result("t1", "Permission denied", err=True)],
+        )
+        assert t.all_state_changes() == []
+
+    def test_an_unanswered_call_changes_nothing(self):
+        """A run cut short mid-edit did not necessarily complete that edit."""
+        t = self._run([self._use("t1", "Edit", {"file_path": "/wt/a.py"})], [])
+        assert t.all_state_changes() == []
+
+    def test_write_op_comes_from_the_result(self):
+        t = self._run(
+            [
+                self._use("t1", "Write", {"file_path": "/wt/new.py"}),
+                self._use("t2", "Write", {"file_path": "/wt/old.py"}),
+            ],
+            [
+                self._result("t1", "File created successfully at: /wt/new.py"),
+                self._result("t2", "The file /wt/old.py has been updated."),
+            ],
+        )
+        assert [(c.target, c.op) for c in t.all_state_changes()] == [
+            ("new.py", "create"),
+            ("old.py", "update"),
+        ]
+
+    def test_targets_are_relative_to_the_session_cwd(self):
+        """A claude_code trial runs in a throwaway worktree, so an absolute
+        target would be a different random path every run and no user glob
+        could ever match it."""
+        t = self._run(
+            [self._use("t1", "Edit", {"file_path": "/wt/pkg/mod.py"})],
+            [self._result("t1", "ok")],
+            cwd="/wt",
+        )
+        (change,) = t.all_state_changes()
+        assert change.target == "pkg/mod.py"
+        assert change.metadata["absolute_path"] == "/wt/pkg/mod.py"
+
+    def test_paths_outside_the_workspace_stay_absolute(self):
+        t = self._run(
+            [self._use("t1", "Edit", {"file_path": "/etc/hosts"})],
+            [self._result("t1", "ok")],
+            cwd="/wt",
+        )
+        (change,) = t.all_state_changes()
+        assert change.target == "/etc/hosts"
+        assert "absolute_path" not in change.metadata
+
+    def test_no_cwd_reported_keeps_the_path_as_given(self):
+        t = self._run(
+            [self._use("t1", "Edit", {"file_path": "/wt/a.py"})],
+            [self._result("t1", "ok")],
+            cwd=None,
+        )
+        (change,) = t.all_state_changes()
+        assert change.target == "/wt/a.py"
+
+    def test_a_pathless_edit_is_skipped(self):
+        t = self._run(
+            [self._use("t1", "Edit", {"old_string": "x"})],
+            [self._result("t1", "ok")],
+        )
+        assert t.all_state_changes() == []
+
+    def test_changes_attribute_to_the_call_that_made_them(self):
+        """Per-call attribution is the point — an outcome-level file listing
+        cannot say which step touched what."""
+        t = self._run(
+            [
+                self._use("t1", "Edit", {"file_path": "/wt/a.py"}),
+                self._use("t2", "Edit", {"file_path": "/wt/b.py"}),
+            ],
+            [self._result("t1", "ok"), self._result("t2", "ok")],
+        )
+        by_call = {
+            tc.call_id: [sc.target for sc in tc.state_delta]
+            for tc in t.tool_calls
+            if tc.state_delta
+        }
+        assert by_call == {"t1": ["a.py"], "t2": ["b.py"]}
+
+    async def test_state_delta_grader_now_catches_an_out_of_remit_write(self):
+        t = self._run(
+            [
+                self._use("t1", "Edit", {"file_path": "/wt/src/api.py"}),
+                self._use("t2", "Edit", {"file_path": "/wt/tests/test_api.py"}),
+            ],
+            [self._result("t1", "ok"), self._result("t2", "ok")],
+        )
+        grader = get_grader("state_delta")({
+            "require": [{"kind": "file", "target": "src/*"}],
+            "forbid": [{"kind": "file", "target": "tests/*"}],
+        })
+        result = await grader.grade(GradeContext(transcript=t, outcome=t.outcome))
+
+        assert result.passed is False
+        assert any("tests/*" in f for f in result.details["failures"])
+        # ... and the violation names the step responsible.
+        assert result.details["violations"][0]["call_id"] == "t2"
+
+    async def test_readonly_guard_is_no_longer_vacuous(self):
+        edited = self._run(
+            [self._use("t1", "Write", {"file_path": "/wt/a.py"})],
+            [self._result("t1", "ok")],
+        )
+        looked = self._run(
+            [self._use("t1", "Read", {"file_path": "/wt/a.py"})],
+            [self._result("t1", "contents")],
+        )
+        grader = get_grader("state_delta")({"readonly": True})
+
+        assert (await grader.grade(
+            GradeContext(transcript=looked, outcome=looked.outcome)
+        )).passed is True
+        assert (await grader.grade(
+            GradeContext(transcript=edited, outcome=edited.outcome)
+        )).passed is False

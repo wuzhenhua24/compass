@@ -782,6 +782,10 @@ graders:
 
 **边界纪律（控制面/数据面）**：Compass 定义槽位、词汇和守卫——**捕获** delta（快照、diff、覆盖文件系统）是数据面的活，由 adapter / harness / importer 填充。所以空 `state_delta` 意味着"没记录"而非"没变更"；`require` 规则因此兼作捕获检查——预期的变更没被记录也会失败。违规会带上肇事调用的 `call_id`，这正是 outcome 级检查给不了的**失败归因**（哪一步搞坏的）。向后兼容：1.3 之前的 transcript 加载后 `state_delta` 为空列表。
 
+**第一个内置捕获：Claude 轨迹的文件编辑**。上面这条纪律有个副作用——槽位定义好了却没人填，`state_delta` grader 在 Claude 轨迹上就是**空过**（`readonly: true` 永远通过）。`compass.integrations.claude_agent` 现在填它：成功的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` → `StateChange(kind="file", …)`，路径从工具入参里直接读，是**精确值不是推断**。三条边界写在 [docs/integrations.md](integrations.md)：只记成功的调用、target 相对 session cwd（否则 worktree 的随机路径没法写 glob）、**Bash 造成的变更不记**（可靠解析 shell 不是这层该假装能做的事，错的 delta 比缺的 delta 更糟）。
+
+这让"改了不该改的东西"变成确定性检查。典型的抓获场景：agent 改不动实现，转头把测试改成通过——`integration_test` 一片绿，`state_delta` 的 `forbid: [{kind: file, target: "tests/*"}]` 把它抓出来。**过程评估在这里不是锦上添花，是唯一发现得了的路径。**
+
 **审计溯源：run_id / config_hash / grader_version**（ToolCall Protocol v1.4）
 
 《Hidden Technical Debt》给出的**最小 trace 记录**要求包含 run id、prompt/config hash、verifier 版本——*"少于这些，就难以 replay、比较、审计。"* 否则就会掉进它描述的 cargo cult 评估：仪表盘的数字变好了，但没人能回答"这是同一份配置吗？判分器换过没有？"——数字上涨可能只是因为**测量本身变了**。协议 1.4 把这三样落成一等字段，runner 自动盖章，用户零配置：

@@ -323,7 +323,7 @@ graders:
 | `loop_detection` | Code | Transcript | 循环检测、浪费行为识别、序列模式检测 |
 | `turn_count` | Code | Transcript | 交互轮次评分，支持 budget/linear/log 三种评分模式 |
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
-| `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3） |
+| `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3）。Claude 轨迹的文件编辑由 importer 自动填充，见下 |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
 | `external_checker` | Code | Both | 把**任何可执行文件**变成 grader（shell / 二进制 / `npm test`），契约是进程边界：env 进、stdout JSON 出、exit code 判定——见本文"子进程 Checker"一节 |
 
@@ -604,6 +604,31 @@ graders:
 | `json` | JSON 对象 | `{"passed": 3, "total": 5}` |
 | `generic` | `X/Y passed` 或 `X of Y tests passed` | `8/10 passed` |
 | `auto` | 按优先级自动尝试所有格式 | （默认） |
+
+## 状态变更守卫（StateDeltaGrader）—— "有没有动不该动的东西"
+
+`state_delta` 看的不是 agent **说**它改了什么，而是 `ToolCall.state_delta` 里记录的它**实际**改了什么，并把违规归因到肇事的那一步（`call_id`）。
+
+**它抓的是 outcome grader 结构上抓不到的东西。** 最典型的一例：agent 改不动实现，转头把测试改成通过。`integration_test` 会报一片绿——测试确实过了——只有过程侧看得见它是怎么"过"的：
+
+```yaml
+graders:
+  - name: integration_test              # 结果：测试过了吗
+    gate: true
+    config: {script: "pytest tests/ -q", workdir: "{workspace}"}
+  - name: state_delta                   # 过程：是靠改实现过的，还是靠改测试
+    gate: true
+    config:
+      require: [{kind: file, target: "src/*"}]      # 该改的改了
+      forbid:  [{kind: file, target: "tests/*"}]    # 不该改的没动
+      max_changes: 20
+```
+
+匹配器是 `{kind, op, target}`，`kind`/`op` 精确匹配、`target` 是 glob，缺省的键匹配任意值——所以 `{kind: file, target: "tests/*"}` 的意思是"对 tests/ 下任何文件的任何操作"。
+
+**谁来填这个槽位。** 捕获 delta 是数据面的活（见 [core-design.md](core-design.md) 的边界纪律）。目前 `compass.integrations.claude_agent` 会自动填 Claude 轨迹的文件编辑——因此 `claude_code` adapter 和 `compass import -f claude` 两条路都开箱可用。要点见 [integrations.md](integrations.md)：只记**成功**的编辑、target **相对 session cwd**（worktree 路径每次都不同，绝对路径没法写 glob）、**Bash 造成的变更不记**。
+
+最后一条意味着 `state_delta` 会**漏报**。所以：空的 delta 读作"没记录"而不是"没变更"，`readonly: true` 不能当安全边界用；要守 shell 侧的破坏性操作，写一个看 `Bash` 命令的领域 grader（`examples/ops_qa` 里的 `no_write_ops` 就是这个形状）。`require` 规则同时也是**捕获检查**——预期的变更没被记录下来一样会失败。
 
 ## 交互轮次评分器（TurnCountGrader）
 

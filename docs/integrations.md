@@ -134,12 +134,37 @@ transcript = import_claude_stream_json("run.stream.jsonl")   # 复用同一套�
 | `ServerToolUseBlock`/`ServerToolResultBlock`（web_search/web_fetch/advisor）| 服务端执行的 `ToolCall`（内联结果）|
 | `ResultMessage` | outcome(`result`) + duration + **CLI 已算好的 `total_cost_usd`** |
 | `parent_tool_use_id` + `Task` 调用 | 子 agent 归属 → 一等字段 `agent_name` |
+| **成功的** `Write`/`Edit`/`MultiEdit`/`NotebookEdit` | 该调用的 `state_delta` 上一条 `StateChange(kind="file", …)` |
 
 **设计要点**
 - **消费公开契约而非内部落盘**：SDK 明说磁盘 transcript 是"内部 discriminated union，当作不透明 blob"，所以走稳定的 `Message` 流。
 - **成本用 CLI 权威总额**：CLI 只报一个 `total_cost_usd`（比逐调用美元更准），挂到终局 llm 调用上，`sum_cost`/`cost_budget` 即得全程真实成本——**无需价格表**。
 - **子 agent 归属**：`Task` 工具的 `tool_use_id` 与后续消息的 `parent_tool_use_id` 对上，还原 `agent_name`。
 - **零依赖**：鸭子类型读属性，不 import `claude_agent_sdk`。
+
+**State delta：记录它改了什么，而不是它说它改了什么**
+
+Compass 定义了 `StateChange` 槽位但把**捕获**留给数据面——结果是槽位一直没人填，`state_delta` grader 在 Claude 轨迹上空过（`readonly: true` 永远通过）。现在 importer 填它：文件编辑类工具的目标路径就在工具入参里，所以这是**精确值，不是推断**。
+
+```yaml
+graders:
+  - name: state_delta
+    config:
+      require: [{kind: file, target: "src/api/*"}]   # 该改的改了
+      forbid:  [{kind: file, target: "tests/*"}]     # 没顺手改测试
+```
+
+三条边界，都是刻意的：
+
+| 边界 | 为什么 |
+|---|---|
+| **只记成功的调用** | delta 在**结果**到达时才记录。被拒绝的编辑、结果没回来的调用（运行被 timeout 截断）都不记——它们没改变任何东西 |
+| **target 相对 session cwd** | 从 `system`/`init` 事件拿 cwd。`claude_code` 的每个 trial 跑在一个临时 worktree 里，绝对路径每次都是新的随机串，用户写的 glob 永远匹配不上。绝对路径保留在 `metadata.absolute_path`；workspace 之外的路径保持绝对 |
+| **Bash 的变更不记** | `Bash(rm -rf tests/)` 不产生 `StateChange`。可靠解析 shell（管道、`&&`、变量、别名）不是这层该假装能做的事，**错的 delta 比缺的 delta 更糟**。要守这类操作，写一个看 `Bash` 调用的领域 grader（`examples/ops_qa` 的 `no_write_ops` 即此形状） |
+
+`op` 的取值：`Edit`/`MultiEdit`/`NotebookEdit` → `update`（工具契约本就要求文件已存在，不是猜的）；`Write` 两种都可能，从工具结果文本判 `create`/`update`，兜底 `update`——**需要确定性时匹配 `target` 而不是 `op`**。
+
+因为漏报是设计的一部分：空的 delta 读作"没记录"，不是"没变更"。
 
 至此，四个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
 
@@ -225,11 +250,16 @@ cases:
       - {name: integration_test, type: code, gate: true,       # 对不对（隐藏测试）
          config: {script: "pytest tests/ -q", workdir: "{workspace}", output_format: pytest}}
       - {name: diff_size, type: code, config: {max_total_changes: 200}}   # 改动是否收敛
+      - {name: state_delta, type: code, gate: true,                       # 改动范围
+         config: {require: [{kind: file, target: "src/*"}],
+                  forbid:  [{kind: file, target: "tests/*"}]}}
       - {name: cost_budget, type: code, config: {max_cost_usd: 1.5}}      # 以下四个：过程
       - {name: turn_count, type: code, config: {max_turns: 30}}
       - {name: loop_detection, type: code}
       - {name: tool_usage, type: code, config: {forbidden_tools: ["WebFetch"]}}
 ```
+
+`state_delta` 那条不是凑数的。少了它，一个改不动实现、转头把测试改成通过的 agent 会拿到满分——`integration_test` 只知道测试过了，不知道它是怎么过的。
 
 两条轴都只是 `agent.config` 里的一个键，所以扫哪条都是普通的多变体运行：
 
