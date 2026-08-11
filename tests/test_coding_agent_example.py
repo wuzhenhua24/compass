@@ -759,6 +759,99 @@ class TestAmbiguousCaseAcceptsEveryReading:
         assert totals["promo always wins"] == "180.0"
 
 
+class TestLocalizationCaseDecoys:
+    """``bug_locate_2`` puts the symptom on a receipt and the cause two hops
+    away, with two wrong places to land in between. It measures localization
+    only for as long as both decoys stay caught — and a decoy that quietly
+    stops being caught turns the case into a free point without failing
+    anything."""
+
+    _ID = "bug_locate_2"
+    _BREAK = '        if order["status"] == "cancelled":\n            break'
+
+    def _score(self, tmp_path, name, edits):
+        import re
+        import shutil
+
+        work = tmp_path / name
+        shutil.copytree(_EXAMPLE / "project", work)
+        for rel, (old, new) in edits.items():
+            path = work / rel
+            source = path.read_text(encoding="utf-8")
+            assert old in source, f"{name}: anchor moved in {rel}"
+            path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+        hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
+        ok, output = check._run_pytest(work, hidden)
+        passed = int((re.search(r"(\d+) passed", output) or [0, 0])[1])
+        repo_ok, _ = check._run_pytest(work, "tests/")
+        return ok, passed, repo_ok
+
+    def test_the_real_fix_is_one_word(self, tmp_path):
+        ok, passed, repo_ok = self._score(
+            tmp_path,
+            "real",
+            {"history.py": (self._BREAK, self._BREAK.replace("break", "continue"))},
+        )
+        assert ok and repo_ok and passed == 8
+
+    def test_the_threshold_table_is_a_decoy_the_repo_suite_guards(self, tmp_path):
+        """One hop from the symptom and the obvious suspect for 'the tier is
+        wrong'. Lowering it to make the reported customer gold turns
+        tests/test_loyalty.py red — the regression gate is what catches this,
+        which is the whole reason every case runs two gates."""
+        ok, _, repo_ok = self._score(
+            tmp_path, "threshold",
+            {"loyalty.py": ('    (1000.0, "gold"),', '    (400.0, "gold"),')},
+        )
+        assert not ok, "the hidden tests no longer notice a moved threshold"
+        assert not repo_ok, "tests/test_loyalty.py no longer pins the thresholds"
+
+    def test_the_legacy_module_is_dead_code(self, tmp_path):
+        """It has real bugs in it and is imported by nothing, so 'fixing' it
+        must change no outcome at all. If anything ever imports it, the decoy
+        becomes a genuine second cause and the case stops having one answer."""
+        for module in (_EXAMPLE / "project").rglob("*.py"):
+            if "legacy" in module.parts:
+                continue
+            assert "legacy" not in module.read_text(encoding="utf-8"), (
+                f"{module.name} references legacy/ — it is no longer dead code"
+            )
+
+        did_nothing = self._score(tmp_path, "nothing", {})
+        edited_legacy = self._score(
+            tmp_path, "legacy",
+            {"legacy/reporting_v1.py": (
+                '    if lifetime > TIER_CUTOFFS["gold"]:',
+                '    if lifetime >= TIER_CUTOFFS["gold"]:',
+            )},
+        )
+        assert edited_legacy == did_nothing
+        assert not edited_legacy[0]
+
+    def test_deleting_the_cancelled_record_does_not_pass(self, tmp_path):
+        """The reason most of the hidden tests build their own histories: with
+        that record gone the reported customer's receipt is right, and against
+        the shipped data alone the edit is indistinguishable from a fix."""
+        ok, _, repo_ok = self._score(
+            tmp_path, "deleted",
+            {"history.py": (
+                '        {"id": "o_5031", "status": "cancelled", "total": 180.00},\n',
+                "",
+            )},
+        )
+        assert not ok, "hidden tests only look at the shipped data"
+        assert repo_ok, "the repo suite is not what catches this one"
+
+    def test_the_bug_is_invisible_to_the_repos_own_suite(self, tmp_path):
+        """Which is why it shipped, and why the case is about locating rather
+        than noticing. If tests/ ever goes red on the untouched project, RED
+        stops meaning what check.py reports."""
+        ok, passed, repo_ok = self._score(tmp_path, "base", {})
+        assert repo_ok
+        assert not ok and 0 < passed < 8
+
+
 class TestRunPyResolvesTheSuite:
     """suite.yaml is not runnable as shipped — its paths only exist on the
     machine running it. An unfilled placeholder fails deep inside a grader,

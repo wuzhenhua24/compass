@@ -134,6 +134,46 @@ cases:
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 20}}
 
+  # ── 改 bug · 需要定位（两跳 + 诱饵）────────────────────────────────
+  # 症状在最外层（收据上的会员等级），根因在两跳之外（累计消费怎么加的）。
+  # 路上有两个错的落脚点：
+  #   · loyalty.py 的档位阈值表——离症状最近，"等级不对"第一个会怀疑它。
+  #     它是对的，而且仓库自带测试钉住了：改阈值让这个客户变 gold，
+  #     tests/test_loyalty.py 直接变红，被回归 gate 抓住。
+  #   · legacy/reporting_v1.py——里面确实有 bug，但**没有任何东西 import 它**。
+  #
+  # 这条测的是**读代码定位**，不是改代码：修复本身只有一个词
+  # （break → continue），所以 diff_size 收得很紧。
+  #
+  # 隐藏测试大部分用**自己构造的**订单历史，不用仓库里那份数据。因为把
+  # history.ORDERS 里那笔取消订单删掉，也能让工单里那个客户的收据变对——
+  # 只对着现有数据断言的话，这种改法和真修复分不出来。
+  - id: bug_locate_2
+    description: "改 bug（需定位）：会员等级算低了，根因在两跳之外"
+    input:
+      prompt: |
+        客服工单 #5177：
+
+        > 客户 Dara Ferreira（c_1004）反馈她的收据上会员等级一直显示 silver，
+        > 但她后台看到的累计消费是 1462.50，早就过 gold 门槛了。
+        >
+        > 复现：
+        >     from receipts import build_receipt
+        >     build_receipt("c_1004", [{"sku": "mug", "unit_price": 12.0, "quantity": 1}])
+        >     # 拿到 'tier': 'silver'、'lifetime_spend': 420.0
+        >
+        > 不是所有客户都这样——我抽查了 c_1001 和 c_1002，等级都是对的。
+
+        请定位并修好。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_bug_locate_2.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 20}}
+
   # ── 需求 · 增量 ──────────────────────────────────────────────────────
   # 在现有模块加个函数，接口由需求给定。
   - id: add_discount
