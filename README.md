@@ -128,7 +128,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 > 二者产出的都是同一个 Transcript，下游评分/指标完全共用。
 >
 > 图中上排（ComfyUI / SD WebUI / Midjourney / DALL-E / Custom）是可对接的**目标**示意，下排是
-> **当前内置注册的三个 adapter**：`image` / `coding` / `environment`——其余目标通过
+> **当前内置注册的四个 adapter**：`image` / `coding` / `environment` / `claude_code`——其余目标通过
 > `@register_adapter` 自定义接入。注意 `adapters/llm.py` 不是 adapter：它提供 LLM 调用 mixin
 > 与模型定价表，供 Model Grader 和自定义 adapter 复用。
 
@@ -172,7 +172,7 @@ uv run compass --help
 
 ```bash
 uv pip install -e /path/to/compass     # 可编辑安装，Compass 更新后无需重装
-compass list                           # 验证：应列出 41 个 grader 和 3 个 adapter
+compass list                           # 验证：应列出 41 个 grader 和 4 个 adapter
 ```
 
 ## 快速开始
@@ -306,7 +306,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 | **Grader 体系** | 三层体系（Code/Model/Human）、全部 41 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
 | **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
-| **接入外部 Agent** | OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
+| **接入外部 Agent** | OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Claude Code Adapter（真实仓库上评编程 Agent）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
 
 几个贯穿全部文档的设计要点：
 
@@ -381,7 +381,7 @@ compass/
 │   │   ├── code/             # Code Graders（common / coding / data / image）
 │   │   ├── model/            # Model Graders（semantic / vlm / rubric / trajectory / groundedness...）
 │   │   └── human/            # Human Graders（human_review / pairwise + 一致性 κ/α、锚点校准）
-│   ├── adapters/             # Agent 适配器（image / coding / environment；llm.py 是 mixin 与定价，非 adapter）
+│   ├── adapters/             # Agent 适配器（image / coding / environment / claude_code；llm.py 是 mixin 与定价，非 adapter）
 │   ├── integrations/         # 外部轨迹导入（openai_agents / pi / otlp / claude_agent）
 │   ├── sandbox/              # 沙箱执行
 │   └── report/               # 报告与分析

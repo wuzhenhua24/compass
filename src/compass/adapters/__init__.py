@@ -2,6 +2,7 @@
 
 # Import built-in adapters to trigger registration
 from compass.adapters import (
+    claude_code,  # noqa: F401
     coding,  # noqa: F401
     environment,  # noqa: F401
     image,  # noqa: F401

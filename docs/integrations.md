@@ -156,6 +156,103 @@ compass import phoenix_export.json --json       # 打印重建后的 transcript 
 
 格式自动识别（各用其首行不变量）：pi 会话首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；其余 JSON 按 OTLP/OpenInference 处理。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
 
+**流式重建：`WireReconstructor`**
+
+上面三个入口都是「跑完再解析」。要在 CLI **还在跑的时候**逐行喂，用增量版——同一套映射，只是换成 push 接口：
+
+```python
+from compass.integrations import WireReconstructor
+
+r = WireReconstructor(task_id="add-rate-limit")
+for line in proc.stdout:
+    r.feed_line(line)          # 非 JSON 行返回 False，不抛
+transcript = r.finish()        # 任何时刻调用都合法
+```
+
+两个好处直接落到评测上：**被 timeout 杀掉的运行仍然留下已完成的步骤**（`finish()` 中途可用），以及不必再写第二个解析器就能做实时进度视图。下面的 Claude Code Adapter 正是靠它工作的。
+
+## Claude Code Adapter（在真实仓库上评编程 Agent）
+
+`claude_code` adapter 面向一类具体需求：**同一批业务需求，换 Prompt / 换模型，看谁实现得更对、更省、更稳**。它把 `claude` CLI 跑在一个真实 git 仓库上，同时交出两样东西——**Agent 产出的 diff**（给 OUTCOME grader）和**它是怎么做到的完整轨迹**（给 TRANSCRIPT grader）。
+
+### 为什么不用 `environment` adapter 直接 `agent_command: claude -p ...`
+
+因为那样**过程侧全瞎**。`environment` 把整次运行记成**一条** `environment.agent` ToolCall（退出码 + stdout 长度），而 Compass 最值钱的东西——30 步 Edit/Bash/Read、每轮 token、CLI 报的成本、重试、循环、子 agent 扇出——全埋在那坨不透明的 stdout 里。`cost_budget` / `turn_count` / `loop_detection` / `tool_usage` / `efficiency` / `trajectory_judge` 一个都用不上。
+
+`claude_code` 用 `--output-format stream-json --verbose` 起 CLI，边流边过 `WireReconstructor`，把还原出的调用**以对象形式**并进 runner 的 live transcript（不是拆成 kwargs 重建——那会丢掉 `call_id`/`turn_index`/`agent_name`，而这正是 `turn_count` 和子 agent 归属要读的字段）。
+
+### 隔离靠 git worktree，不靠 sandbox
+
+这是刻意的。`LocalSandbox` 是一个被洗过环境变量的临时目录；而 Claude Code CLI 要真实网络、真实凭证、真实 git 仓库、项目自己的工具链——四条全跟 sandbox 打架。所以 adapter 直接以 `cwd=<worktree>` 起进程，隔离交给 git：
+
+| `isolation` | 行为 | 适用 |
+|---|---|---|
+| `worktree`（默认）| `git worktree add --detach` 从 `base_ref`（默认当前 HEAD）拉一份 | git 仓库；并行 trial 互不干扰，diff 基线明确 |
+| `copy` | `copytree` 复制一份 | 非 git 目录 |
+| `none` | 直接在原仓库里跑，**会修改它** | 单次手工调试 |
+
+前两种下**源仓库全程只读**。
+
+### 产出物是 diff，不是全量文件快照
+
+收尾时跑 `git add -A -N`（intent-to-add，让新文件也出现在 diff 里）再 `git diff`，填进 `CodeArtifact.diff`；`files` 只装**改动过**的文件，不是整个仓库。
+
+### keep_workspace 默认为 True
+
+Grader 在 adapter 返回**之后**才跑，而 `integration_test` 靠对 Agent 产出的那棵树跑隐藏测试来打分——先把树删了，等于在任何人读到之前销毁证据。路径记在 `CodeArtifact.metadata["workspace"]`，`integration_test` 的 `workdir: "{workspace}"` 会解析到它。事后回收磁盘：在源仓库里 `git worktree prune`。
+
+### 完整例子
+
+```yaml
+name: "编程 Agent — 业务需求实现"
+agent:
+  adapter: claude_code
+  config:
+    repo: "./fixtures/billing-service"
+    base_ref: "main"
+    permission_mode: acceptEdits
+    allowed_tools: ["Edit", "Write", "Bash(pytest:*)"]
+    max_turns: 40
+    timeout: 900
+    setup_commands: ["uv sync"]
+    save_stream_to: "./streams"        # 存原始 stream-json，之后免费重放
+
+cases:
+  - id: add_rate_limit
+    input:
+      prompt: "给 /api/charge 加限流：每 IP 每分钟 60 次，超出返回 429。"
+    graders:
+      - {name: integration_test, type: code, gate: true,       # 对不对（隐藏测试）
+         config: {script: "pytest tests/ -q", workdir: "{workspace}", output_format: pytest}}
+      - {name: diff_size, type: code, config: {max_total_changes: 200}}   # 改动是否收敛
+      - {name: cost_budget, type: code, config: {max_cost_usd: 1.5}}      # 以下四个：过程
+      - {name: turn_count, type: code, config: {max_turns: 30}}
+      - {name: loop_detection, type: code}
+      - {name: tool_usage, type: code, config: {forbidden_tools: ["WebFetch"]}}
+```
+
+两条轴都只是 `agent.config` 里的一个键，所以扫哪条都是普通的多变体运行：
+
+```bash
+compass test coding.yaml -m claude-opus-4-6 -m claude-sonnet-5           # 模型轴
+compass test coding.yaml --model-key append_system_prompt_file \
+    -m prompts/terse.md -m prompts/thorough.md                           # Prompt 轴
+```
+
+跑一次很贵，所以配 `--trace-dir` 记录，之后改 rubric 用 `compass grade` 离线重评，不必重跑 Agent。
+
+### 凭证：`env_allow`
+
+`claude_code` 自己不走 sandbox，用宿主环境，所以没有这个问题。但如果你用 `environment` adapter 跑**别的**带凭证的 agent（goose、aider），会撞上 sandbox 的密钥过滤器：`ANTHROPIC_API_KEY` 同时命中 `ANTHROPIC_` 前缀和 `API_KEY` 子串，`env_passthrough` / `env_overrides` / 每次调用的 `env=` 三条路**全部**被拦——不给逃生舱的话，这类运行根本没法认证。
+
+```yaml
+sandbox_config:
+  env_allow: ["ANTHROPIC_API_KEY"]   # 显式变量名，不支持通配
+  preserve_home: true                # 订阅制凭证在 ~/.claude
+```
+
+`env_allow` 刻意做得很窄：只吃**变量名**（大小写不敏感、无 glob），放行一个凭证不会顺带放行一类。每个放行的名字都会在 setup 时打 WARNING 日志。代价要认：被测 agent 以及它跑起来的任何代码都能读到这个凭证——请用一把限定权限的 key，不要用生产 key。
+
 ## Environment Adapter（环境即代码）
 
 受 [Stripe Agent Benchmark](https://github.com/stripe/ai/tree/main/benchmarks) 启发，Compass 提供了 **EnvironmentAdapter**——将 Agent 的运行环境视为代码来管理，实现可复现的端到端评估。

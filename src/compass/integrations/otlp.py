@@ -42,7 +42,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters import calculate_cost
+from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
 
 logger = logging.getLogger(__name__)

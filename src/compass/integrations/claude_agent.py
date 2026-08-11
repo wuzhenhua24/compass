@@ -122,12 +122,60 @@ def reconstruct_transcript_from_wire(
     the *offline* counterpart to :func:`reconstruct_transcript` — the wire dicts
     are adapted to the same shape and fed through the same mapping.
     """
-    builder = _Builder(task_id=task_id)
+    reconstructor = WireReconstructor(task_id=task_id)
     for event in events:
+        reconstructor.feed(event)
+    return reconstructor.finish()
+
+
+class WireReconstructor:
+    """Incremental form of :func:`reconstruct_transcript_from_wire`.
+
+    Same mapping, fed one wire dict at a time, for callers that read the CLI's
+    stdout as it arrives rather than after the process exits. Two things fall
+    out of that: a run killed by a timeout still yields the steps it completed
+    (:meth:`finish` is valid at any point), and a live progress view is possible
+    without a second parser.
+
+    ::
+
+        r = WireReconstructor(task_id="add-rate-limit")
+        for line in proc.stdout:
+            r.feed(json.loads(line))
+        transcript = r.finish()
+    """
+
+    def __init__(self, *, task_id: str | None = None) -> None:
+        self._builder = _Builder(task_id=task_id)
+
+    def feed(self, event: dict[str, Any]) -> None:
+        """Consume one stream-json wire dict. Unknown event types are ignored."""
         obj = _wire_to_obj(event)
         if obj is not None:
-            builder.consume(obj)
-    return builder.finish()
+            self._builder.consume(obj)
+
+    def feed_line(self, line: str) -> bool:
+        """Consume one raw stdout line. Returns False if it was not JSON.
+
+        The CLI interleaves the occasional non-JSON line into stdout, and a
+        partial trace beats a crashed harness — so a bad line is reported, not
+        raised.
+        """
+        line = line.strip()
+        if not line:
+            return False
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(obj, dict):
+            return False
+        self.feed(obj)
+        return True
+
+    def finish(self) -> Transcript:
+        """The Transcript reconstructed so far. Safe to call mid-stream."""
+        return self._builder.finish()
 
 
 def import_claude_stream_json(

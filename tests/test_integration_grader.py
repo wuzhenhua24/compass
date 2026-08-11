@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from compass.core.artifacts import CodeArtifact
 from compass.core.transcript import Outcome, ToolCall, Transcript
 from compass.graders.base import GradeContext, GraderScope, GraderType
 from compass.graders.code.coding.integration import (
@@ -390,3 +391,62 @@ class TestLeakDetection:
         ctx = GradeContext(outcome=Outcome())
         result = await grader.grade(ctx)
         assert result.passed is True
+
+
+# ===================================================================
+# {workspace} placeholder
+# ===================================================================
+
+
+class TestWorkspacePlaceholder:
+    """A repo-editing agent works in a fresh directory per trial, so its path
+    cannot be written into the YAML — {workspace} resolves it at grade time."""
+
+    @staticmethod
+    def _ctx(workspace: str | None) -> GradeContext:
+        metadata = {"workspace": workspace} if workspace is not None else {}
+        return GradeContext(
+            outcome=Outcome(artifacts=[CodeArtifact(metadata=metadata)])
+        )
+
+    def test_plain_workdir_is_untouched(self):
+        grader = IntegrationGrader({"script": "x", "workdir": "/fixed/path"})
+        assert grader._resolve_workdir(self._ctx(None)) == "/fixed/path"
+
+    def test_empty_workdir_stays_empty(self):
+        """No workdir means 'run in the sandbox cwd' — not an error."""
+        grader = IntegrationGrader({"script": "x"})
+        assert not grader._resolve_workdir(self._ctx(None))
+
+    def test_placeholder_resolves_to_the_agent_workspace(self):
+        grader = IntegrationGrader({"script": "x", "workdir": "{workspace}"})
+        assert grader._resolve_workdir(self._ctx("/tmp/wt_abc")) == "/tmp/wt_abc"
+
+    def test_placeholder_resolves_inside_a_longer_path(self):
+        grader = IntegrationGrader({"script": "x", "workdir": "{workspace}/server"})
+        assert grader._resolve_workdir(self._ctx("/tmp/wt")) == "/tmp/wt/server"
+
+    @pytest.mark.asyncio
+    async def test_missing_workspace_is_a_config_error_not_a_test_failure(self):
+        """Copying in a literal '{workspace}' dir would report a red test suite
+        for what is really a misconfigured grader."""
+        grader = IntegrationGrader({"script": "echo '5 passed'", "workdir": "{workspace}"})
+        result = await grader.grade(self._ctx(None))
+        assert result.passed is False
+        assert result.error is not None
+        assert "workspace" in result.error
+
+    @pytest.mark.asyncio
+    async def test_script_runs_against_the_resolved_workspace(self, tmp_path):
+        workspace = tmp_path / "wt"
+        workspace.mkdir()
+        (workspace / "marker.txt").write_text("agent-was-here", encoding="utf-8")
+
+        grader = IntegrationGrader({
+            "script": "cat marker.txt && echo '3 passed'",
+            "workdir": "{workspace}",
+            "output_format": "pytest",
+        })
+        result = await grader.grade(self._ctx(str(workspace)))
+        assert result.passed is True
+        assert "agent-was-here" in result.details["stdout"]

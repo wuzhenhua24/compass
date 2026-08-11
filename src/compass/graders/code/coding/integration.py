@@ -152,6 +152,11 @@ def parse_test_output(
     return None
 
 
+# Distinguishes "workdir asked for a workspace that isn't there" from a plain
+# empty workdir, which legitimately means "run in the sandbox cwd".
+_WORKSPACE_MISSING = object()
+
+
 # ---------------------------------------------------------------------------
 # IntegrationGrader
 # ---------------------------------------------------------------------------
@@ -171,7 +176,13 @@ class IntegrationGrader(CodeGrader):
 
     Config:
         script:         str   — shell command to execute (required).
-        workdir:        str   — working directory for the script (default: sandbox cwd).
+        workdir:        str   — directory copied into the sandbox before the
+                                script runs (default: sandbox cwd). Supports the
+                                ``{workspace}`` placeholder, which resolves to
+                                the per-trial workspace an adapter recorded on
+                                ``CodeArtifact.metadata["workspace"]`` — that is
+                                how hidden tests reach the tree a repo-editing
+                                agent (``claude_code``) actually produced.
         timeout:        float — seconds before the script is killed (default: 120).
         env:            dict  — extra environment variables.
         output_format:  str   — ``"auto"`` | ``"pytest"`` | ``"rspec"`` |
@@ -252,10 +263,18 @@ class IntegrationGrader(CodeGrader):
         sandbox = sandbox_cls(self.sandbox_config)
 
         try:
+            workdir = self._resolve_workdir(context)
+            if workdir is _WORKSPACE_MISSING:
+                return self._error_result(
+                    "workdir uses {workspace}, but the outcome carries no "
+                    "agent workspace (needs an adapter that records "
+                    "CodeArtifact.metadata['workspace'], e.g. claude_code)"
+                )
+
             async with sandbox:
                 # Copy environment workdir into sandbox if specified
-                if self.workdir:
-                    await sandbox.copy_in(self.workdir, ".")
+                if workdir:
+                    await sandbox.copy_in(workdir, ".")
 
                 # Run setup commands
                 for cmd in self.setup_commands:
@@ -293,6 +312,25 @@ class IntegrationGrader(CodeGrader):
 
         except Exception as e:
             return self._error_result(str(e))
+
+    def _resolve_workdir(self, context: GradeContext) -> Any:
+        """Resolve ``{workspace}`` in ``workdir`` to the agent's own workspace.
+
+        A repo-editing agent works in a fresh directory per trial (a git
+        worktree, say), so the path cannot be written into the YAML. Adapters
+        that produce one record it on ``CodeArtifact.metadata["workspace"]``;
+        this substitutes it, and returns the sentinel when there is none rather
+        than copying in a literal ``{workspace}`` directory and reporting a
+        test failure that is really a config error.
+        """
+        if not self.workdir or "{workspace}" not in self.workdir:
+            return self.workdir
+
+        artifact = context.code_artifact
+        workspace = (artifact.metadata or {}).get("workspace") if artifact else None
+        if not workspace:
+            return _WORKSPACE_MISSING
+        return self.workdir.replace("{workspace}", str(workspace))
 
     # ------------------------------------------------------------------
     # Helpers

@@ -6,6 +6,7 @@ Compass ``Transcript`` and grade it with the normal transcript-scope graders.
 """
 
 from compass.integrations.claude_agent import (
+    WireReconstructor,
     import_claude_stream_json,
     reconstruct_transcript,
     reconstruct_transcript_from_stream,
@@ -34,6 +35,7 @@ __all__ = [
     "reconstruct_transcript",
     "reconstruct_transcript_from_stream",
     "reconstruct_transcript_from_wire",
+    "WireReconstructor",
     "import_claude_stream_json",
     "PiSessionError",
     "import_pi_session",

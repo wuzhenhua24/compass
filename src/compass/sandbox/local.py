@@ -98,9 +98,16 @@ _EXT_TO_LANGUAGE: dict[str, str] = {
 }
 
 
-def _is_blocked(name: str) -> bool:
-    """Return True if the environment variable name should be blocked."""
+def _is_blocked(name: str, allow: frozenset[str] = frozenset()) -> bool:
+    """Return True if the environment variable name should be blocked.
+
+    ``allow`` is the caller's explicit allowlist (``env_allow``) and wins over
+    both the prefix and the substring rule — see :class:`LocalSandbox` for why
+    that escape hatch has to exist.
+    """
     upper = name.upper()
+    if upper in allow:
+        return False
     if any(upper.startswith(prefix) for prefix in _BLOCKED_ENV_PREFIXES):
         return True
     return any(token in upper for token in _BLOCKED_ENV_SUBSTRINGS)
@@ -125,6 +132,29 @@ class LocalSandbox(Sandbox):
         default_timeout: Default command timeout in seconds (default: 30).
         env_passthrough: Extra env var names to pass through from the host.
         env_overrides: Dict of env vars to forcibly set in the sandbox.
+        env_allow: Names that may pass the secret filter (see below).
+        preserve_home: Keep the host ``HOME`` instead of pointing it at the
+            sandbox directory (default: ``False``).
+
+    **The env_allow escape hatch.** The secret filter above exists so a
+    *subject under test* cannot read the harness's credentials. But when the
+    subject **is** a credentialed agent — ``claude``, ``goose``, ``aider`` —
+    the filter blocks the one variable the run needs: ``ANTHROPIC_API_KEY``
+    trips both the ``ANTHROPIC_`` prefix and the ``API_KEY`` substring, on
+    every route including ``env_overrides`` and the per-call ``env``. Without
+    an override, such a run cannot authenticate at all.
+
+    ``env_allow`` is that override, and it is deliberately narrow: it takes
+    explicit variable **names** (case-insensitive, no globs), so allowing one
+    credential never widens into allowing a class of them::
+
+        sandbox_config:
+          env_allow: ["ANTHROPIC_API_KEY"]
+          preserve_home: true          # ~/.claude for subscription auth
+
+    Every allowed name is logged at setup. Note what this costs: the agent
+    under test can now read that credential, and so can any code it runs.
+    Point it at a scoped key, not your production one.
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
@@ -183,6 +213,15 @@ class LocalSandbox(Sandbox):
         )
         logger.debug("Sandbox created at %s", self._workdir)
 
+        # Say out loud which secrets were let in. Silence here would make the
+        # allowlist invisible in a run that later leaks one.
+        allow = self._env_allow
+        if allow:
+            logger.warning(
+                "Sandbox env_allow: passing %s through the secret filter",
+                ", ".join(sorted(allow)),
+            )
+
     async def cleanup(self) -> None:
         if self._workdir is not None and os.path.exists(self._workdir):
             shutil.rmtree(self._workdir)
@@ -191,30 +230,45 @@ class LocalSandbox(Sandbox):
 
     # -- command execution ----------------------------------------------------
 
+    @property
+    def _env_allow(self) -> frozenset[str]:
+        """Explicitly allowlisted env var names, upper-cased for matching."""
+        return frozenset(
+            str(name).upper() for name in self.config.get("env_allow", [])
+        )
+
     def _build_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """Build an isolated environment dict for subprocess execution."""
         env: dict[str, str] = {}
+        allow = self._env_allow
 
-        # Passthrough safe vars from host
+        # Passthrough safe vars from host. Allowlisted names are passed through
+        # too — naming one in env_allow is the whole request.
         passthrough = set(_SAFE_ENV_VARS)
         passthrough.update(self.config.get("env_passthrough", []))
+        passthrough.update(self.config.get("env_allow", []))
         for key in passthrough:
             val = os.environ.get(key)
-            if val is not None and not _is_blocked(key):
+            if val is not None and not _is_blocked(key, allow):
                 env[key] = val
 
-        # Override HOME to sandbox
-        env["HOME"] = self.workdir
+        # Point HOME at the sandbox unless the caller needs the real one (an
+        # agent whose credentials live in ~/.config or ~/.claude).
+        env["HOME"] = (
+            os.environ.get("HOME", self.workdir)
+            if self.config.get("preserve_home", False)
+            else self.workdir
+        )
 
         # Apply config-level overrides
         for k, v in self.config.get("env_overrides", {}).items():
-            if not _is_blocked(k):
+            if not _is_blocked(k, allow):
                 env[k] = v
 
         # Apply per-call overrides (also filtered)
         if extra:
             for k, v in extra.items():
-                if not _is_blocked(k):
+                if not _is_blocked(k, allow):
                     env[k] = v
 
         return env
@@ -296,7 +350,10 @@ class LocalSandbox(Sandbox):
         dest_path = self._safe_path(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if src_path.is_dir():
-            shutil.copytree(str(src_path), str(dest_path))
+            # dirs_exist_ok, because the most useful destination is the sandbox
+            # root itself ("copy this tree in"), which always exists — without
+            # it copy_in(dir, ".") raises FileExistsError every time.
+            shutil.copytree(str(src_path), str(dest_path), dirs_exist_ok=True)
         else:
             shutil.copy2(str(src_path), str(dest_path))
 

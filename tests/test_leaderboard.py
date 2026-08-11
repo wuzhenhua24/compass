@@ -8,6 +8,7 @@ the top two rows is stated as a paired measurement with a confidence interval.
 from __future__ import annotations
 
 import pytest
+from rich.errors import MarkupError
 
 from compass.core.result import CaseResult, EvalResult, TestStatus
 from compass.report.leaderboard import (
@@ -282,6 +283,50 @@ class TestModelVariants:
             [self._scenario("one"), self._scenario("two")], ["a"], "model"
         )
         assert [label for label, _ in variants] == ["one / a", "two / a"]
+
+
+class TestVariantNamesAreNotRichMarkup:
+    """Regression: a variant name is user data, and the display parsed it.
+
+    ``_model_variants`` writes the axis value into the scenario name as
+    ``name [value]``. Sweeping the *prompt* axis — the whole point of
+    ``--model-key`` — puts a file path there, and rich read ``[/path/...]`` as
+    a closing tag and raised MarkupError before a single case had run.
+    """
+
+    def _run_variant_scenario(self, value: str):
+        from click.testing import CliRunner
+
+        from compass.cli.main import cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            from pathlib import Path
+
+            Path("s.yaml").write_text(
+                "name: S\n"
+                "agent:\n"
+                "  adapter: image\n"
+                "  config: {model: default}\n"
+                "cases:\n"
+                "  - id: c1\n"
+                "    input: {prompt: x}\n",
+                encoding="utf-8",
+            )
+            return runner.invoke(
+                cli, ["test", "s.yaml", "--model-key", "prompt_file", "-m", value]
+            )
+
+    def test_a_path_valued_variant_does_not_crash_the_display(self):
+        result = self._run_variant_scenario("/abs/prompts/terse.md")
+        assert not isinstance(result.exception, MarkupError)
+        assert "MarkupError" not in (result.output or "")
+
+    def test_square_brackets_in_a_variant_are_shown_literally(self):
+        result = self._run_variant_scenario("[weird]")
+        assert not isinstance(result.exception, MarkupError)
+        # Displayed verbatim rather than consumed as a style tag.
+        assert "S [[weird]]" in (result.output or "")
 
 
 class TestListCommandDoesNotShadowBuiltins:

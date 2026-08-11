@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -425,3 +426,123 @@ class TestEnvBlocking:
                 assert "MYSVC_API_KEY" not in env
         finally:
             os.environ.pop("MYSVC_API_KEY", None)
+
+
+class TestEnvAllowlist:
+    """env_allow is the escape hatch for running a *credentialed agent* under test.
+
+    Without it, an agent like ``claude`` cannot authenticate at all:
+    ANTHROPIC_API_KEY trips both the prefix rule and the substring rule, on
+    every route into the sandbox.
+    """
+
+    def test_allowlisted_name_is_not_blocked(self):
+        from compass.sandbox.local import _is_blocked
+
+        allow = frozenset({"ANTHROPIC_API_KEY"})
+        assert _is_blocked("ANTHROPIC_API_KEY", allow) is False
+        # Still blocked: allowing one credential must not allow its neighbours.
+        assert _is_blocked("ANTHROPIC_AUTH_TOKEN", allow) is True
+        assert _is_blocked("AWS_SECRET_ACCESS_KEY", allow) is True
+
+    def test_allowlist_is_case_insensitive_on_names_only(self):
+        from compass.sandbox.local import _is_blocked
+
+        allow = frozenset({"MYSVC_API_KEY"})
+        assert _is_blocked("mysvc_api_key", allow) is False
+        # No globbing — a prefix of an allowed name is not itself allowed.
+        assert _is_blocked("MYSVC_API_KEY_2", allow) is True
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_secret_reaches_the_sandbox(self):
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-value"
+        try:
+            sb = LocalSandbox(config={"env_allow": ["ANTHROPIC_API_KEY"]})
+            async with sb:
+                env = sb._build_env()
+                assert env["ANTHROPIC_API_KEY"] == "sk-test-value"
+                result = await sb.exec("echo $ANTHROPIC_API_KEY")
+                assert "sk-test-value" in result.stdout
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    @pytest.mark.asyncio
+    async def test_allowlist_does_not_widen_to_other_secrets(self):
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-value"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "should-not-leak"
+        try:
+            sb = LocalSandbox(
+                config={
+                    "env_allow": ["ANTHROPIC_API_KEY"],
+                    "env_passthrough": ["AWS_SECRET_ACCESS_KEY"],
+                    "env_overrides": {"DB_PASSWORD": "nope"},
+                }
+            )
+            async with sb:
+                env = sb._build_env(extra={"OPENAI_API_KEY": "nope"})
+                assert env["ANTHROPIC_API_KEY"] == "sk-test-value"
+                assert "AWS_SECRET_ACCESS_KEY" not in env
+                assert "DB_PASSWORD" not in env
+                assert "OPENAI_API_KEY" not in env
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+
+    @pytest.mark.asyncio
+    async def test_allowlist_applies_to_overrides_and_per_call_env(self):
+        sb = LocalSandbox(
+            config={
+                "env_allow": ["ANTHROPIC_API_KEY", "MYSVC_TOKEN"],
+                "env_overrides": {"ANTHROPIC_API_KEY": "from-config"},
+            }
+        )
+        async with sb:
+            env = sb._build_env(extra={"MYSVC_TOKEN": "from-call"})
+            assert env["ANTHROPIC_API_KEY"] == "from-config"
+            assert env["MYSVC_TOKEN"] == "from-call"
+
+    @pytest.mark.asyncio
+    async def test_home_is_the_sandbox_by_default(self):
+        sb = LocalSandbox(config={})
+        async with sb:
+            assert sb._build_env()["HOME"] == sb.workdir
+
+    @pytest.mark.asyncio
+    async def test_preserve_home_keeps_the_host_home(self):
+        """Subscription-auth agents read credentials from the real ~."""
+        sb = LocalSandbox(config={"preserve_home": True})
+        async with sb:
+            assert sb._build_env()["HOME"] == os.environ["HOME"]
+
+    @pytest.mark.asyncio
+    async def test_allowlist_is_logged(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="compass.sandbox.local"):
+            async with LocalSandbox(config={"env_allow": ["ANTHROPIC_API_KEY"]}):
+                pass
+        assert "ANTHROPIC_API_KEY" in caplog.text
+
+
+class TestCopyInDirectory:
+    @pytest.mark.asyncio
+    async def test_copy_dir_into_sandbox_root(self, tmp_path):
+        """Regression: copy_in(dir, ".") raised FileExistsError, which made
+        IntegrationGrader's documented `workdir` config unusable."""
+        src = tmp_path / "tree"
+        (src / "pkg").mkdir(parents=True)
+        (src / "pkg" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+        (src / "README.md").write_text("hi\n", encoding="utf-8")
+
+        async with LocalSandbox() as sb:
+            await sb.copy_in(str(src), ".")
+            assert await sb.read_file("README.md") == "hi\n"
+            assert await sb.read_file("pkg/mod.py") == "x = 1\n"
+
+    @pytest.mark.asyncio
+    async def test_copy_dir_into_subdirectory(self, tmp_path):
+        src = tmp_path / "tree"
+        src.mkdir()
+        (src / "mod.py").write_text("x = 1\n", encoding="utf-8")
+
+        async with LocalSandbox() as sb:
+            await sb.copy_in(str(src), "vendor")
+            assert await sb.read_file("vendor/mod.py") == "x = 1\n"

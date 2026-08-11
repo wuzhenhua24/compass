@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
@@ -132,7 +133,11 @@ def test(
         console=console,
     ) as progress:
         for label, scn in variants:
-            task = progress.add_task(f"Running: {scn.name}", total=None)
+            # Escaped, not interpolated raw: a variant name carries the axis
+            # value, and `--model-key append_system_prompt_file -m prompts/a.md`
+            # puts a path in square brackets, which rich would read as markup.
+            display_name = escape(scn.name)
+            task = progress.add_task(f"Running: {display_name}", total=None)
 
             # Per-model trace subdirectory: without it the models would
             # overwrite each other's traces, and each one's agent config would
@@ -169,7 +174,7 @@ def test(
                 progress.update(
                     task,
                     description=(
-                        f"{scn.name}: {status} "
+                        f"{display_name}: {status} "
                         f"({result.passed_cases}/{result.evaluated_cases})"
                     ),
                 )
@@ -178,8 +183,8 @@ def test(
                     _print_result_details(result)
 
             except Exception as e:
-                console.print(f"[red]Error running {scn.name}: {e}[/red]")
-                progress.update(task, description=f"{scn.name}: [red]ERROR[/red]")
+                console.print(f"[red]Error running {display_name}: {escape(str(e))}[/red]")
+                progress.update(task, description=f"{display_name}: [red]ERROR[/red]")
 
     # Print summary table
     _print_summary_table(all_results)
@@ -290,7 +295,7 @@ def _print_leaderboard(board: "Leaderboard") -> None:
         color = "green" if rate >= 0.7 else "yellow" if rate >= 0.5 else "red"
         row = [
             str(entry.rank),
-            entry.label,
+            escape(entry.label),
             entry.score_display,
             f"[{color}]{rate:.1%}[/{color}]",
         ]
@@ -1383,7 +1388,7 @@ def _print_summary_table(results: list["EvalResult"]) -> None:
         duration = f"{r.duration_ms:.0f}ms"
 
         row = [
-            r.scenario_name,
+            escape(r.scenario_name),
             str(r.total_cases),
             str(r.passed_cases),
             str(r.failed_cases),

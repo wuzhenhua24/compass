@@ -98,30 +98,25 @@ class Adapter(ABC):
 
     def _record_tool_call(self, agent_input: AgentInput, **kwargs: Any) -> None:
         """Emit a ToolCall record if a recorder or transcript is available."""
-        tool_call = ToolCall(**kwargs)
+        self._emit_tool_call(agent_input, ToolCall(**kwargs))
 
+    def _emit_tool_call(self, agent_input: AgentInput, tool_call: ToolCall) -> None:
+        """Route an already-built ToolCall to whichever sink the caller supplied.
+
+        Takes the object rather than kwargs so nothing is lost in transit:
+        ``call_id`` (which pairs a call with its result), ``turn_index``,
+        ``agent_name`` and ``state_delta`` all survive. That matters most for
+        adapters that *replay* a run reconstructed elsewhere — an importer has
+        already resolved those fields, and rebuilding the call would discard them.
+        """
         recorder = agent_input.context.get("tool_call_recorder")
         if callable(recorder):
             recorder(tool_call)
             return
 
         transcript = agent_input.context.get("transcript")
-        if transcript is not None and hasattr(transcript, "add_tool_call"):
-            transcript.add_tool_call(
-                tool_name=tool_call.tool_name,
-                input=tool_call.input,
-                output=tool_call.output,
-                status=tool_call.status,
-                duration_ms=tool_call.duration_ms,
-                error=tool_call.error,
-                cost=tool_call.cost,
-                tokens=tool_call.tokens,
-                tool_type=tool_call.tool_type,
-                retry_count=tool_call.retry_count,
-                trace=tool_call.trace,
-                metadata=tool_call.metadata,
-                redacted=tool_call.redacted,
-            )
+        if transcript is not None and hasattr(transcript, "tool_calls"):
+            transcript.tool_calls.append(tool_call)
             return
 
         tool_calls = agent_input.context.get("tool_calls")

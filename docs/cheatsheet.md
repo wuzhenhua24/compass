@@ -21,7 +21,7 @@ tags: []                          # 所有 case 的默认标签
 leak_markers: []                  # 答案泄漏标记，与 case 级合并
 
 agent:                            # 必填
-  adapter: image                  # 内置：image / coding / environment；其余用 @register_adapter
+  adapter: image                  # 内置：image / coding / environment / claude_code；其余用 @register_adapter
   endpoint: ""                    # 便捷字段，会并入 config
   workflow: ""                    # 同上
   config: {}                      # 传给 adapter；`compass test -m` 覆盖这里的 model 键
@@ -261,3 +261,5 @@ compass docs <topic>                         # 本文档体系
 | 排行榜第 1 名其实不可信 | 看最后一行的配对检验——CI 跨 0 就是噪声 |
 | 改了 grader 后 `compare` 报 `regraded` 警告 | 两侧判分契约指纹不同，差异不能归因于 agent |
 | `expect: fail` 的 case「通过」了 | 负向测试：agent 被拦截或 grader 判否即为通过 |
+| sandbox 里跑带凭证的 agent，认证总是失败 | 密钥过滤器拦了 `ANTHROPIC_API_KEY`（前缀+子串双命中），三条注入路径都拦；用 `sandbox_config.env_allow` 显式放行，订阅制凭证还要 `preserve_home: true` |
+| `claude_code` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |

@@ -531,6 +531,22 @@ graders:
       pass_threshold: 0.8
 ```
 
+**对 Agent 刚改完的那棵树跑隐藏测试 —— `{workspace}` 占位符：**
+
+编辑真实仓库的 Agent 每个 trial 都在一个新目录里工作（`claude_code` 用 git worktree），路径没法写死在 YAML 里。会产出工作区的 adapter 把它记在 `CodeArtifact.metadata["workspace"]`，`workdir` 里的 `{workspace}` 在评分时解析到它：
+
+```yaml
+graders:
+  - name: integration_test
+    gate: true
+    config:
+      script: "pytest tests/ -q"
+      workdir: "{workspace}"        # → 该 trial 的 worktree
+      output_format: pytest
+```
+
+轨迹里没有工作区时，这个 grader 报**配置错误**而不是测试失败——把一个字面量 `{workspace}` 目录拷进沙箱、再报一片红，会把配错当成 Agent 做错。
+
 **JSON 输出格式（Stripe 风格）：**
 
 ```yaml

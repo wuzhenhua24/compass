@@ -19,7 +19,10 @@ from compass.integrations import (
     reconstruct_transcript,
     reconstruct_transcript_from_stream,
 )
-from compass.integrations.claude_agent import reconstruct_transcript_from_wire
+from compass.integrations.claude_agent import (
+    WireReconstructor,
+    reconstruct_transcript_from_wire,
+)
 
 # ---------------------------------------------------------------------------
 # Fake SDK messages / blocks (attribute-compatible with claude_agent_sdk)
@@ -342,3 +345,56 @@ class TestWireStreamJson:
         grader = get_grader("tool_usage")({"required_tools": ["Bash"]})
         result = await grader.grade(GradeContext(transcript=t, outcome=t.outcome))
         assert result.passed is True
+
+
+class TestWireReconstructorStreaming:
+    """The incremental form, used by the claude_code adapter to parse the CLI's
+    stdout as it arrives rather than after the process exits."""
+
+    def test_incremental_matches_batch(self):
+        events = _wire_run()
+
+        r = WireReconstructor()
+        for event in events:
+            r.feed(event)
+        streamed = r.finish()
+        batched = reconstruct_transcript_from_wire(events)
+
+        assert [tc.tool_name for tc in streamed.tool_calls] == [
+            tc.tool_name for tc in batched.tool_calls
+        ]
+        assert streamed.sum_cost().total_usd == batched.sum_cost().total_usd
+        assert streamed.sum_tokens().total_tokens == batched.sum_tokens().total_tokens
+        assert streamed.outcome.output_data == batched.outcome.output_data
+
+    def test_feed_line_parses_raw_stdout(self):
+        r = WireReconstructor(task_id="t")
+        for event in _wire_run():
+            assert r.feed_line(json.dumps(event) + "\n") is True
+        assert len(r.finish().tool_calls) == 3
+
+    def test_feed_line_reports_non_json_instead_of_raising(self):
+        """The CLI interleaves the odd non-JSON line; a partial trace beats a
+        crashed harness."""
+        r = WireReconstructor()
+        assert r.feed_line("Loading plugins...\n") is False
+        assert r.feed_line("\n") is False
+        assert r.feed_line('"just a string"') is False
+        assert r.feed_line(json.dumps(_wire_run()[2])) is True  # the assistant turn
+        assert len(r.finish().tool_calls) == 2  # tool_use + llm.generation
+
+    def test_finish_is_valid_mid_stream(self):
+        """A run killed by a timeout still yields the steps it completed."""
+        events = _wire_run()
+        r = WireReconstructor()
+        for event in events[:3]:      # init + prompt + the first assistant turn
+            r.feed(event)
+
+        partial = r.finish()
+        assert len(partial.tool_calls) == 2   # tool_use + its llm.generation
+        assert partial.sum_cost().total_usd == 0.0   # no result event, no total
+
+        # ... and feeding the rest afterwards still completes it.
+        for event in events[3:]:
+            r.feed(event)
+        assert r.finish().sum_cost().total_usd == pytest.approx(0.0456)
