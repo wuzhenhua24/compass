@@ -20,7 +20,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
-- **领域 recipe（可选）**：如 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot 评测），是"如何自己写定制层"的模板
+- **领域 recipe（可选）**：如 [`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）与 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
 
 **🚫 不是什么**
 
@@ -333,6 +333,26 @@ uv run python examples/ops_qa/eval.py    # 离线跑，无需真 bot / API key
 ```
 
 配套：`GradeContext` 新增一等字段 `reference_answer`（golden 答案，对称于 `reference_image`）和 `.answer` 便捷属性（取 `outcome.output_data["final_output"]`）。详见 [`examples/ops_qa/README.md`](examples/ops_qa/README.md)。
+
+## 端到端示例：编程 Agent 评估（`examples/coding_agent/`）
+
+评测**同一批业务需求下，不同 Prompt / 不同模型驱动的 Claude Code 谁做得更好**——真实 git 仓库、隐藏验收测试、过程侧守卫、多变体排行榜。
+
+```bash
+uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，不花钱
+```
+
+离线不是靠绕过流水线：跑的是**真的** `claude_code` adapter、真的 git worktree、真的 grader，唯一的替身是 CLI 本身（`replay_cli.py` 回放预置运行）。接真实 agent = 删掉配置里 `cli_path` 一行。
+
+模板比的不是三个模型，是编程 agent 搞砸评测的**三种不同方式**——单一 pass/fail 会把它们糊成一团：
+
+| 行为 | 干了什么 | 被谁抓住 |
+|---|---|---|
+| `honest` | 按需求改，改完就停 | —— 全绿 |
+| `cheats` | 逻辑写错，然后**改测试**让测试变绿 | `integration_test` + `state_delta` |
+| `overreach` | 答案对，但绕远路、原地重试、改无关文件 | `state_delta` · `cost_budget` · `turn_count` · `loop_detection` |
+
+三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
 
 ## 自定义扩展（骨架）
 

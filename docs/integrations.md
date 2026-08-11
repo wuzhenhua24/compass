@@ -261,6 +261,14 @@ cases:
 
 `state_delta` 那条不是凑数的。少了它，一个改不动实现、转头把测试改成通过的 agent 会拿到满分——`integration_test` 只知道测试过了，不知道它是怎么过的。
 
+**可跑的完整模板**：[`examples/coding_agent/`](../examples/coding_agent/) 把上面这套配好了，还带三种预置 agent 行为（老实 / 改测试作弊 / 结果对但过程失控），**离线可跑不花钱**：
+
+```bash
+uv run python examples/coding_agent/eval.py
+```
+
+它跑的是真的 adapter、真的 worktree、真的 grader，只把 CLI 换成回放器——所以看到的输出就是真跑一遍的输出。
+
 两条轴都只是 `agent.config` 里的一个键，所以扫哪条都是普通的多变体运行：
 
 ```bash

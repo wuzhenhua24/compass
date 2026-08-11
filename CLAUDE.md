@@ -17,7 +17,7 @@ checkout, `uv sync` only puts it in `.venv`.
 # Install dependencies
 uv sync
 
-# Run all tests (1715 as of now; keep them green)
+# Run all tests (1735 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file
@@ -70,7 +70,7 @@ uv run compass list                          # List registered graders/adapters
 1. Interface Layer      → CLI (compass.cli.main), Python SDK
 2. Test Orchestration   → Scenario Engine, Trial Manager, Parallel Executor
 3. Core Engine          → Grader System (3-tier), Transcript Collector, Report Gen
-4. Agent Adapter Layer  → image, coding, environment adapters (registry-based;
+4. Agent Adapter Layer  → image, coding, environment, claude_code adapters (registry-based;
                           adapters/llm.py provides LLM mixins/pricing, not a registered adapter)
 ```
 
@@ -122,7 +122,7 @@ src/compass/
 │   │   ├── data/         # SQL, data correctness, query quality
 │   │   └── image/        # image_assertions, technical_quality
 │   └── model/            # LLM-based graders (semantic, vlm, rubric, safety)
-├── adapters/             # Agent adapters (image, llm, coding)
+├── adapters/             # Agent adapters (image, coding, environment, claude_code)
 └── report/               # Console and HTML reporting, analyzer
 ```
 

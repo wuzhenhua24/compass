@@ -1,0 +1,115 @@
+# 编程 Agent 评测模板 —— 业务需求实现
+#
+# 评的是：给定一条业务需求 + 一个真实仓库，agent 改出来的代码对不对、
+# 改动范围合不合规、过程贵不贵稳不稳。
+#
+# 两条变量轴都只是 agent.config 里的一个键，所以扫哪条都是同一个命令：
+#   compass test coding.yaml -m claude-opus-4-6 -m claude-sonnet-5
+#   compass test coding.yaml --model-key append_system_prompt_file \
+#       -m prompts/terse.md -m prompts/thorough.md
+#
+# repo / cli_path / integration_test 的 script 里有 {{...}} 占位，由 eval.py 填。
+# 自己用的时候把它们换成真实路径，并把 cli_path 整行删掉（回到真正的 claude）。
+
+name: "编程 Agent — 业务需求实现"
+description: "同一批需求，比不同 Prompt / 不同模型改得对不对、稳不稳、贵不贵"
+
+agent:
+  adapter: claude_code
+  config:
+    repo: "{{REPO}}"
+    cli_path: "{{CLI}}"        # ← 删掉这行就是真跑 claude
+    permission_mode: acceptEdits
+    allowed_tools: ["Read", "Edit", "Write", "Bash(python:*)"]
+    max_turns: 30
+    timeout: 900
+
+defaults:
+  # 真跑时把它调到 3 以上：Claude Code 非确定性大，单次结果是噪声。
+  # k 次全对才算稳（pass^k），这对"能不能上线"比平均分更有意义。
+  trials: 1
+
+# 所有 case 共用的过程侧检查。它们是领域无关的，所以放在 default_graders 里；
+# 每条需求各自的"对不对"是领域相关的，写在 case 里。
+default_graders:
+  # 改动范围：这批需求的授权范围是 pricing.py。
+  # forbid 是黑名单——它挡的是你想得到的越界，挡不了你想不到的。
+  - name: state_delta
+    type: code
+    gate: true
+    config:
+      require:
+        - {kind: file, target: "pricing.py"}
+      forbid:
+        - {kind: file, target: "tests/*"}    # 不许改测试来让测试变绿
+        - {kind: file, target: "config.py"}  # 这两条需求都不涉及配置
+
+  - name: cost_budget
+    type: code
+    config: {max_cost_usd: 0.50}
+
+  - name: turn_count
+    type: code
+    config: {max_turns: 12}
+
+  # 只抓"同一条命令原地重试"这种真卡死。默认还会看输出重复，但编程 agent 反复
+  # 跑同一个测试命令是正常的，开着会误报——这类阈值必须按被测 agent 的常态调，
+  # 用默认值容易得到"人人都在循环"的假象。
+  - name: loop_detection
+    type: code
+    config:
+      max_exact_repetitions: 2
+      check_output_repetition: false
+      ignore_tools: ["llm.generation"]
+
+  - name: tool_usage
+    type: code
+    config:
+      max_tool_calls: 40
+      forbidden_tools: ["WebFetch", "WebSearch"]
+
+default_aggregation:
+  pass_threshold: 0.75
+
+cases:
+  - id: add_discount
+    description: "新增会员折扣"
+    input:
+      prompt: |
+        在 pricing.py 里新增 apply_discount(total, tier)：按会员等级打折后返回
+        订单金额。gold 减 15%、silver 减 10%、其它等级不打折；结果保留两位小数
+        （四舍五入，不要银行家舍入）；total 为负时抛 ValueError。
+    graders:
+      # 正确性 = 隐藏验收测试。它们放在仓库外（grader_tests/），agent 读不到、
+      # 也改不了——这是这套配置里唯一不可被 agent 影响的信号。
+      - name: integration_test
+        type: code
+        gate: true
+        config:
+          script: "python -m pytest {{GRADERS}}/test_add_discount.py -q"
+          workdir: "{workspace}"     # 解析成本次 trial 的 worktree
+          output_format: pytest
+          pass_threshold: 1.0
+      - name: diff_size
+        type: code
+        config: {max_total_changes: 40}
+
+  - id: fix_rounding
+    description: "修复金额舍入"
+    input:
+      prompt: |
+        pricing.py 的 line_total 用浮点乘法，会留下不足一分的尾数
+        （19.99 x 3 得到 59.969999999999999）。改成按分四舍五入返回。
+        注意 0.125 这种正好落在半分上的值应该进位到 0.13。
+    graders:
+      - name: integration_test
+        type: code
+        gate: true
+        config:
+          script: "python -m pytest {{GRADERS}}/test_fix_rounding.py -q"
+          workdir: "{workspace}"
+          output_format: pytest
+          pass_threshold: 1.0
+      - name: diff_size
+        type: code
+        config: {max_total_changes: 30}

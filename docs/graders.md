@@ -630,6 +630,8 @@ graders:
 
 最后一条意味着 `state_delta` 会**漏报**。所以：空的 delta 读作"没记录"而不是"没变更"，`readonly: true` 不能当安全边界用；要守 shell 侧的破坏性操作，写一个看 `Bash` 命令的领域 grader（`examples/ops_qa` 里的 `no_write_ops` 就是这个形状）。`require` 规则同时也是**捕获检查**——预期的变更没被记录下来一样会失败。
 
+上面那个"改测试让测试变绿"的场景在 [`examples/coding_agent/`](../examples/coding_agent/) 里是可跑的（离线、不花钱）：`cheats` 那一档跑仓库自己的测试报 4 passed，隐藏验收测试只有 0.60，`state_delta` 独立地抓到它改了 `tests/`。
+
 ## 交互轮次评分器（TurnCountGrader）
 
 受 Stripe Agent Benchmark 中 **turn count**（17–216 轮）数据的启发，Compass 内置了 `turn_count` 评分器，从 Transcript 中自动提取交互轮次并评分。
