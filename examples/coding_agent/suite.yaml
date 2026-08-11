@@ -20,11 +20,16 @@ description: "同一批需求与 bug，比不同模型 / Prompt 谁做得更对�
 agent:
   adapter: claude_code
   config:
-    repo: "{{REPO}}"           # ← 你的项目；check.py 和 run.py 会填
+    repo: "{{REPO}}"           # ← 你的项目；run.py 会填
     permission_mode: acceptEdits
     allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash(python:*)"]
     max_turns: 40
     timeout: 900
+    # 原始 stream-json 落盘。一次真实运行很贵，而 importer 只映射它认识的事件
+    # 类型——没映射的会计数进 transcript.metadata["unhandled_events"]，但不留
+    # payload。真撞上限流（订阅制跑长对比很可能撞上）时，原始事件在这里，
+    # 不用重跑。也能用 `compass import` 免费重放这次运行。
+    save_stream_to: "{{STREAMS}}"
 
 defaults:
   # 先用 1 跑通链路。真要比模型/Prompt 时调到 3+，用 pass^k 看稳定性——

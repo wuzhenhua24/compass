@@ -374,3 +374,62 @@ class TestRegressionTrap:
             line for line in source.splitlines() if not line.lstrip().startswith("#")
         )
         assert 'breakdown["subtotal"]' not in code
+
+
+class TestRunPyResolvesTheSuite:
+    """suite.yaml is not runnable as shipped — its paths only exist on the
+    machine running it. An unfilled placeholder fails deep inside a grader,
+    after the agent has already been paid for."""
+
+    run_py = _load("run.py", "coding_agent_run")
+
+    def test_no_placeholder_survives_resolution(self, tmp_path):
+        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=None)
+        assert "{{" not in resolved.read_text(encoding="utf-8")
+
+    def test_every_placeholder_becomes_an_absolute_path(self, tmp_path):
+        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=None)
+        suite = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+        config = suite["agent"]["config"]
+
+        assert Path(config["repo"]).is_absolute()
+        assert Path(config["save_stream_to"]).is_absolute()
+        # The raw stream lives under --out with everything else from the run.
+        assert Path(config["save_stream_to"]).parent == tmp_path.resolve()
+        for case in suite["cases"]:
+            for grader in case.get("graders", []):
+                script = grader.get("config", {}).get("script", "")
+                assert "{{" not in script
+
+    def test_trials_override_lands(self, tmp_path):
+        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=5)
+        assert yaml.safe_load(resolved.read_text())["defaults"]["trials"] == 5
+
+    def test_the_bundled_project_becomes_a_real_git_repo(self, tmp_path):
+        import subprocess
+
+        repo = self.run_py.bootstrap_repo(tmp_path)
+        assert (repo / ".git").is_dir()
+        assert (repo / "orders.py").exists()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        )
+        assert status.stdout == ""
+
+    def test_bootstrap_is_idempotent(self, tmp_path):
+        """Re-running must not re-baseline: traces from earlier runs are only
+        comparable against the same starting commit."""
+        import subprocess
+
+        first = self.run_py.bootstrap_repo(tmp_path)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=first,
+            capture_output=True, text=True, check=True,
+        ).stdout
+        again = self.run_py.bootstrap_repo(tmp_path)
+        assert again == first
+        assert subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=again,
+            capture_output=True, text=True, check=True,
+        ).stdout == head

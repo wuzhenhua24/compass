@@ -17,7 +17,7 @@ checkout, `uv sync` only puts it in `.venv`.
 # Install dependencies
 uv sync
 
-# Run all tests (1794 as of now; keep them green)
+# Run all tests (1799 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file

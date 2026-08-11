@@ -251,6 +251,25 @@ uv run python examples/coding_agent/run.py --repo ~/work/my-service -m sonnet
 命令打印出来**——抄走那行，之后就不需要这个脚本了，它只是个便利，不是一层封装。
 `--print-only` 只解析不执行。
 
+跑完的产物：
+
+```
+coding-eval-run/
+├── suite.resolved.yaml   # 占位符填好的场景，可读可改
+├── repo/                 # 被测项目（复用，所以多次运行基线一致）
+├── traces/<model>/       # 轨迹 —— compass grade 离线重评的输入
+├── streams/              # 每次运行的原始 stream-json
+└── results.json          # 加 results.<model>.json，compass compare 的输入
+```
+
+`streams/` 值得留着。importer 只映射它认识的事件类型，其余的**计数**进
+`transcript.metadata["unhandled_events"]` 但不留 payload——真撞上限流（订阅制
+跑长对比很可能撞上），原始事件在这儿。它也能免费重放整次运行：
+
+```bash
+compass import coding-eval-run/streams/fix_rounding_*.stream.jsonl
+```
+
 Prompt 轴同理，换个 `--model-key`：
 
 ```bash

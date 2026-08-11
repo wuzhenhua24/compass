@@ -9,9 +9,10 @@
     # your own project instead of the bundled one
     uv run python examples/coding_agent/run.py --repo ~/work/my-service -m sonnet
 
-``suite.yaml`` ships with ``{{REPO}}`` and ``{{GRADERS}}`` placeholders because
-those are absolute paths that only exist on your machine. This fills them in,
-writes the resolved scenario where you can read it, and runs ``compass test``.
+``suite.yaml`` ships with ``{{REPO}}``, ``{{GRADERS}}`` and ``{{STREAMS}}``
+placeholders because those are absolute paths that only exist on your machine.
+This fills them in, writes the resolved scenario where you can read it, and
+runs ``compass test``.
 
 It prints the command before running it. Copy that line and you never need this
 script again — it is a convenience, not a layer.
@@ -57,8 +58,10 @@ def bootstrap_repo(dest: Path) -> Path:
 
 def resolve_suite(repo: Path, out: Path, *, trials: int | None) -> Path:
     raw = (_HERE / "suite.yaml").read_text(encoding="utf-8")
-    raw = raw.replace("{{REPO}}", str(repo.resolve())).replace(
-        "{{GRADERS}}", str((_HERE / "grader_tests").resolve())
+    raw = (
+        raw.replace("{{REPO}}", str(repo.resolve()))
+        .replace("{{GRADERS}}", str((_HERE / "grader_tests").resolve()))
+        .replace("{{STREAMS}}", str((out / "streams").resolve()))
     )
     if trials is not None:
         raw = raw.replace("  trials: 1\n", f"  trials: {trials}\n", 1)
