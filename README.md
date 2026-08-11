@@ -20,7 +20,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
-- **领域 recipe（可选）**：如 [`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）与 [`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
+- **领域 recipe（可选）**：[`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）、[`examples/swebench/`](examples/swebench/)（接公开数据集 SWE-bench）、[`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
 
 **🚫 不是什么**
 
@@ -353,6 +353,18 @@ uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，�
 | `overreach` | 答案对，但绕远路、原地重试、改无关文件 | `state_delta` · `cost_budget` · `turn_count` · `loop_detection` |
 
 三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
+
+## 接公开数据集：SWE-bench（`examples/swebench/`）
+
+上面那个模板要你自己写需求和验收测试。想先用现成数据集验证量具，`examples/swebench/` 把 SWE-bench 实例接了进来——映射几乎只是改个名字（`repo`+`base_commit` → worktree，`problem_statement` → prompt，`FAIL_TO_PASS`/`PASS_TO_PASS` → 判定）：
+
+```bash
+uv run python examples/swebench/demo.py    # 离线跑，虚构实例，不用凭证/Docker
+```
+
+`swebench_tests` grader 实现官方判定协议，三个容易做错的地方都守住了：**测试对 agent 全程不可见**（test patch 在 agent 结束后才打）、**先重置测试文件再打 patch**（所以改测试蒙混无效，demo 里 `edits_tests` 那档演的就是这个）、**没跑起来的测试算失败**（另加 `no_tests_ran` 标签和输出尾巴，避免把环境坏掉读成 0 分）。
+
+两条必须知道：SWE-bench Verified **早已进入所有模型的训练集**——比 Prompt 可以（两边污染一样），**比模型是硬伤**；判定要跑真实依赖，本地直跑只在依赖恰好装好时成立，正经做法是挂官方 Docker 镜像。详见 [`examples/swebench/README.md`](examples/swebench/README.md)。
 
 ## 自定义扩展（骨架）
 
