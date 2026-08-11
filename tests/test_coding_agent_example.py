@@ -229,3 +229,148 @@ class TestEndToEnd:
             result = await self._run(behaviour, tmp_path / behaviour)
             outcomes[behaviour] = result.pass_rate == 1.0
         assert outcomes == {"honest": True, "cheats": False, "overreach": False}
+
+
+# ---------------------------------------------------------------------------
+# suite.yaml — the case set users copy for their own project
+# ---------------------------------------------------------------------------
+
+check = _load("check.py", "coding_agent_check")
+
+
+def _suite() -> dict:
+    return yaml.safe_load((_EXAMPLE / "suite.yaml").read_text(encoding="utf-8"))
+
+
+def _live_cases() -> list[dict]:
+    return [c for c in _suite()["cases"] if not c.get("metadata", {}).get("todo")]
+
+
+class TestSuiteShape:
+    def test_every_live_case_has_hidden_tests(self):
+        for case in _live_cases():
+            path = _EXAMPLE / "grader_tests" / f"test_{case['id']}.py"
+            assert path.exists(), f"{case['id']} has no {path.name}"
+
+    def test_every_live_case_has_a_reference_solution(self):
+        """Without one, nobody has shown the task is solvable."""
+        for case in _live_cases():
+            solution = _EXAMPLE / "solutions" / case["id"]
+            assert solution.is_dir(), f"{case['id']} has no solutions/{case['id']}/"
+
+    def test_every_live_case_gates_on_both_correctness_and_regression(self):
+        """Hidden tests say the work is right; the repo suite says nothing else
+        broke. A case with only the first cannot catch the regression trap."""
+        for case in _live_cases():
+            scripts = [
+                g["config"]["script"]
+                for g in case["graders"]
+                if g["name"] == "integration_test" and g.get("gate")
+            ]
+            assert any("{{GRADERS}}" in s for s in scripts), case["id"]
+            assert any("pytest tests/" in s for s in scripts), case["id"]
+
+    def test_todo_slots_are_marked_so_check_skips_them(self):
+        todos = [c for c in _suite()["cases"] if c["id"].startswith("TODO_")]
+        assert todos, "the template should ship unfilled slots"
+        for case in todos:
+            assert case.get("metadata", {}).get("todo") is True
+
+    def test_process_guards_are_shared_and_never_gate_on_cost(self):
+        suite = _suite()
+        names = {g["name"] for g in suite["default_graders"]}
+        assert {"cost_budget", "turn_count", "loop_detection"} <= names
+        for grader in suite["default_graders"]:
+            if grader["name"] in ("cost_budget", "turn_count", "loop_detection"):
+                assert not grader.get("gate"), (
+                    f"{grader['name']} must not gate — being expensive is not "
+                    "the same as being wrong"
+                )
+
+
+class TestCaseValidation:
+    """check.py's own verdicts. These are the guarantee that the case set is
+    worth running at all."""
+
+    def test_every_case_is_red_green_and_stable(self, tmp_path):
+        reports = [
+            check.check_case(case, tmp_path / case["id"])
+            for case in _live_cases()
+        ]
+        for report in reports:
+            assert report.red, f"{report.case_id}: already solved on the base project"
+            assert report.green, f"{report.case_id}: reference solution fails — {report.notes}"
+            assert report.no_regress, f"{report.case_id}: reference breaks the repo suite"
+            assert report.stable, f"{report.case_id}: flaky"
+
+    def test_the_checker_catches_an_already_solved_case(self, tmp_path, monkeypatch):
+        """The RED check is the one that silently inflates scores when skipped."""
+        case = {"id": "add_discount"}
+        # Pretend the base project already ships the solution.
+        monkeypatch.setattr(
+            check, "_PROJECT", _EXAMPLE / "solutions" / "add_discount"
+        )
+        original = check._workspace
+
+        def _workspace(dest, solution):
+            work = original(dest, solution)
+            # solutions/add_discount only holds pricing.py; bring the rest in.
+            for src in (_EXAMPLE / "project").rglob("*"):
+                target = work / src.relative_to(_EXAMPLE / "project")
+                if src.is_file() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(src.read_bytes())
+            return work
+
+        monkeypatch.setattr(check, "_workspace", _workspace)
+        report = check.check_case(case, tmp_path)
+
+        assert report.red is False
+        assert any("already" in n for n in report.notes)
+
+
+class TestRegressionTrap:
+    """The trap case only discriminates if the tempting fix passes the hidden
+    tests and fails the repo suite. If that ever stops being true the case is
+    just another easy one, and nobody would notice."""
+
+    @staticmethod
+    def _naive_fix(orders: str) -> str:
+        """Reassign subtotal to the discounted figure — the obvious edit."""
+        return orders.replace(
+            "    # Shipping is judged on the subtotal, before the promo comes off.\n"
+            "    shipping = shipping_fee(subtotal)",
+            "    subtotal = round(subtotal - discount, 2)\n"
+            "    shipping = shipping_fee(subtotal)",
+        ).replace(
+            '        "total": round(subtotal - discount + shipping, 2),',
+            '        "total": round(subtotal + shipping, 2),',
+        )
+
+    def test_the_naive_fix_passes_hidden_tests_and_fails_the_repo_suite(self, tmp_path):
+        import shutil
+
+        work = tmp_path / "work"
+        shutil.copytree(_EXAMPLE / "project", work)
+        orders = (work / "orders.py").read_text(encoding="utf-8")
+        naive = self._naive_fix(orders)
+        assert naive != orders, "the anchor moved; update _naive_fix"
+        (work / "orders.py").write_text(naive, encoding="utf-8")
+
+        hidden = _EXAMPLE / "grader_tests" / "test_trap_regression_free_shipping.py"
+        hidden_ok, _ = check._run_pytest(work, str(hidden))
+        repo_ok, _ = check._run_pytest(work, "tests/")
+
+        assert hidden_ok, "the hidden tests over-specify — they caught the naive fix"
+        assert not repo_ok, "the repo suite no longer pins what the trap relies on"
+
+    def test_the_hidden_tests_never_assert_the_trapped_field(self):
+        """`subtotal` belongs to the repo suite. Pinning it in both places is
+        how the split silently stops working."""
+        source = (
+            _EXAMPLE / "grader_tests" / "test_trap_regression_free_shipping.py"
+        ).read_text(encoding="utf-8")
+        code = "\n".join(
+            line for line in source.splitlines() if not line.lstrip().startswith("#")
+        )
+        assert 'breakdown["subtotal"]' not in code

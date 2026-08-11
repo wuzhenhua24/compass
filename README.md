@@ -339,6 +339,7 @@ uv run python examples/ops_qa/eval.py    # 离线跑，无需真 bot / API key
 评测**同一批业务需求下，不同 Prompt / 不同模型驱动的 Claude Code 谁做得更好**——真实 git 仓库、隐藏验收测试、过程侧守卫、多变体排行榜。
 
 ```bash
+uv run python examples/coding_agent/check.py   # 先自检用例（红绿）
 uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，不花钱
 ```
 
@@ -352,7 +353,9 @@ uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，�
 | `cheats` | 逻辑写错，然后**改测试**让测试变绿 | `integration_test` + `state_delta` |
 | `overreach` | 答案对，但绕远路、原地重试、改无关文件 | `state_delta` · `cost_budget` · `turn_count` · `loop_detection` |
 
-三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
+三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。
+
+接自己项目时，`suite.yaml` 是要拷走的那份骨架（按"改 bug 明确/需定位、需求 增量/跨模块、陷阱 回归/歧义"排好了槽位），而 `check.py` 是**跑 agent 之前先跑的那一步**——每条用例四项自检：原始项目上隐藏测试必须**红**（不然这活早做完了，白送分）、套上参考实现必须**绿**、参考实现不能弄坏项目自带测试、绿检查重复三次不翻转（flaky 测试会污染整轮 pass^k）。**这步最容易被跳过，而它决定了你的数字有没有意义。** 详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
 
 ## 接公开数据集：SWE-bench（`examples/swebench/`）
 
