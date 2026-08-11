@@ -833,7 +833,15 @@ def analyze(results_path: str, output: str | None) -> None:
 @click.argument("results_b", type=click.Path(exists=True))
 @click.option("--output", "-o", type=click.Path(), help="Save comparison report as JSON")
 @click.option("--json", "as_json", is_flag=True, help="Print raw JSON instead of tables")
-def compare(results_a: str, results_b: str, output: str | None, as_json: bool) -> None:
+@click.option(
+    "--on",
+    "on",
+    metavar="GRADER",
+    help="Compare on one grader's score (label, else name) instead of overall_score",
+)
+def compare(
+    results_a: str, results_b: str, output: str | None, as_json: bool, on: str | None
+) -> None:
     """Paired comparison of two evaluation runs (A = baseline, B = candidate).
 
     Pairs cases by id, lists pass/fail flips in both directions, and reports
@@ -842,26 +850,44 @@ def compare(results_a: str, results_b: str, output: str | None, as_json: bool) -
 
     RESULTS_A / RESULTS_B accept the same inputs as `compass analyze`:
     a results JSON file or a directory of result files.
+
+    --on scopes the whole comparison to a single grader. Reach for it when
+    correctness is decided by gate graders: gate scores are excluded from
+    `overall_score` by design, so the default comparison is measuring process
+    cost and the correctness signal never reaches it. Cases where that grader
+    produced no measurement are reported and dropped, not scored as zero.
     """
     import json
 
-    from compass.report.compare import compare_paths
+    from compass.report.compare import AmbiguousGraderError, compare_paths
 
-    report = compare_paths(results_a, results_b)
+    try:
+        report = compare_paths(results_a, results_b, on=on)
+    except AmbiguousGraderError as e:
+        console.print(f"[red]Ambiguous --on {on!r}:[/red] {e}")
+        sys.exit(2)
 
     if as_json:
         console.print_json(json.dumps(report.to_dict(), ensure_ascii=False))
         return
 
+    scoped = f"\nscored on:     {report.on}" if report.on else ""
     console.print(Panel(
         f"[bold]Compass Paired Comparison[/bold]\n"
         f"A (baseline):  {report.label_a}\n"
-        f"B (candidate): {report.label_b}\n"
+        f"B (candidate): {report.label_b}{scoped}\n"
         f"{report.n_paired} paired case(s)",
     ))
 
     if report.n_paired == 0:
         console.print("[red]No paired cases between the two runs[/red]")
+        if report.on and (report.unmeasured_a or report.unmeasured_b):
+            # The cases are there; the selected grader is not. Saying "no
+            # paired cases" without this reads as a mismatched pair of runs.
+            console.print(
+                f"[yellow]No case measured a grader named {report.on!r} — "
+                f"check the label/name against the results file[/yellow]"
+            )
         if report.only_in_a:
             console.print(f"[yellow]Only in A:[/yellow] {', '.join(report.only_in_a)}")
         if report.only_in_b:
@@ -877,15 +903,18 @@ def compare(results_a: str, results_b: str, output: str | None, as_json: bool) -
     summary.add_column("95% CI", justify="right")
 
     ps, ss = report.pass_stats, report.score_stats
+    # Row labels name what was actually measured: with --on these are one
+    # grader's numbers, not the case's.
+    qualifier = f" ({report.on})" if report.on else ""
     summary.add_row(
-        "Pass rate",
+        f"Pass rate{qualifier}",
         f"{report.pass_rate_a:.1%}",
         f"{report.pass_rate_b:.1%}",
         f"{ps.mean_diff:+.1%}",
         f"[{ps.ci_low:+.1%}, {ps.ci_high:+.1%}]",
     )
     summary.add_row(
-        "Mean score",
+        f"Mean score{qualifier}",
         f"{report.mean_score_a:.3f}",
         f"{report.mean_score_b:.3f}",
         f"{ss.mean_diff:+.3f}",
@@ -926,6 +955,17 @@ def compare(results_a: str, results_b: str, output: str | None, as_json: bool) -
             f"agent:[/yellow] {', '.join(report.regraded[:10])}"
             + (" …" if len(report.regraded) > 10 else "")
         )
+
+    # Cases the selected grader never measured. Not scored as zero — that
+    # would report an agent failure where the truth is a missing sample — so
+    # they have to be visible, or the comparison silently narrows.
+    for side, missing in (("A", report.unmeasured_a), ("B", report.unmeasured_b)):
+        if missing:
+            console.print(
+                f"[yellow]⚠ {len(missing)} case(s) in {side} have no "
+                f"{report.on!r} measurement (dropped from stats):[/yellow] "
+                f"{', '.join(missing[:10])}" + (" …" if len(missing) > 10 else "")
+            )
 
     # Coverage changes are reported, never silently dropped
     if report.only_in_a:

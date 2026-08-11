@@ -125,6 +125,7 @@ cases:
 | 字段 | 作用 |
 |---|---|
 | `name` / `type` | 注册名与类型（`code` / `model` / `human`） |
+| `label` | 这个**实例**的名字，一条 case 跑同一个 grader 两次时用 |
 | `weight` | 加权平均里的权重 |
 | `required` | 必须通过；**失败即中止后续 grader**（链式短路，省下昂贵调用） |
 | `gate` | 硬闸门：必须通过，但**不计入分数**（不拖累聚合值） |
@@ -132,6 +133,8 @@ cases:
 | `config` | 传给 grader 的配置 |
 
 `required` / `creates` 以及 grader 之间通过 workspace 传递产物，构成**评分流水线**——详见 [graders.md](graders.md) 的"评分流水线"。
+
+`label` 解决的是 `name` 区分不了实例：一条 case 同时跑隐藏验收测试和仓库自带套件时两个都叫 `integration_test`，没有 label 的话 `breakdown` 会把它们折叠成一个键（后一个覆盖前一个），`compass compare --on` 也没法说要哪个。它是纯命名，不进 `grader_fingerprint`——加 label 不会让两次运行被判成判分契约变了。详见 [analysis.md](analysis.md#label一个-case-跑同一个-grader-两次时)。
 
 ## 多次试验与统计指标
 

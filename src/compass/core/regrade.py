@@ -74,8 +74,13 @@ def case_grader_spec(scenario: Scenario, case: TestCase) -> dict[str, Any]:
     return {
         "case_id": case.id,
         "expect": case.expect,
+        # ``label`` is excluded: it names a grader instance so results can tell
+        # two runs of the same grader apart, and cannot move a score. Hashing it
+        # would report "regraded" — the signal that a diff is not attributable
+        # to the agent — for a purely cosmetic edit.
         "graders": [
-            g.model_dump(mode="json") for g in scenario.get_graders_for_case(case)
+            g.model_dump(mode="json", exclude={"label"})
+            for g in scenario.get_graders_for_case(case)
         ],
         "aggregation": scenario.get_aggregation_for_case(case).model_dump(mode="json"),
         "leak_markers": scenario.get_leak_markers_for_case(case),

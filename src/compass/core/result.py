@@ -36,6 +36,9 @@ class EvaluatorResult:
     name: str
     score: float | None
     passed: bool
+    # ``GraderConfig.label`` — a name for this *instance*, when one case runs
+    # the same grader more than once. Empty when the scenario set none.
+    label: str = ""
     weight: float = 1.0
     required: bool = False  # Whether this grader must pass for overall pass
     gate: bool = False  # Hard gate: must pass, excluded from score
@@ -73,6 +76,7 @@ class EvaluatorResult:
             "name": self.name,
             "score": self.score,
             "passed": self.passed,
+            "label": self.label,
             "weight": self.weight,
             "weighted_score": self.weighted_score,
             "required": self.required,
@@ -149,12 +153,31 @@ class CaseResult:
 
     @property
     def breakdown(self) -> dict[str, float]:
-        """Score breakdown by evaluator (unscored/skipped graders omitted)."""
-        return {
-            r.name: r.weighted_score
-            for r in self.evaluator_results
-            if r.scored and not r.skipped
-        }
+        """Score breakdown by evaluator (unscored/skipped graders omitted).
+
+        Keyed on ``label`` when the scenario set one, else on the grader name.
+        A case may legitimately run one grader twice — hidden acceptance tests
+        and the repository's own suite are both ``integration_test`` — and a
+        plain name-keyed dict silently kept only the last of them, which is
+        data loss in the serialized result, not just a display quirk. Unlabelled
+        repeats therefore get a ``#2``, ``#3`` suffix in declaration order; the
+        first keeps the bare name, so output is unchanged for the overwhelmingly
+        common case of one grader per name.
+
+        Prefer a ``label`` to relying on the suffix: the suffix moves if the
+        grader order changes, which makes it a poor key to compare runs on.
+        """
+        scored = [r for r in self.evaluator_results if r.scored and not r.skipped]
+        seen: dict[str, int] = {}
+        out: dict[str, float] = {}
+        for r in scored:
+            key = r.label or r.name
+            if not r.label:
+                seen[key] = seen.get(key, 0) + 1
+                if seen[key] > 1:
+                    key = f"{key}#{seen[key]}"
+            out[key] = r.weighted_score
+        return out
 
     @property
     def observed_tags(self) -> list[str]:

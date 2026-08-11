@@ -517,6 +517,46 @@ Verdict: pass rate within noise band, but significant score improvement
 
 细节：只在一侧出现的 case 会**明确列出并排除出统计**（覆盖范围变了要可见，不静默丢弃）；多 trial 的 case 用 `passed_trials/total_trials` 作为该 case 的通过分数，比布尔更细。Python 侧 `from compass.report import compare_paths, compare_results, paired_stats` 可编程使用。
 
+另一个细节：**所有 case 的差值完全一样时不报 MDE。** 方差估计为 0 会把 CI 和 MDE 一起压到 0，打印"detectable at n=5: ~0.0%"等于宣称五个相同的数字给了无穷分辨率——正是 MDE 这个字段要防的误读。这种情况明说"零离散度，这批样本估不出分辨率"（`PairedStats.variance_observed`）。
+
+#### `--on <grader>`：比某一个 grader 的分，而不是 `overall_score`
+
+默认的每 case 数值是 `overall_score`。对**正确性由 gate 判定**的套件，这个默认是错的：gate grader 的分数按定义不进加权平均（见 `GraderConfig` 的 docstring），于是 `overall_score` 量的是过程成本，正确性信号根本到不了比较里。
+
+```bash
+compass compare a.json b.json --on correctness
+```
+
+`--on` 把整个比较收缩到一个 grader——它的分、它的 pass/fail、它的翻转。这就是让**部分给分**真正进到配对比较里的那条路：隐藏测试写成 8 条独立断言，一次运行拿 5/8，`--on` 之后 0.625 与 1.0 的差值直接进统计，而 pass/fail 只会把两边都记成"没过"。
+
+两条规则是设计出来的，不是默认行为：
+
+| 情况 | 做法 | 为什么 |
+|---|---|---|
+| 某个 case 没有这个 grader（没配、被短路跳过、或崩了） | **踢出统计并列出来** | 「没测过」不是「测出来是 0」。记 0 分等于把一个缺失样本报成 agent 失败 —— 和 `EvaluatorResult` 里 `score is None` ≠ `0.0` 是同一条原则 |
+| 同一个 case 里有多个 grader 同名 | **报错退出（exit 2）** | 挑一个会给出一份看起来没问题、但回答了别的问题的比较。修复在 scenario 里：给它们不同的 `label` |
+
+选择器先匹配 `label`，匹配不上再退回 `name`——所以没写 label 的套件也能用（只要那个名字在 case 内唯一）。
+
+#### `label:`：一个 case 跑同一个 grader 两次时
+
+`name` 是注册表的键，区分不了两个实例。一条 case 同时跑隐藏验收测试和仓库自带套件时，两个都叫 `integration_test`，下游就分不开了。
+
+```yaml
+graders:
+  - {name: integration_test, gate: true, label: correctness,
+     config: {script: "python -m pytest /abs/grader_tests/test_x.py -q", ...}}
+  - {name: integration_test, gate: true, label: regression,
+     config: {script: "python -m pytest tests/ -q", ...}}
+```
+
+`label` 做两件事，两件都是止损：
+
+- **`--on` 能精确选中它。**
+- **`breakdown` 不再丢数据。** 之前 `CaseResult.breakdown` 按 name 建键，同名的后一个直接覆盖前一个——序列化结果里少了一个分数，而且没有任何提示。现在按 `label or name` 建键；没写 label 的重名按声明顺序补 `#2`、`#3` 后缀，所以一个 name 只出现一次时输出完全不变。**优先写 label**：后缀会随 grader 顺序变，不适合拿来跨运行比较。
+
+`label` 是纯命名，不进 `grader_fingerprint`——加一个 label 不会让两次运行被判成"判分契约变了"。
+
 ## 多模型排行榜（`compass test -m`）
 
 一个 scenario 跑多个模型并排名：

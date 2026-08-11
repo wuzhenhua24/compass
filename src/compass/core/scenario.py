@@ -35,6 +35,13 @@ class GraderConfig(BaseModel):
 
     type: GraderType = GraderType.MODEL
     name: str
+    # A name for *this instance*, when one case runs the same grader twice.
+    # `name` is the registry key and cannot disambiguate them, so without a
+    # label the two results are indistinguishable downstream: `breakdown` keys
+    # on it and collapses, and `compass compare --on` cannot say which one it
+    # was asked for. Cosmetic by construction — a label never moves a score,
+    # which is why `case_grader_spec` excludes it from the fingerprint.
+    label: str = ""
     weight: float = 1.0
     required: bool = False
     gate: bool = False  # Hard gate: must pass, excluded from score
@@ -50,6 +57,11 @@ class GraderConfig(BaseModel):
         if isinstance(self.creates, str):
             return [self.creates] if self.creates else []
         return list(self.creates)
+
+    @property
+    def key(self) -> str:
+        """How this grader instance is identified in results: label, else name."""
+        return self.label or self.name
 
 
 class ExpectedConfig(BaseModel):

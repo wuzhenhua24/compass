@@ -864,6 +864,7 @@ class Compass:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
+                        label=config.label,
                         # Never ran, so never measured: unscored, not zero.
                         score=None,
                         passed=False,
@@ -1003,6 +1004,7 @@ class Compass:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
+                        label=config.label,
                         score=None,  # never ran, so never measured
                         passed=False,
                         weight=config.weight,
@@ -1060,6 +1062,7 @@ class Compass:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
+                        label=config.label,
                         score=grade_result.score,
                         passed=grade_result.passed,
                         weight=config.weight,
@@ -1084,6 +1087,7 @@ class Compass:
                 results.append(
                     EvaluatorResult(
                         name=config.name,
+                        label=config.label,
                         # The grader blew up, so it measured nothing. Recording
                         # 0.0 here would make an LLM-judge timeout look exactly
                         # like an agent that genuinely scored zero.

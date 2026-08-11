@@ -97,6 +97,15 @@ class Leaderboard:
                 f"{self.top_gap.mean_diff:+.3f} "
                 f"(95% CI [{self.top_gap.ci_low:+.3f}, {self.top_gap.ci_high:+.3f}])"
             )
+        if not self.top_gap.variance_observed:
+            # Zero spread collapses the CI and the MDE to 0. Printing the MDE
+            # here would claim the run resolves arbitrarily small gaps.
+            return (
+                f"{first.label} leads {second.label} by "
+                f"{self.top_gap.mean_diff:+.3f}, but every paired case moved "
+                f"identically — with zero spread the resolution cannot be "
+                f"estimated from this sample"
+            )
         return (
             f"{first.label} leads {second.label} by "
             f"{self.top_gap.mean_diff:+.3f}, but the 95% CI "

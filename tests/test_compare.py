@@ -10,10 +10,13 @@ from click.testing import CliRunner
 
 from compass.cli.main import cli
 from compass.report.compare import (
+    AmbiguousGraderError,
     CaseRecord,
+    compare_paths,
     compare_results,
     load_case_records,
     paired_stats,
+    select_grader_score,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,6 +225,163 @@ class TestLoadCaseRecords:
 
 
 # ---------------------------------------------------------------------------
+# Comparing on one grader (--on)
+# ---------------------------------------------------------------------------
+
+
+def grader(name: str, score: float | None, passed: bool, label: str = "", **kw) -> dict:
+    d = {"name": name, "label": label, "score": score, "passed": passed}
+    d.update(kw)
+    return d
+
+
+def gated_case(case_id: str, correctness: float, cost: float = 0.9) -> dict:
+    """The shape this feature exists for: correctness decided by a gate, so
+    `overall_score` carries only the non-gate process graders."""
+    return case_dict(
+        case_id,
+        passed=correctness == 1.0,
+        score=cost,  # overall_score excludes the gate — process cost only
+        evaluator_results=[
+            grader("integration_test", correctness, correctness == 1.0,
+                   label="correctness", gate=True),
+            grader("integration_test", 1.0, True, label="regression", gate=True),
+            grader("cost_budget", cost, True),
+        ],
+    )
+
+
+class TestSelectGraderScore:
+    def test_label_takes_precedence_over_name(self):
+        case = gated_case("t1", 0.5)
+        assert select_grader_score(case, "correctness") == (0.5, False)
+        assert select_grader_score(case, "regression") == (1.0, True)
+
+    def test_an_unlabelled_grader_is_selected_by_name(self):
+        case = gated_case("t1", 1.0)
+        assert select_grader_score(case, "cost_budget") == (0.9, True)
+
+    def test_a_labelled_grader_is_still_findable_by_name(self):
+        """A scenario that labels one instance should not lose the ability to
+        select it by the registry name when that name is unambiguous."""
+        case = case_dict("t1", True, evaluator_results=[
+            grader("rubric", 0.75, True, label="explains_itself"),
+        ])
+        assert select_grader_score(case, "rubric") == (0.75, True)
+        assert select_grader_score(case, "explains_itself") == (0.75, True)
+
+    def test_an_absent_grader_is_unmeasured_not_zero(self):
+        """The distinction the whole design turns on: 'never measured' must not
+        read as 'the agent scored 0'."""
+        assert select_grader_score(gated_case("t1", 1.0), "nope") is None
+
+    def test_a_skipped_or_crashed_grader_is_unmeasured(self):
+        skipped = case_dict("t1", True, evaluator_results=[
+            grader("rubric", None, False, skipped=True),
+        ])
+        crashed = case_dict("t2", True, evaluator_results=[
+            grader("rubric", None, False, error="boom"),
+        ])
+        assert select_grader_score(skipped, "rubric") is None
+        assert select_grader_score(crashed, "rubric") is None
+
+    def test_two_graders_of_the_same_name_is_an_error_not_a_guess(self):
+        """Picking one would answer a question nobody asked, and look fine."""
+        case = case_dict("t1", True, evaluator_results=[
+            grader("integration_test", 0.5, False),
+            grader("integration_test", 1.0, True),
+        ])
+        with pytest.raises(AmbiguousGraderError, match="2 graders match"):
+            select_grader_score(case, "integration_test")
+
+
+class TestCompareOnGrader:
+    @staticmethod
+    def _write(tmp_path, name, cases):
+        p = tmp_path / name
+        p.write_text(json.dumps({"case_results": cases}), encoding="utf-8")
+        return p
+
+    def test_the_gated_score_is_invisible_by_default_and_visible_with_on(
+        self, tmp_path
+    ):
+        """The motivating failure: A is wrong on two cases and B is right, but
+        `overall_score` (process cost) says A is ahead."""
+        a = self._write(tmp_path, "a.json", [
+            gated_case("t1", 0.5, cost=0.99),
+            gated_case("t2", 0.5, cost=0.99),
+            gated_case("t3", 1.0, cost=0.99),
+        ])
+        b = self._write(tmp_path, "b.json", [
+            gated_case("t1", 1.0, cost=0.60),
+            gated_case("t2", 1.0, cost=0.60),
+            gated_case("t3", 1.0, cost=0.60),
+        ])
+
+        default = compare_paths(a, b)
+        assert default.mean_score_a > default.mean_score_b  # cost, not correctness
+
+        scoped = compare_paths(a, b, on="correctness")
+        assert scoped.on == "correctness"
+        assert scoped.mean_score_a == pytest.approx(2 / 3)
+        assert scoped.mean_score_b == 1.0
+        assert [f.case_id for f in scoped.improved] == ["t1", "t2"]
+        assert scoped.regressed == []
+
+    def test_partial_credit_survives_into_the_statistics(self, tmp_path):
+        """8-of-8 vs 4-of-8 is the resolution the case set was built for; a
+        binary comparison would score both sides 0 and see nothing."""
+        a = self._write(tmp_path, "a.json", [gated_case(f"t{i}", 0.5) for i in range(4)])
+        b = self._write(tmp_path, "b.json", [gated_case(f"t{i}", 0.875) for i in range(4)])
+
+        scoped = compare_paths(a, b, on="correctness")
+        assert scoped.score_stats.mean_diff == pytest.approx(0.375)
+        # Both sides fail every case, so pass/fail alone reports nothing.
+        assert scoped.pass_stats.mean_diff == 0.0
+        assert scoped.improved == [] and scoped.regressed == []
+
+    def test_cases_without_the_grader_are_reported_not_scored_zero(self, tmp_path):
+        a = self._write(tmp_path, "a.json", [
+            gated_case("t1", 1.0),
+            case_dict("t2", True, evaluator_results=[grader("cost_budget", 0.9, True)]),
+        ])
+        b = self._write(tmp_path, "b.json", [
+            gated_case("t1", 1.0),
+            case_dict("t2", True, evaluator_results=[grader("cost_budget", 0.9, True)]),
+        ])
+
+        scoped = compare_paths(a, b, on="correctness")
+        assert scoped.n_paired == 1
+        assert scoped.unmeasured_a == ["t2"] and scoped.unmeasured_b == ["t2"]
+        # Scoring t2 as 0.0 would have dragged both means to 0.5 and invented a
+        # sample out of a case the grader never looked at.
+        assert scoped.mean_score_a == 1.0
+
+    def test_zero_spread_does_not_claim_infinite_resolution(self, tmp_path):
+        """Every case agreeing collapses the CI and MDE to 0. Reporting
+        'detectable at n=4: ~0.0%' from four identical numbers is the exact
+        misreading the MDE was added to prevent."""
+        cases = [gated_case(f"t{i}", 1.0) for i in range(4)]
+        a = self._write(tmp_path, "a.json", cases)
+        b = self._write(tmp_path, "b.json", cases)
+
+        scoped = compare_paths(a, b, on="correctness")
+        assert scoped.pass_stats.variance_observed is False
+        assert "cannot be estimated" in scoped.verdict
+        assert "~0.0%" not in scoped.verdict
+
+    def test_a_real_spread_still_reports_an_mde(self, tmp_path):
+        a = self._write(tmp_path, "a.json", [gated_case(f"t{i}", 0.5) for i in range(4)])
+        b = self._write(tmp_path, "b.json", [
+            gated_case("t0", 1.0), gated_case("t1", 0.5),
+            gated_case("t2", 1.0), gated_case("t3", 0.5),
+        ])
+        scoped = compare_paths(a, b, on="correctness")
+        assert scoped.pass_stats.variance_observed is True
+        assert scoped.pass_stats.mde > 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -280,3 +440,58 @@ class TestCompareCli:
         result = runner.invoke(cli, ["compare", str(a), str(b)])
         assert result.exit_code == 1
         assert "No paired cases" in result.output
+
+    def test_on_names_the_axis_in_the_output(self, runner, tmp_path):
+        cases_a = [gated_case("t1", 0.5), gated_case("t2", 1.0)]
+        cases_b = [gated_case("t1", 1.0), gated_case("t2", 1.0)]
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        a.write_text(json.dumps({"case_results": cases_a}))
+        b.write_text(json.dumps({"case_results": cases_b}))
+
+        result = runner.invoke(cli, ["compare", str(a), str(b), "--on", "correctness"])
+        assert result.exit_code == 0
+        # The row labels have to say which numbers these are, or the table
+        # claims to be about the case when it is about one grader.
+        assert "scored on:     correctness" in result.output
+        assert "Mean score (correctness)" in result.output
+
+    def test_an_ambiguous_selector_fails_loudly(self, runner, tmp_path):
+        case = case_dict("t1", True, evaluator_results=[
+            grader("integration_test", 0.5, False),
+            grader("integration_test", 1.0, True),
+        ])
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        a.write_text(json.dumps({"case_results": [case]}))
+        b.write_text(json.dumps({"case_results": [case]}))
+
+        result = runner.invoke(
+            cli, ["compare", str(a), str(b), "--on", "integration_test"]
+        )
+        assert result.exit_code == 2
+        assert "Ambiguous" in result.output
+        assert "label" in result.output
+
+    def test_a_selector_matching_nothing_says_so(self, runner, tmp_path):
+        """Not 'no paired cases between the two runs' — the cases are there."""
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        for p in (a, b):
+            p.write_text(json.dumps({"case_results": [gated_case("t1", 1.0)]}))
+
+        result = runner.invoke(cli, ["compare", str(a), str(b), "--on", "vlm_judge"])
+        assert result.exit_code == 1
+        assert "No case measured a grader named 'vlm_judge'" in result.output
+
+    def test_unmeasured_cases_are_warned_about(self, runner, tmp_path):
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        for p in (a, b):
+            p.write_text(json.dumps({"case_results": [
+                gated_case("t1", 1.0),
+                case_dict("t2", True,
+                          evaluator_results=[grader("cost_budget", 0.9, True)]),
+            ]}))
+
+        result = runner.invoke(cli, ["compare", str(a), str(b), "--on", "correctness"])
+        assert result.exit_code == 0
+        assert "1 paired case(s)" in result.output
+        assert "no 'correctness' measurement" in result.output
+        assert "t2" in result.output

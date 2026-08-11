@@ -139,7 +139,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass test <scenario.yaml \| 目录>` | 运行测试场景（`--parallel` / `--trace-dir` / `--resume` / `--stage` / `--category`）；`-m` 可一次跑多个模型并出排行榜 |
 | `compass grade <traces> -s <scenario.yaml>` | **离线评分**：给已落盘的轨迹打分，不重跑 Agent（`-n` grade set / `--regrade`） |
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
-| `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE |
+| `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE；`--on <grader>` 按某个 grader 的分比，而不是 `overall_score` |
 | `compass site build <results>` | 把结果发布成可分享的静态站；多个仓库可 build 进同一个目录，索引自动累积 |
 | `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
@@ -305,7 +305,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
 | **Grader 体系** | 三层体系（Code/Model/Human）、全部 41 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
-| **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
+| **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
 | **接入外部 Agent** | OpenAI Agents SDK / pi / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Claude Code Adapter（真实仓库上评编程 Agent）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
 
 几个贯穿全部文档的设计要点：

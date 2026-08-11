@@ -262,25 +262,32 @@ check.py 换成另外两项检查，对照 `traps/<id>/` 里那个**照报告改
 `interaction_promo_then_tier_rounding` 是照这个思路做的第一条：五种把两级折扣
 组合错的方式，分别落在 0.50 和 0.88，跟正确的 1.00 和什么都不做的 0.00 都分得开。
 
-**这个连续分现在只在 `evaluator_results[].score` 里，取它要绕两道：**
+**要用上它，比的时候得指定 grader：**
 
-```python
-[e["score"] for c in run["case_results"] if c["case_id"] == "..."
- for e in c["evaluator_results"]
- if e["name"] == "integration_test" and "{{GRADERS}}" in ...]   # 按 script 认
+```bash
+compass compare results.haiku.json results.sonnet.json --on correctness
 ```
 
-两个原因，都是设计使然，不是 bug：
+默认比的是 `overall_score`，而这套用例的正确性是 **gate** 判的——gate grader 的
+分数按定义不进加权平均（gate 只回答"过没过"），所以 `overall_score` 在这里量的是
+**过程成本**，不是正确性。`--on` 把整个比较收缩到一个 grader：它的分、它的
+pass/fail、它的翻转。5/8 与 8/8 的差值这才进得了统计，而 pass/fail 会把两边都
+记成"没过"。
 
-1. **`overall_score` 里没有它。** gate grader 的分数按定义不进加权平均——gate 只
-   回答"过没过"，不该再把分数塞进那个数（见 `GraderConfig` 的 docstring）。这套
-   用例的 `overall_score` 因此是**过程成本**的聚合，不是正确性的。
-2. **`breakdown` 会把同名 grader 折叠成一个键。** 一条用例里两个
-   `integration_test`（隐藏测试 + 回归守卫）在 `breakdown` 里只剩一个值。
+套件里两个 `integration_test`（隐藏测试 + 回归守卫）因此都写了 `label:`：
 
-所以 `compass compare` 目前比的是 `overall_score`，**看不到**这个连续分——它比的
-仍然是 pass/fail 加过程成本。想让部分给分真正进到配对比较里，需要 compare 支持
-"按某个 grader 的分数比"，那是另一件事。
+```yaml
+- {name: integration_test, gate: true, label: correctness, config: {script: "… grader_tests/…"}}
+- {name: integration_test, gate: true, label: regression,  config: {script: "… tests/ …"}}
+```
+
+没有 label 的话 `name` 区分不了这两个实例——`--on integration_test` 会直接报错
+退出（挑一个会给出一份看起来没问题、但回答了别的问题的比较），`breakdown` 也会
+把它们折叠成一个键。
+
+顺带一个用真实数据发现的结论：那次 Haiku/Sonnet 对比 `--on correctness` 跑出来
+两边都是 5/5。两个模型的差别**完全不在正确性上**，全在 `state_delta`（改了
+`tests/`）。默认比较报的 80% vs 100% 看着像正确性差距，其实不是。
 
 ### 然后就是普通的多变体运行
 

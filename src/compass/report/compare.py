@@ -11,6 +11,13 @@ two runs case-by-case and reports:
   significant" is distinguishable from "not enough cases to tell"
 
 Cases present on only one side are reported, never silently dropped.
+
+By default the per-case number is ``overall_score``. That is the right default
+and the wrong one for a suite that gates on correctness: gate graders are
+excluded from the weighted average by definition (see ``GraderConfig``), so in
+such a suite ``overall_score`` measures process cost and the correctness signal
+never reaches the comparison at all. ``on=`` scopes the whole comparison to one
+grader instead — its score, its pass/fail, its flips.
 """
 
 from __future__ import annotations
@@ -50,23 +57,91 @@ class CaseRecord:
     grader_fingerprint: str = ""
 
 
-def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
-    """Normalize one case-level dict, or None if it doesn't look like one."""
+class AmbiguousGraderError(ValueError):
+    """``on=`` matched more than one grader in the same case.
+
+    Not resolvable by picking one: the two are different measurements, and
+    guessing would produce a comparison that looks fine and answers a question
+    nobody asked. The fix belongs in the scenario — give the grader instances
+    distinct ``label``s — so this is raised rather than worked around.
+    """
+
+
+def select_grader_score(
+    item: dict[str, Any], on: str
+) -> tuple[float, bool] | None:
+    """``(score, passed)`` for the grader *on* names, or None if unmeasured.
+
+    Matches ``label`` first, then falls back to ``name`` — so a scenario that
+    labels its grader instances can select them precisely, and one that does
+    not can still select by grader name when the name is unique in the case.
+
+    None means "this case never measured that", which is deliberately distinct
+    from a measured zero: the grader was not configured for this case, was
+    skipped by a short-circuit, or crashed. Scoring those as 0.0 would report
+    an agent failure where the truth is a missing sample.
+    """
+    graders = item.get("evaluator_results") or item.get("grade_results") or []
+    matches = [
+        g for g in graders
+        if (g.get("label") or "") == on or (not g.get("label") and g.get("name") == on)
+    ]
+    if not matches:
+        # A labelled grader is still findable by its registry name, as long as
+        # that name is unambiguous within the case.
+        matches = [g for g in graders if g.get("name") == on]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise AmbiguousGraderError(
+            f"{item.get('case_id') or item.get('task_id')!r}: {len(matches)} graders "
+            f"match {on!r}. Give them distinct `label:` values in the scenario and "
+            f"select on those."
+        )
+
+    match = matches[0]
+    if match.get("skipped") or match.get("score") is None:
+        return None
+    return float(match["score"]), bool(match.get("passed"))
+
+
+def _extract_case_records(
+    item: dict[str, Any], on: str | None = None
+) -> CaseRecord | None:
+    """Normalize one case-level dict, or None if it doesn't look like one.
+
+    With *on* set, the record describes that one grader rather than the case:
+    its score and its pass/fail. Returns None when the grader did not measure
+    this case, which drops the pair out of the statistics — see
+    :func:`select_grader_score`.
+    """
     case_id = item.get("case_id") or item.get("task_id")
     if not case_id or "passed" not in item:
         return None
 
-    passed = bool(item["passed"])
-    score = item.get("overall_score", item.get("score", 1.0 if passed else 0.0))
-
-    total_trials = item.get("total_trials", 1) or 1
-    # Trials lost to harness errors are missing samples, not failed attempts —
-    # leaving them in the denominator would read as a quality drop.
-    evaluated_trials = total_trials - (item.get("error_trials") or 0)
-    if total_trials > 1 and evaluated_trials > 0:
-        pass_fraction = item.get("passed_trials", 0) / evaluated_trials
-    else:
+    if on:
+        selected = select_grader_score(item, on)
+        if selected is None:
+            return None
+        score, passed = selected
+        # Trial counts are recorded per case, not per grader, so the finer
+        # pass fraction is not available here — a 3-of-5 case cannot be split
+        # into which trials this particular grader passed.
         pass_fraction = 1.0 if passed else 0.0
+    else:
+        passed = bool(item["passed"])
+        score = float(
+            item.get("overall_score", item.get("score", 1.0 if passed else 0.0))
+        )
+
+        total_trials = item.get("total_trials", 1) or 1
+        # Trials lost to harness errors are missing samples, not failed
+        # attempts — leaving them in the denominator would read as a drop.
+        evaluated_trials = total_trials - (item.get("error_trials") or 0)
+        if total_trials > 1 and evaluated_trials > 0:
+            pass_fraction = item.get("passed_trials", 0) / evaluated_trials
+        else:
+            pass_fraction = 1.0 if passed else 0.0
 
     return CaseRecord(
         case_id=str(case_id),
@@ -77,13 +152,15 @@ def _extract_case_records(item: dict[str, Any]) -> CaseRecord | None:
     )
 
 
-def load_case_records(path: str | Path) -> dict[str, CaseRecord]:
-    """Load case records from a results file or directory.
+def _load(
+    path: str | Path, on: str | None = None
+) -> tuple[dict[str, CaseRecord], list[str]]:
+    """``(records, unmeasured)`` — see :func:`load_case_records`.
 
-    Accepts the same shapes as ``compass analyze`` — see
-    :func:`compass.report.analyzer.iter_case_dicts`, the shared reader — plus a
-    directory of such JSON files. Unrecognized files/items are skipped with a
-    warning. On duplicate case_ids the last record wins.
+    *unmeasured* holds case ids present in the file that produced no
+    measurement for *on*. Kept rather than dropped so a caller can say how much
+    of the run the selected grader actually covers: a comparison over 3 of 20
+    cases and one over 20 of 20 look identical otherwise.
     """
     from compass.report.analyzer import iter_case_dicts
 
@@ -91,6 +168,7 @@ def load_case_records(path: str | Path) -> dict[str, CaseRecord]:
     json_files = [path] if path.is_file() else sorted(path.glob("**/*.json"))
 
     records: dict[str, CaseRecord] = {}
+    unmeasured: list[str] = []
     for jf in json_files:
         try:
             with open(jf, encoding="utf-8") as f:
@@ -100,11 +178,30 @@ def load_case_records(path: str | Path) -> dict[str, CaseRecord]:
             continue
 
         for item in iter_case_dicts(data):
-            record = _extract_case_records(item)
+            record = _extract_case_records(item, on)
             if record is not None:
                 records[record.case_id] = record
+            elif on and (item.get("case_id") or item.get("task_id")):
+                unmeasured.append(str(item.get("case_id") or item.get("task_id")))
 
-    return records
+    return records, sorted(set(unmeasured) - records.keys())
+
+
+def load_case_records(
+    path: str | Path, on: str | None = None
+) -> dict[str, CaseRecord]:
+    """Load case records from a results file or directory.
+
+    Accepts the same shapes as ``compass analyze`` — see
+    :func:`compass.report.analyzer.iter_case_dicts`, the shared reader — plus a
+    directory of such JSON files. Unrecognized files/items are skipped with a
+    warning. On duplicate case_ids the last record wins.
+
+    With *on* set, each record describes that one grader rather than the whole
+    case, and cases the grader did not measure are absent. Use :func:`_load`
+    when you need to know which those were.
+    """
+    return _load(path, on)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +219,12 @@ class PairedStats:
     ci_high: float
     significant: bool  # 95% CI excludes 0
     mde: float  # minimum detectable effect at this n/variance (80% power)
+    #: Whether the sample showed any spread at all. When every case moved by
+    #: the same amount the variance estimate is 0, which drives the CI and the
+    #: MDE to 0 — an artifact, not a precise measurement. Reporting "detectable
+    #: at n=5: ~0.0%" would claim infinite resolution from five identical
+    #: numbers, so callers must say "not estimable" instead.
+    variance_observed: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -131,6 +234,7 @@ class PairedStats:
             "ci_high": self.ci_high,
             "significant": self.significant,
             "mde": self.mde,
+            "variance_observed": self.variance_observed,
         }
 
 
@@ -144,7 +248,7 @@ def paired_stats(diffs: list[float]) -> PairedStats:
     """
     n = len(diffs)
     if n == 0:
-        return PairedStats(0, 0.0, 0.0, 0.0, False, math.inf)
+        return PairedStats(0, 0.0, 0.0, 0.0, False, math.inf, variance_observed=False)
 
     mean = sum(diffs) / n
     if n > 1:
@@ -165,6 +269,9 @@ def paired_stats(diffs: list[float]) -> PairedStats:
         ci_high=ci_high,
         significant=significant,
         mde=mde,
+        # se == 0 means either n == 1 or every case moved identically. Either
+        # way the spread was not measured, so the MDE is not a resolution.
+        variance_observed=se > 0,
     )
 
 
@@ -200,6 +307,14 @@ class ComparisonReport:
     n_paired: int
     only_in_a: list[str] = field(default_factory=list)
     only_in_b: list[str] = field(default_factory=list)
+
+    #: The grader this comparison is scoped to, or "" for ``overall_score``.
+    on: str = ""
+    #: Cases the selected grader did not measure, so they carry no sample.
+    #: Distinct from ``only_in_*``: the case ran on both sides, but this
+    #: particular grader produced no number for it.
+    unmeasured_a: list[str] = field(default_factory=list)
+    unmeasured_b: list[str] = field(default_factory=list)
 
     pass_rate_a: float = 0.0
     pass_rate_b: float = 0.0
@@ -245,6 +360,15 @@ class ComparisonReport:
                 f"{self.score_stats.mean_diff:+.3f} "
                 f"(95% CI [{self.score_stats.ci_low:+.3f}, {self.score_stats.ci_high:+.3f}])"
             )
+        if not self.pass_stats.variance_observed:
+            # Every case agreed. The CI and MDE both collapse to 0, which would
+            # otherwise read as "this run resolves arbitrarily small effects".
+            return (
+                f"no disagreement on {self.n_paired} paired case(s): pass-rate "
+                f"diff {self.pass_stats.mean_diff:+.1%}, and with zero spread the "
+                f"resolution cannot be estimated from this sample — add cases that "
+                f"the two runs might answer differently"
+            )
         return (
             f"within noise band: pass-rate diff {self.pass_stats.mean_diff:+.1%} "
             f"(95% CI [{self.pass_stats.ci_low:+.1%}, {self.pass_stats.ci_high:+.1%}]); "
@@ -256,8 +380,11 @@ class ComparisonReport:
             "label_a": self.label_a,
             "label_b": self.label_b,
             "n_paired": self.n_paired,
+            "on": self.on,
             "only_in_a": self.only_in_a,
             "only_in_b": self.only_in_b,
+            "unmeasured_a": self.unmeasured_a,
+            "unmeasured_b": self.unmeasured_b,
             "pass_rate_a": self.pass_rate_a,
             "pass_rate_b": self.pass_rate_b,
             "mean_score_a": self.mean_score_a,
@@ -278,17 +405,22 @@ def compare_results(
     records_b: dict[str, CaseRecord],
     label_a: str = "A",
     label_b: str = "B",
+    on: str = "",
 ) -> ComparisonReport:
     """Pair two runs by case_id and compute flips + paired statistics.
 
     Only cases present in both runs enter the statistics; the rest are listed
     in ``only_in_a`` / ``only_in_b`` so coverage changes are visible.
+
+    *on* is recorded for reporting only — the records must already have been
+    built for that grader by :func:`load_case_records`.
     """
     paired_ids = sorted(records_a.keys() & records_b.keys())
     report = ComparisonReport(
         label_a=label_a,
         label_b=label_b,
         n_paired=len(paired_ids),
+        on=on,
         only_in_a=sorted(records_a.keys() - records_b.keys()),
         only_in_b=sorted(records_b.keys() - records_a.keys()),
     )
@@ -337,11 +469,25 @@ def compare_results(
 def compare_paths(
     path_a: str | Path,
     path_b: str | Path,
+    on: str | None = None,
 ) -> ComparisonReport:
-    """Load two results paths and compare them (A = baseline, B = candidate)."""
-    return compare_results(
-        load_case_records(path_a),
-        load_case_records(path_b),
+    """Load two results paths and compare them (A = baseline, B = candidate).
+
+    With *on*, the comparison is scoped to one grader — its score, its
+    pass/fail, its flips — instead of the case-level ``overall_score``.
+
+    Raises:
+        AmbiguousGraderError: *on* matches more than one grader in some case.
+    """
+    records_a, unmeasured_a = _load(path_a, on)
+    records_b, unmeasured_b = _load(path_b, on)
+    report = compare_results(
+        records_a,
+        records_b,
         label_a=str(path_a),
         label_b=str(path_b),
+        on=on or "",
     )
+    report.unmeasured_a = unmeasured_a
+    report.unmeasured_b = unmeasured_b
+    return report

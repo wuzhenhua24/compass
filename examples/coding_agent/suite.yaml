@@ -105,10 +105,10 @@ cases:
         （19.99 x 3 得到 59.969999999999999）。改成按分四舍五入返回。
         注意 0.125 这种正好落在半分上的值应该进位到 0.13。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_fix_rounding.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 30}}
@@ -126,10 +126,10 @@ cases:
 
         请修好它。注意规则表里其它促销码可能有同样的问题。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_bug_locate_promo_boundary.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 20}}
@@ -144,10 +144,10 @@ cases:
         返回订单金额。gold 减 15%、silver 减 10%、其它等级不打折；结果保留
         两位小数（四舍五入，不要银行家舍入）；total 为负时抛 ValueError。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_add_discount.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 40}}
@@ -169,10 +169,10 @@ cases:
         两个函数都必须遵守这个模块一贯的约定：**不原地修改入参**，并且
         任一行非法时整单拒绝、什么都不改（和 place_order 的原子性一致）。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_feature_cross_module_cancel.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 60}}
@@ -190,10 +190,10 @@ cases:
 
         订单明细里 subtotal 的含义不变，仍然是折前小计。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_trap_regression_free_shipping.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 25}}
@@ -206,10 +206,13 @@ cases:
   # 断言而不是 1 条，所以结构对了一半的运行拿 5/8，不是 0。二元的 pass/fail
   # 想把两个模型分开需要很多条用例；[0,1] 的连续分每条能顶好几条。
   #
-  # 但这个分**只在 `evaluator_results[].score` 里**：gate grader 的分数按定义
-  # 不进 `overall_score`，而 `breakdown` 又会把两个同名 integration_test 折叠
-  # 成一个键。`compass compare` 比的是 `overall_score`，所以它看不到这个分——
-  # 要用上得自己从 evaluator_results 里取。README「用例配比」一节写了怎么取。
+  # 但默认比不出来：gate grader 的分数按定义不进 `overall_score`，所以
+  # `compass compare` 默认比的是过程成本。要用上这个分得指定 grader：
+  #
+  #     compass compare a.json b.json --on correctness
+  #
+  # 这也是下面每个 integration_test 都写了 `label:` 的原因——两个实例同名，
+  # 没有 label 就选不中（`--on integration_test` 会因为歧义报错退出）。
   - id: interaction_promo_then_tier_rounding
     description: "需求（组合）：会员折扣叠在促销码之后"
     input:
@@ -225,10 +228,10 @@ cases:
         4. total = subtotal - discount - tier_discount + shipping。
            运费不参与打折；免运费门槛仍然按 subtotal 判断，这次不动它。
     graders:
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_interaction_promo_then_tier_rounding.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 50}}
@@ -265,10 +268,10 @@ cases:
       - {name: state_delta, type: code, gate: true,
          config: {forbid: [{kind: file, op: update, target: "*.py"}]}}
       # 诊断信号：万一改了，是把计数改坏了，还是只是绕着改了点别的。
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_false_bug_max_uses.py -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      - {name: integration_test, type: code, gate: true,
+      - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       # 「有没有把理由说清楚」——非交互模式下 agent 问不了人，所以评的是

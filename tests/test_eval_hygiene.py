@@ -332,6 +332,43 @@ class TestUnscoredIsNotZero:
         )
         assert case.breakdown == {"a": pytest.approx(0.6)}
 
+    def test_breakdown_keeps_both_runs_of_a_repeated_grader(self):
+        """A case may legitimately run one grader twice — hidden acceptance
+        tests and the repo's own suite are both `integration_test`. Keying on
+        the bare name kept only the last, which is data loss in the serialized
+        result, not a display quirk: a 0.5 correctness score vanished behind a
+        1.0 regression score and nothing said so."""
+        case = CaseResult(
+            case_id="c", status=TestStatus.FAILED, passed=False, overall_score=0.9,
+            evaluator_results=[
+                EvaluatorResult(name="integration_test", score=0.5, passed=False),
+                EvaluatorResult(name="integration_test", score=1.0, passed=True),
+                EvaluatorResult(name="cost_budget", score=0.9, passed=True),
+            ],
+        )
+        assert case.breakdown == {
+            "integration_test": pytest.approx(0.5),
+            "integration_test#2": pytest.approx(1.0),
+            "cost_budget": pytest.approx(0.9),
+        }
+
+    def test_a_label_names_the_breakdown_key(self):
+        """And is what to use: the #2 suffix moves if grader order changes,
+        which makes it a poor key to compare two runs on."""
+        case = CaseResult(
+            case_id="c", status=TestStatus.PASSED, passed=True, overall_score=1.0,
+            evaluator_results=[
+                EvaluatorResult(name="integration_test", score=0.5, passed=False,
+                                label="correctness"),
+                EvaluatorResult(name="integration_test", score=1.0, passed=True,
+                                label="regression"),
+            ],
+        )
+        assert case.breakdown == {
+            "correctness": pytest.approx(0.5),
+            "regression": pytest.approx(1.0),
+        }
+
     async def test_short_circuit_skip_is_unscored_but_forgiven(self):
         """Skipped is a decision, not a gap: it must not fail the case."""
         scenario = _scenario(

@@ -570,3 +570,35 @@ async def test_compare_flags_a_regrade_under_a_changed_contract(tmp_path):
         load_case_records(tmp_path / "b.json"),
     )
     assert report.regraded == ["case_a"]
+
+
+async def test_a_grader_label_reaches_results_without_moving_the_fingerprint(tmp_path):
+    """`label` names a grader instance so results can tell two runs of the same
+    grader apart. It cannot move a score, so hashing it would report "regraded"
+    — the signal that a diff is not attributable to the agent — for a purely
+    cosmetic edit."""
+    from compass.core.regrade import grader_fingerprint
+
+    plain = _make_scenario(
+        graders=[GraderConfig(name="_regrade_text_contains", config={"value": "42"})]
+    )
+    labelled = _make_scenario(
+        graders=[
+            GraderConfig(
+                name="_regrade_text_contains",
+                label="correctness",
+                config={"value": "42"},
+            )
+        ]
+    )
+    assert grader_fingerprint(plain, plain.cases[0]) == grader_fingerprint(
+        labelled, labelled.cases[0]
+    )
+
+    trace_dir = tmp_path / "traces"
+    _write_transcript(trace_dir)
+    report = await grade_traces(labelled, trace_dir, grade_set="labelled")
+
+    case = report.result.case_results[0]
+    assert [e.label for e in case.evaluator_results] == ["correctness"]
+    assert "correctness" in case.breakdown
