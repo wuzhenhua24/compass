@@ -384,6 +384,17 @@ class LoopDetectionGrader(CodeGrader):
         max_pattern_length: int — Maximum pattern length to detect (default 5)
         check_output_repetition: bool — Check for repeated outputs (default True)
         ignore_tools: list[str] — Tools to exclude from loop detection (default [])
+        include_llm_calls: bool — Include ``tool_type="llm"`` records (default
+            False; see below)
+
+    **Why LLM generations are excluded by default.** Importers record each
+    assistant turn as an ``llm.generation`` call whose ``input`` is a handful of
+    metadata fields (model, stop_reason). Those collide by construction, so on
+    any real multi-turn transcript the exact-call check would report a loop for
+    an agent that simply took several turns — which is what agents do. The
+    signal it is meant to catch is "called the same *tool* with the same
+    arguments and got nowhere"; a model thinking twice is not that. Set
+    ``include_llm_calls: true`` if you have a reason to want them counted.
 
     Example YAML:
         graders:
@@ -408,6 +419,7 @@ class LoopDetectionGrader(CodeGrader):
         self.max_pattern_length = self.config.get("max_pattern_length", 5)
         self.check_output_repetition = self.config.get("check_output_repetition", True)
         self.ignore_tools = set(self.config.get("ignore_tools", []))
+        self.include_llm_calls = self.config.get("include_llm_calls", False)
 
     async def grade(self, context: GradeContext) -> GradeResult:
         """Detect loops and wasteful patterns in tool call sequence."""
@@ -419,7 +431,11 @@ class LoopDetectionGrader(CodeGrader):
                 passed=False, score=0.0, error=error,
             )
 
-        tool_calls = [tc for tc in context.tool_calls if tc.tool not in self.ignore_tools]
+        tool_calls = [
+            tc for tc in context.tool_calls
+            if tc.tool not in self.ignore_tools
+            and (self.include_llm_calls or tc.tool_type != "llm")
+        ]
 
         if not tool_calls:
             return GradeResult(

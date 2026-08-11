@@ -461,3 +461,86 @@ class TestLoopDetectionGrader:
         result_severe = await grader.grade(context_severe)
 
         assert result_mild.score > result_severe.score
+
+
+class TestLoopDetectionIgnoresLLMTurns:
+    """Regression: a multi-turn agent was reported as looping.
+
+    Importers record each assistant turn as an ``llm.generation`` call whose
+    input is a couple of metadata fields (model, stop_reason). Those collide by
+    construction, so the exact-call check fired on any transcript with three or
+    more turns — i.e. on every real coding run, including a perfectly clean one.
+    """
+
+    @staticmethod
+    def _context(tool_calls):
+        transcript = Transcript(task_id="t", trial_id="t")
+        transcript.tool_calls = tool_calls
+        return GradeContext(transcript=transcript, outcome=Outcome())
+
+    @staticmethod
+    def _turns(n: int):
+        """``n`` assistant turns, as an importer records them."""
+        return [
+            ToolCall(
+                tool_name="llm.generation",
+                input={"model": "claude-sonnet-5", "stop_reason": "tool_use"},
+                tool_type="llm",
+            )
+            for _ in range(n)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_clean_multi_turn_run_is_not_a_loop(self):
+        calls = [
+            *self._turns(2),
+            ToolCall(tool_name="Read", input={"file_path": "a.py"}),
+            *self._turns(2),
+            ToolCall(tool_name="Edit", input={"file_path": "a.py"}),
+            *self._turns(2),
+        ]
+        result = await LoopDetectionGrader().grade(self._context(calls))
+
+        assert result.passed is True
+        assert result.details["issues_found"] == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_turns_are_absent_from_the_distribution(self):
+        result = await LoopDetectionGrader().grade(
+            self._context([*self._turns(5), ToolCall(tool_name="Read", input={})])
+        )
+        assert result.details["tool_distribution"] == {"Read": 1}
+
+    @pytest.mark.asyncio
+    async def test_a_real_tool_loop_is_still_caught(self):
+        """The exclusion must not blunt what the grader is for."""
+        calls = [
+            *self._turns(4),
+            *[
+                ToolCall(tool_name="Bash", input={"command": "pytest --cov"})
+                for _ in range(5)
+            ],
+        ]
+        result = await LoopDetectionGrader({"max_exact_repetitions": 2}).grade(
+            self._context(calls)
+        )
+
+        assert result.passed is False
+        assert any(
+            i["type"] == "exact_call_repetition" for i in result.details["issues"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_include_llm_calls_restores_the_old_behaviour(self):
+        result = await LoopDetectionGrader(
+            {"max_exact_repetitions": 2, "include_llm_calls": True}
+        ).grade(self._context(self._turns(5)))
+
+        assert result.passed is False
+
+    @pytest.mark.asyncio
+    async def test_a_transcript_of_only_llm_turns_analyses_nothing(self):
+        result = await LoopDetectionGrader().grade(self._context(self._turns(6)))
+
+        assert result.passed is True
+        assert result.details["total_tool_calls"] == 0

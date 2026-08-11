@@ -99,6 +99,7 @@ worktree、真的 grader、真的排行榜——唯一被替换的是 CLI 本身
 examples/coding_agent/
 ├── suite.yaml          # 完整用例套件 —— 拷走这个
 ├── check.py            # 用例红绿自检 ← 先跑这个
+├── run.py              # 填占位符 → 起真实对比运行
 ├── solutions/          # 每条用例的参考实现（只给 check.py 用，agent 永远看不到）
 ├── coding.yaml         # 两条用例的离线 demo 场景
 ├── eval.py             # 离线 demo：建仓库 → 跑三种行为 → 出排行榜
@@ -228,12 +229,33 @@ UNVERIFIED——能跑，但没人证明过它可解。
 
 ### 然后就是普通的多变体运行
 
+`suite.yaml` 里的 `{{REPO}}` / `{{GRADERS}}` 是只有你机器上才存在的绝对路径，
+`run.py` 负责填：
+
 ```bash
-compass test suite.yaml -m claude-opus-4-6 -m claude-sonnet-5
+# 冒烟：一个模型、一条用例、一次 —— 先证明链路通
+uv run python examples/coding_agent/run.py -m haiku -c fix_rounding
 ```
 
 ```bash
-compass test suite.yaml --model-key append_system_prompt_file -m prompts/terse.md -m prompts/thorough.md
+# 真跑
+uv run python examples/coding_agent/run.py -m haiku -m sonnet --trials 3
+```
+
+```bash
+# 用你自己的仓库
+uv run python examples/coding_agent/run.py --repo ~/work/my-service -m sonnet
+```
+
+它会把解析后的场景写到 `./coding-eval-run/suite.resolved.yaml`，**并把真正执行的
+命令打印出来**——抄走那行，之后就不需要这个脚本了，它只是个便利，不是一层封装。
+`--print-only` 只解析不执行。
+
+Prompt 轴同理，换个 `--model-key`：
+
+```bash
+compass test coding-eval-run/suite.resolved.yaml \
+  --model-key append_system_prompt_file -m prompts/terse.md -m prompts/thorough.md
 ```
 
 两条轴都只是 `agent.config` 里的一个键，其余部分逐字不变——可比性是**结构上**保证的，

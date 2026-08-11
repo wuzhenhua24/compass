@@ -60,7 +60,8 @@ default_graders:
     config:
       max_exact_repetitions: 2
       check_output_repetition: false
-      ignore_tools: ["llm.generation"]
+      # llm.generation 不用列进 ignore_tools —— grader 默认就不数 LLM 轮次
+      # （多轮生成是 agent 正常工作，不是循环）。
 
   - name: tool_usage
     type: code
