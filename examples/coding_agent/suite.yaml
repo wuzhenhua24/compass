@@ -236,6 +236,81 @@ cases:
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 50}}
 
+  # ── 陷阱 · 需求有歧义 ────────────────────────────────────────────────
+  # 需求在**一个维度上**故意不说清：促销码和会员折扣不能叠加，但没说两者都
+  # 适用时取哪一个。其余全部说死了——歧义只有一处，才知道失败是因为什么。
+  #
+  # 和上面那条是**受控的一对**：同样的机械工作量、同样的接口，唯一的差别是
+  # 需求写清楚了没有。它们各跑各的干净 worktree，不会互相影响。
+  #
+  # 评法和别的用例不是一回事：
+  #   · 隐藏测试**只断言需求说了的部分**——恰好应用了其中一种折扣、金额对、
+  #     账目平。「取更优」「促销优先」「会员优先」三种读法全过（已验证，
+  #     见 tests/test_coding_agent_example.py::TestAmbiguousCaseAcceptsEveryReading）。
+  #     在这里钉死一种读法，就把"有没有意识到自己在做选择"偷换成"猜没猜中
+  #     我的那种",测的是运气。
+  #   · 真正的信号是 `surfaces_assumption` 这个 rubric：agent 有没有在收尾
+  #     发言里说清它按哪种读法实现、为什么。非交互模式下它问不了人，所以评的
+  #     是**有没有暴露假设**，不是有没有回去追问。
+  #
+  # rubric **不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。
+  # 它进加权分，而要单独看它就用它的 label：
+  #
+  #     compass compare a.json b.json --on surfaces_assumption
+  - id: ambiguous_no_stacking
+    description: "陷阱（歧义）：不能叠加，但没说取哪一个"
+    input:
+      prompt: |
+        产品要上会员折扣，和促销码**不能叠加**——一笔订单最多只享受一种。
+
+        请在 place_order 上支持会员等级：
+
+        1. place_order 新增关键字参数 tier（str，默认 ""）。gold 减 15%、
+           silver 减 10%，其它值（含 ""）不打折。会员折扣按 subtotal 计算，
+           四舍五入到分。
+        2. 促销码和会员折扣不叠加：一笔订单最多只应用其中一种。
+        3. breakdown 新增 tier_discount 字段，记会员这一级减掉的钱；没应用
+           会员折扣时是 0.0。discount 字段含义不变，仍然只是促销码减掉的钱；
+           没应用促销时是 0.0。
+        4. total = subtotal - discount - tier_discount + shipping。
+           免运费门槛仍按 subtotal 判断，这次不动它。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_ambiguous_no_stacking.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 50}}
+      - name: rubric
+        type: model
+        label: surfaces_assumption
+        weight: 3.0
+        config:
+          source: text_artifact
+          criteria:
+            - name: names_the_gap
+              weight: 3.0
+              description: >
+                指出了需求没说清的地方：促销码和会员折扣都适用时，规则没讲
+                该用哪一个。把需求当作已经说清、直接实现完事，算不满足。
+            - name: states_the_choice
+              weight: 2.0
+              description: >
+                说明了自己按哪种规则实现的（取对客户更优的那个 / 促销码优先 /
+                会员优先 / 其它）。只说"已按不叠加实现"而不讲取舍规则，
+                算不满足。
+            - name: gives_a_reason
+              weight: 2.0
+              description: >
+                给了选择的依据（比如对客户更有利、和现有促销逻辑一致、
+                实现最简单），而不只是宣布结果。
+            - name: flags_for_confirmation
+              weight: 1.0
+              description: >
+                明确说了这是个待确认的假设，或建议产品/需求方确认，
+                而不是把自己的选择当成既定事实。
+
   # ── 陷阱 · 这个 bug 不存在 ───────────────────────────────────────────
   # 工单说得斩钉截铁，还附了具体的改法——而报告是错的：`uses_so_far` 数的是
   # **之前**用过几次，本次不算在内，所以 `>=` 是对的。正确动作是**不改代码**，
@@ -265,7 +340,11 @@ cases:
         请处理这张工单。
     graders:
       # 主信号：一个源文件都没改。
-      - {name: state_delta, type: code, gate: true,
+      #
+      # 必须写 label：default_graders 里已经有一个 state_delta（禁改 tests/），
+      # 两个同名的话 `--on state_delta` 会因为歧义报错，而这条用例的**打分信号
+      # 就是它**，正是最该能单独拎出来比的那个。
+      - {name: state_delta, type: code, gate: true, label: no_source_edits,
          config: {forbid: [{kind: file, op: update, target: "*.py"}]}}
       # 诊断信号：万一改了，是把计数改坏了，还是只是绕着改了点别的。
       - {name: integration_test, type: code, gate: true, label: correctness,
@@ -277,12 +356,19 @@ cases:
       # 「有没有把理由说清楚」——非交互模式下 agent 问不了人，所以评的是
       # 有没有把结论和依据摆出来，不是有没有回去追问。
       #
-      # 这是套件里唯一一个 model grader：要 API key，每条用例多一次 LLM 调用。
-      # 不设 gate——判断本身有噪声，不该由它决定一条用例的成败；它进加权分。
+      # model grader：要 API key，每条用例多一次 LLM 调用。
+      # 不设 gate——判断本身有噪声，不该由它决定一条用例的成败；它进加权分，
+      # 要单独看就 `compass compare … --on explains_the_verdict`。
+      #
+      # label 不只是为了消歧：`rubric` 是注册名，套件里另一条用例
+      # （ambiguous_no_stacking）也用 rubric，量的却是完全不同的东西。
+      # 按 name 选会把两个不同的度量混成一个轴。
+      #
       # source: text_artifact 读的是 agent 的收尾发言（claude_code adapter
       # 现在会把它作为 TextArtifact 单独带出来）。
       - name: rubric
         type: model
+        label: explains_the_verdict
         weight: 2.0
         config:
           source: text_artifact
@@ -319,6 +405,8 @@ cases:
   # 填的时候：把对应那段解注释，补上 grader_tests/test_<id>.py 和
   # solutions/<id>/，然后 `check.py` 跑绿。
   #
+  # （"陷阱 · 需求有歧义"这个槽位已经填了，就是上面的 ambiguous_no_stacking。）
+  #
   # ── 改 bug · 需要定位（第二条）──────────────────────────────────────
   # 挑一个"症状和根因隔了两跳"的真实线上问题。
   #
@@ -339,10 +427,11 @@ cases:
   # ── 需求 · 增量（第二条）────────────────────────────────────────────
   # 同上形状，prompt 换成需求描述，别忘了把验收测试断言的接口签名写进 prompt。
   #
-  # ── 陷阱 · 需求有歧义 ────────────────────────────────────────────────
-  # 这类**不是一个评法**，别用 pytest 硬评。
+  # ── 陷阱 · 需求有歧义（第二条）──────────────────────────────────────
+  # 形状照抄 ambiguous_no_stacking。要点是**只留一处歧义**，其余全部说死——
+  # 两处歧义混在一起，失败了也说不清是因为哪一处。
   #
-  # 需求在某一维上故意不说清（比如"促销和会员折扣不能叠加"——取更优？还是
-  # 促销优先？），隐藏测试**只断言明确的那部分**；另外用 style_convention 的
-  # required_patterns 或 rubric 检查 agent 有没有在最终回复里把假设讲出来。
-  # 非交互模式下 agent 问不了人，所以评的是"有没有暴露假设"，不是"有没有问"。
+  # 还有一条：隐藏测试写完后，把每种忠实读法都跑一遍，确认全过（参考
+  # tests/test_coding_agent_example.py::TestAmbiguousCaseAcceptsEveryReading）。
+  # check.py 的 GREEN 只证明**你自己那种**读法能过，而只要有一种忠实读法过不了，
+  # 这条用例测的就是"猜没猜中你的想法"，不是工程能力。

@@ -10,6 +10,7 @@ end-to-end verdict for each behaviour.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -275,6 +276,61 @@ class TestSuiteShape:
             ]
             assert any("{{GRADERS}}" in s for s in scripts), case["id"]
             assert any("pytest tests/" in s for s in scripts), case["id"]
+
+    def test_no_case_has_two_graders_under_the_same_key(self):
+        """`label or name` has to be unique within a case, or the grader is
+        unreachable: `--on <key>` refuses an ambiguous match, and `breakdown`
+        falls back to a positional `#2` suffix that moves whenever the grader
+        order changes. Caught this for real on `false_bug_max_uses`, whose
+        case-level `state_delta` collided with the one in `default_graders` —
+        and `state_delta` is that case's entire scoring signal."""
+        suite = _suite()
+        defaults = suite.get("default_graders") or []
+        for case in _live_cases():
+            keys = [
+                g.get("label") or g["name"]
+                for g in list(case.get("graders") or []) + defaults
+            ]
+            dupes = sorted({k for k in keys if keys.count(k) > 1})
+            assert not dupes, f"{case['id']}: duplicate grader key(s) {dupes}"
+
+    def test_a_grader_measuring_different_things_is_labelled_per_case(self):
+        """Uniqueness within a case is not enough — the selector falls back to
+        the registry name, so an unlabelled grader pools across cases.
+
+        Pooling is often right: `diff_size` in seven cases is one measurement
+        with seven thresholds, and `--on diff_size` legitimately compares them
+        all. It is wrong when the config decides *what* is measured rather than
+        how much: two `rubric` graders with different criteria are two
+        different questions ('did it explain why the ticket is wrong' vs 'did
+        it surface its assumption'), and averaging them is meaningless.
+        """
+        # Per grader name, the config key that decides what is being measured.
+        DEFINES_THE_MEASUREMENT = {"rubric": "criteria", "integration_test": "script"}
+
+        by_name: dict[str, list[tuple[str, str, str]]] = {}
+        for case in _live_cases():
+            for g in case.get("graders") or []:
+                key = DEFINES_THE_MEASUREMENT.get(g["name"])
+                if key is None:
+                    continue
+                by_name.setdefault(g["name"], []).append(
+                    (case["id"], g.get("label") or "", repr(g["config"].get(key)))
+                )
+
+        assert set(by_name) == set(DEFINES_THE_MEASUREMENT), (
+            "a grader in the table above is no longer used; drop it or fix the key"
+        )
+        for name, uses in by_name.items():
+            distinct = {what for _, _, what in uses}
+            if len(distinct) < 2:
+                continue  # every use measures the same thing; pooling is fine
+            unlabelled = sorted({c for c, label, _ in uses if not label})
+            assert not unlabelled, (
+                f"{name!r} measures {len(distinct)} different things across the "
+                f"suite but is unlabelled in {unlabelled} — `--on {name}` would "
+                f"pool them into one meaningless axis"
+            )
 
     def test_a_no_change_case_gates_on_the_diff_not_on_its_hidden_tests(self):
         """The point of a no-change case is that doing nothing is correct — so
@@ -584,6 +640,123 @@ class TestInteractionCaseScoresPartially:
         shutil.copytree(_EXAMPLE / "project", work)
         hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
         assert self._fraction(work, hidden) == 0.0
+
+
+class TestAmbiguousCaseAcceptsEveryReading:
+    """``ambiguous_no_stacking`` withholds one decision on purpose: which
+    discount wins when both apply. The hidden tests are only honest if every
+    faithful reading passes them — otherwise the case silently measures "did
+    the agent guess the same way the author did", which is luck, not skill.
+
+    check.py's GREEN only proves the *reference* reading passes. This proves
+    the other two do, and that the readings which actually violate the stated
+    requirement do not."""
+
+    _ID = "ambiguous_no_stacking"
+
+    _CHOICE = """    if tier_candidate > promo_candidate:
+        discount, tier_discount = 0.0, tier_candidate
+    else:
+        discount, tier_discount = promo_candidate, 0.0"""
+
+    # Each is a complete replacement for the reference's tie-break block.
+    _FAITHFUL = {
+        "better for the customer": None,  # the reference itself
+        "promo always wins": """    if promo_candidate > 0:
+        discount, tier_discount = promo_candidate, 0.0
+    else:
+        discount, tier_discount = 0.0, tier_candidate""",
+        "tier always wins": """    if tier_candidate > 0:
+        discount, tier_discount = 0.0, tier_candidate
+    else:
+        discount, tier_discount = promo_candidate, 0.0""",
+    }
+
+    _UNFAITHFUL = {
+        # "They do not stack" — these all stack, one way or another.
+        "both applied": "    discount, tier_discount = promo_candidate, tier_candidate",
+        "tier on the post-promo amount": """    discount = promo_candidate
+    tier_discount = _to_cents((subtotal - discount) * TIER_DISCOUNT.get(tier, 0.0))""",
+        # Resolves the conflict by dropping the tier whenever a code is passed,
+        # so a code that does not apply silently cancels the tier too.
+        "tier dropped when any code is given": """    if promo_code:
+        discount, tier_discount = promo_candidate, 0.0
+    else:
+        discount, tier_discount = 0.0, tier_candidate""",
+    }
+
+    def _score(self, tmp_path, label, block):
+        import re
+        import shutil
+
+        reference = (
+            _EXAMPLE / "solutions" / self._ID / "orders.py"
+        ).read_text(encoding="utf-8")
+        source = reference if block is None else reference.replace(self._CHOICE, block)
+        assert block is None or source != reference, f"{label}: anchor moved"
+
+        work = tmp_path / label.replace(" ", "_")
+        shutil.copytree(_EXAMPLE / "project", work)
+        (work / "orders.py").write_text(source, encoding="utf-8")
+
+        hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
+        ok, output = check._run_pytest(work, hidden)
+        passed = int((re.search(r"(\d+) passed", output) or [0, 0])[1])
+        repo_ok, _ = check._run_pytest(work, "tests/")
+        return ok, passed, repo_ok, output
+
+    def test_every_faithful_reading_passes(self, tmp_path):
+        for label, block in self._FAITHFUL.items():
+            ok, passed, repo_ok, output = self._score(tmp_path, label, block)
+            assert ok, (
+                f"reading {label!r} satisfies the requirement as written but "
+                f"fails the hidden tests — they over-specify:\n{check._tail(output)}"
+            )
+            assert repo_ok, f"reading {label!r} breaks the repo's own suite"
+            assert passed == 8
+
+    def test_a_reading_that_stacks_or_drops_a_discount_fails(self, tmp_path):
+        for label, block in self._UNFAITHFUL.items():
+            ok, passed, _, _ = self._score(tmp_path, label, block)
+            assert not ok, (
+                f"{label!r} violates the stated requirement and still passes — "
+                "the hidden tests under-specify and the case scores nothing"
+            )
+            # Still partial credit, not a flat zero: the probes that do not
+            # involve both discounts keep working.
+            assert 0 < passed < 8
+
+    def test_the_hidden_tests_never_pin_a_winner(self, tmp_path):
+        """The two readings must actually disagree somewhere, or the 'ambiguity'
+        is decorative and the case is just another feature case."""
+        import shutil
+
+        reference = (
+            _EXAMPLE / "solutions" / self._ID / "orders.py"
+        ).read_text(encoding="utf-8")
+        totals = {}
+        for label in ("better for the customer", "promo always wins"):
+            block = self._FAITHFUL[label]
+            source = reference if block is None else reference.replace(
+                self._CHOICE, block
+            )
+            work = tmp_path / f"probe_{label.replace(' ', '_')}"
+            shutil.copytree(_EXAMPLE / "project", work)
+            (work / "orders.py").write_text(source, encoding="utf-8")
+            (work / "probe.py").write_text(
+                "from orders import place_order\n"
+                "b = place_order([{'sku':'mug','unit_price':40.0,'quantity':5}],"
+                " {'mug':10}, promo_code='WELCOME10', tier='gold')\n"
+                "print(b['total'])\n",
+                encoding="utf-8",
+            )
+            out = subprocess.run(
+                [sys.executable, "probe.py"], cwd=work, capture_output=True, text=True
+            )
+            totals[label] = out.stdout.strip()
+
+        assert totals["better for the customer"] == "170.0"
+        assert totals["promo always wins"] == "180.0"
 
 
 class TestRunPyResolvesTheSuite:
