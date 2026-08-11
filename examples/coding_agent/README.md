@@ -202,7 +202,7 @@ uv run python examples/coding_agent/check.py
   ----------------------------------------------------------------------------
   false_bug_max_uses                      ✓         ✓             ✓       ✓
 
-  9 verified  —  of 9 case(s)
+  10 verified  —  of 10 case(s)
 ```
 
 两张表，因为前两列量的**不是同一件事**（见下）——合成一张就等于让列名对不上它测的东西，
@@ -279,6 +279,21 @@ check.py 换成另外两项检查，对照 `traps/<id>/` 里那个**照报告改
 - **隐藏测试大部分用自己构造的数据。** 把那笔取消订单从 `history.ORDERS` 里删掉，
   工单里那个客户的收据就正确了——只对着仓库里那份数据断言的话，这种改法和真修复
   完全分不出来。
+
+**四项检查证明不了区分度，所以每类用例都要多验一步。** check.py 回答的是"你的答案
+能不能过"，回答不了"走错路的会不会被放过"。按类型各加一个验证：
+
+| 用例类型 | 额外要验什么 | 参考 |
+|---|---|---|
+| 普通需求 / 改 bug | 几种典型错法各落在哪个分数上 | `TestIncrementalCaseScoresConventions` |
+| 需要定位 | 每个诱饵都还抓得住 | `TestLocalizationCaseDecoys` |
+| 需求有歧义 | 每种忠实读法都能过 | `TestAmbiguousCaseAcceptsEveryReading` |
+| 正确答案是不动手 | `traps/<id>/` 里那个错改法会被抓住 | check.py 的 TRAP-CAUGHT |
+
+还有一条踩过的坑：**别让新用例依赖基线里为别的用例埋的缺陷**。现在 base project 的
+`total_spent` 带着 `bug_locate_2` 的缺陷，任何碰 lifetime spend 的新用例都会隐含地
+要求"先把那个 bug 修了"，它的 RED/GREEN 也就不再是它自己的了。
+`feature_incremental_2` 因此刻意绕开了那条链，并且有测试盯着它别绕回去。
 
 ### 用例配比
 

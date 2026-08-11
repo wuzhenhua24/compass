@@ -192,6 +192,42 @@ cases:
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 40}}
 
+  # ── 需求 · 增量（第二条，比 add_discount 高一档）─────────────────────
+  # 同样是"在现有模块加一个函数、签名由需求给定"，但难的地方从**写**挪到了
+  # **守约定**：不原地改入参、任何一种拒绝下两个 map 都原封不动、复用模块
+  # 已有的异常词汇（ValueError / OutOfStock / UnknownSKU）而不是自己发明。
+  # 这几条 add_discount 一条都不考——它是地板题，这条不是。
+  #
+  # 两个 map 让原子性这件事变难了一档：半途生效不只是"漏了一步"，是凭空
+  # 造出或销毁库存。
+  #
+  # 刻意避开 total_spent / lifetime_spend：基线项目里那条链是带着
+  # bug_locate_2 的缺陷的，任何依赖它的新用例都会变成"必须先把那个 bug 修了"。
+  - id: feature_incremental_2
+    description: "需求（增量）：仓库之间调拨库存"
+    input:
+      prompt: |
+        仓库之间要能调拨库存。请在 inventory.py 新增
+        transfer(stock_from, stock_to, sku, quantity)：
+
+        1. 把 quantity 件 sku 从 stock_from 挪到 stock_to，返回更新后的两个
+           库存 map，**源仓在前**。
+        2. 目的仓原本没有这个 sku 的话，新建一条。
+        3. 三种情况要拒绝，各自用已有的异常类型：
+           · quantity 不是正数 → ValueError
+           · sku 不在商品表里（下架商品不许调拨）→ catalog.UnknownSKU
+           · 源仓存量不够 → inventory.OutOfStock，并带上 sku / wanted / available
+        4. 遵守这个模块一贯的约定：**不原地修改任何一个入参**；上面任何一种
+           拒绝发生时，两个 map 都必须原封不动。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_feature_incremental_2.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 45}}
+
   # ── 需求 · 跨模块 ────────────────────────────────────────────────────
   # 要同时改 inventory 和 orders，还要守住 inventory 一直声明的不可变约定。
   # prompt 里写死了两个函数签名——见文件头那条铁律。
@@ -430,48 +466,31 @@ cases:
                 指出了照工单改会有什么后果——每个促销码都会多给一次使用
                 机会，或者点名 tests/test_orders.py 里那条会变红的测试。
 
-  # ══ 待填的槽位 ═══════════════════════════════════════════════════════
+  # ══ 加下一条的时候 ═════════════════════════════════════════════════
   #
-  # 这些**故意注释掉，不是留成空 case**。
+  # 原来的三个占位槽位（bug_locate_2 / feature_incremental_2 /
+  # 陷阱·需求有歧义）都填完了，上面就是。留下这段是因为**怎么加**比加了什么
+  # 更容易出错。
   #
-  # 第一版把它们写成了带 `metadata: {todo: true}` 的真 case——check.py 会跳过，
-  # 但 `compass test` 不认这个约定，于是三条 prompt 写着 "TODO" 的桩子照跑不误：
-  # 没有 case 级 grader，只有过程侧几个指标，全部轻松通过，**每条 0.997 分记 PASS**。
-  # 两个模型各白拿 3 分，pass rate 凭空虚高，还烧掉 $0.31。
+  # 一个没填的槽位**必须跑不起来**。第一版把它们写成带 `metadata: {todo: true}`
+  # 的真 case——check.py 认这个标记会跳过，但 `compass test` 不认，于是三条
+  # prompt 写着 "TODO" 的桩子照跑不误：没有 case 级 grader，只剩过程侧几个
+  # 指标，全部轻松通过，**每条 0.997 分记 PASS**。两个模型各白拿 3 分，
+  # pass rate 凭空虚高，还烧掉 $0.31。这正是 check.py 的 RED 检查要防的
+  # "白送分"，却被写进了模板本身。注释掉是唯一不依赖任何人记得某个约定的做法。
   #
-  # 这正是 check.py 的 RED 检查要防的"白送分"，我却把它写进了模板本身。
-  # 一个没填的槽位**必须跑不起来**——注释掉是唯一不依赖任何人记得某个约定的做法。
+  # 加一条新的：先写 grader_tests/test_<id>.py 和 solutions/<id>/，
+  # 再把 case 加进来，最后 `check.py` 跑绿。然后按类型多验一步——
+  # check.py 的四项检查只证明"你的答案能过"，证明不了这条用例有区分度：
   #
-  # 填的时候：把对应那段解注释，补上 grader_tests/test_<id>.py 和
-  # solutions/<id>/，然后 `check.py` 跑绿。
+  # | 类型 | 额外要验什么 | 参考 |
+  # |---|---|---|
+  # | 普通需求/改 bug | 几种典型错法各落在哪个分数上 | TestIncrementalCaseScoresConventions |
+  # | 需要定位 | 每个诱饵都还抓得住 | TestLocalizationCaseDecoys |
+  # | 需求有歧义 | 每种忠实读法都能过 | TestAmbiguousCaseAcceptsEveryReading |
+  # | 正确答案是不动手 | traps/<id>/ 里那个错改法会被抓住 | check.py 的 TRAP-CAUGHT |
   #
-  # （"陷阱 · 需求有歧义"这个槽位已经填了，就是上面的 ambiguous_no_stacking。）
-  #
-  # ── 改 bug · 需要定位（第二条）──────────────────────────────────────
-  # 挑一个"症状和根因隔了两跳"的真实线上问题。
-  #
-  # - id: bug_locate_2
-  #   description: "改 bug（需定位）：……"
-  #   input:
-  #     prompt: |
-  #       ……（只描述症状和复现步骤，不要提根因在哪个文件）
-  #   graders:
-  #     - {name: integration_test, type: code, gate: true,
-  #        config: {script: "python -m pytest {{GRADERS}}/test_bug_locate_2.py -q",
-  #                 workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-  #     - {name: integration_test, type: code, gate: true,
-  #        config: {script: "python -m pytest tests/ -q",
-  #                 workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-  #     - {name: diff_size, type: code, config: {max_total_changes: 30}}
-  #
-  # ── 需求 · 增量（第二条）────────────────────────────────────────────
-  # 同上形状，prompt 换成需求描述，别忘了把验收测试断言的接口签名写进 prompt。
-  #
-  # ── 陷阱 · 需求有歧义（第二条）──────────────────────────────────────
-  # 形状照抄 ambiguous_no_stacking。要点是**只留一处歧义**，其余全部说死——
-  # 两处歧义混在一起，失败了也说不清是因为哪一处。
-  #
-  # 还有一条：隐藏测试写完后，把每种忠实读法都跑一遍，确认全过（参考
-  # tests/test_coding_agent_example.py::TestAmbiguousCaseAcceptsEveryReading）。
-  # check.py 的 GREEN 只证明**你自己那种**读法能过，而只要有一种忠实读法过不了，
-  # 这条用例测的就是"猜没猜中你的想法"，不是工程能力。
+  # 还有一条踩过的坑：**别让新用例依赖基线里为别的用例埋的缺陷**。
+  # 现在 base project 的 total_spent 是带着 bug_locate_2 的缺陷的，任何碰
+  # lifetime spend 的新用例都会隐含地要求"先把那个 bug 修了"，它的 RED/GREEN
+  # 也就不再是它自己的了。

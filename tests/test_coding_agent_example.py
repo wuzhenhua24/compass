@@ -373,12 +373,30 @@ class TestSuiteShape:
             [{"id": "fine", "input": {"prompt": "Do a real thing."}}]
         ) == []
 
-    def test_the_slots_survive_as_commented_templates(self):
-        """Commented out, but still there to fill in — otherwise the guidance
-        about case-type mix has nothing to attach to."""
+    def test_every_slot_the_template_promised_is_filled(self):
+        """The three placeholder slots are now real cases. Their ids are what
+        the README's case-mix table and the commit history refer to, so a
+        rename has to be deliberate rather than incidental."""
+        ids = {case["id"] for case in _live_cases()}
+        assert {"bug_locate_2", "feature_incremental_2"} <= ids
         raw = (_EXAMPLE / "suite.yaml").read_text(encoding="utf-8")
-        assert "待填的槽位" in raw
-        assert "# - id: bug_locate_2" in raw
+        assert "待填的槽位" not in raw, "a slot came back; fill it or delete it"
+
+    def test_the_guidance_for_adding_a_case_survives_the_slots(self):
+        """The slots are gone but the two lessons they carried are not: an
+        unfilled slot must be un-runnable rather than marked (three `TODO`
+        stubs once scored 0.997 apiece and inflated both models' pass rates),
+        and check.py's four checks prove your answer passes, not that the case
+        discriminates. Losing either is how the next case gets added badly."""
+        raw = (_EXAMPLE / "suite.yaml").read_text(encoding="utf-8")
+        assert "0.997" in raw, "the free-points incident is no longer recorded"
+        for verifier in (
+            "TestIncrementalCaseScoresConventions",
+            "TestLocalizationCaseDecoys",
+            "TestAmbiguousCaseAcceptsEveryReading",
+        ):
+            assert verifier in raw, f"{verifier} is not pointed at from suite.yaml"
+            assert verifier in globals(), f"{verifier} no longer exists"
 
     def test_process_guards_are_shared_and_never_gate_on_cost(self):
         suite = _suite()
@@ -850,6 +868,126 @@ class TestLocalizationCaseDecoys:
         ok, passed, repo_ok = self._score(tmp_path, "base", {})
         assert repo_ok
         assert not ok and 0 < passed < 8
+
+
+class TestIncrementalCaseScoresConventions:
+    """``feature_incremental_2`` is `add_discount` one notch up: the same shape
+    (one function, signature given) but the difficulty moved from writing it to
+    honouring contracts the module already has. These pin that the hidden tests
+    grade the contracts and not a house style."""
+
+    _ID = "feature_incremental_2"
+
+    def _score(self, tmp_path, name, body):
+        import re
+        import shutil
+
+        reference = (
+            _EXAMPLE / "solutions" / self._ID / "inventory.py"
+        ).read_text(encoding="utf-8")
+        marker = (
+            '    if quantity <= 0:\n'
+            '        raise ValueError(f"quantity must be positive, got {quantity}")\n'
+            "    product(sku)"
+        )
+        assert marker in reference, "the reference body moved; update the marker"
+        source = reference if body is None else reference.replace(
+            reference[reference.index(marker):], body + "\n"
+        )
+        assert body is None or source != reference, f"{name}: replacement failed"
+
+        work = tmp_path / name
+        shutil.copytree(_EXAMPLE / "project", work)
+        (work / "inventory.py").write_text(source, encoding="utf-8")
+
+        hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
+        ok, output = check._run_pytest(work, hidden)
+        passed = int((re.search(r"(\d+) passed", output) or [0, 0])[1])
+        repo_ok, _ = check._run_pytest(work, "tests/")
+        return ok, passed, repo_ok
+
+    _CHECKS = """    if quantity <= 0:
+        raise ValueError("quantity must be positive")
+    product(sku)
+    available = stock_from.get(sku, 0)
+    if quantity > available:
+        raise OutOfStock(sku, quantity, available)
+"""
+
+    def test_a_different_but_correct_style_also_passes(self, tmp_path):
+        """Copy-then-mutate is as valid as building new maps. A hidden test
+        that only accepts the reference's idiom is grading style, not the
+        contract the requirement stated."""
+        ok, passed, repo_ok = self._score(
+            tmp_path,
+            "copy_then_mutate",
+            self._CHECKS + """    new_from, new_to = dict(stock_from), dict(stock_to)
+    new_from[sku] = available - quantity
+    new_to[sku] = new_to.get(sku, 0) + quantity
+    return new_from, new_to""",
+        )
+        assert ok and repo_ok and passed == 10
+
+    def test_mutating_a_caller_s_map_is_caught(self, tmp_path):
+        ok, passed, _ = self._score(
+            tmp_path,
+            "mutates",
+            self._CHECKS + """    stock_from[sku] = available - quantity
+    stock_to[sku] = stock_to.get(sku, 0) + quantity
+    return stock_from, stock_to""",
+        )
+        assert not ok and 0 < passed < 10
+
+    def test_a_half_applied_transfer_is_caught(self, tmp_path):
+        """With two maps, a partial application invents or destroys stock
+        rather than merely mislaying it — the reason this case exists rather
+        than a second single-map one."""
+        ok, passed, _ = self._score(
+            tmp_path,
+            "half_applied",
+            """    available = stock_from.get(sku, 0)
+    stock_from[sku] = available - quantity
+    if quantity <= 0:
+        raise ValueError("quantity must be positive")
+    product(sku)
+    if quantity > available:
+        raise OutOfStock(sku, quantity, available)
+    return stock_from, {**stock_to, sku: stock_to.get(sku, 0) + quantity}""",
+        )
+        assert not ok and 0 < passed < 10
+
+    def test_reinventing_the_error_vocabulary_is_caught(self, tmp_path):
+        """`OutOfStock` carries sku/wanted/available for support. A bare raise
+        satisfies "it refuses" and loses everything the caller needed."""
+        ok, passed, _ = self._score(
+            tmp_path,
+            "bare_raise",
+            """    if quantity <= 0:
+        raise ValueError("quantity must be positive")
+    product(sku)
+    available = stock_from.get(sku, 0)
+    if quantity > available:
+        raise OutOfStock(sku, 0, 0)
+    return (
+        {**stock_from, sku: available - quantity},
+        {**stock_to, sku: stock_to.get(sku, 0) + quantity},
+    )""",
+        )
+        assert not ok and 0 < passed < 10
+
+    def test_the_case_does_not_depend_on_the_defect_seeded_for_another(self):
+        """The base project ships `bug_locate_2`'s broken `total_spent`. A case
+        that reached lifetime spend would silently require fixing that too, and
+        its RED/GREEN would stop meaning what it says."""
+        hidden = (
+            _EXAMPLE / "grader_tests" / f"test_{self._ID}.py"
+        ).read_text(encoding="utf-8")
+        solution = (
+            _EXAMPLE / "solutions" / self._ID / "inventory.py"
+        ).read_text(encoding="utf-8")
+        for forbidden in ("total_spent", "lifetime_spend", "receipts", "history"):
+            assert forbidden not in hidden, f"hidden tests reach {forbidden}"
+            assert forbidden not in solution, f"the reference reaches {forbidden}"
 
 
 class TestRunPyResolvesTheSuite:
