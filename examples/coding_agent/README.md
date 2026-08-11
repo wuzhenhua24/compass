@@ -101,6 +101,7 @@ examples/coding_agent/
 ├── check.py            # 用例红绿自检 ← 先跑这个
 ├── run.py              # 填占位符 → 起真实对比运行
 ├── solutions/          # 每条用例的参考实现（只给 check.py 用，agent 永远看不到）
+├── traps/              # 「不该改」类用例里那个**错的**改法 —— check.py 验它会被抓住
 ├── coding.yaml         # 两条用例的离线 demo 场景
 ├── eval.py             # 离线 demo：建仓库 → 跑三种行为 → 出排行榜
 ├── replay_cli.py       # 冒充 claude 的回放器（唯一的替身）
@@ -183,13 +184,21 @@ uv run python examples/coding_agent/check.py
 ```
 
 ```
-  case                                  RED   GREEN  NO-REG  STABLE
-  ------------------------------------------------------------------
-  fix_rounding                            ✓     ✓      ✓       ✓
-  bug_locate_promo_boundary               ✓     ✓      ✓       ✓
+  case                                  RED       GREEN         NO-REG  STABLE
+  ----------------------------------------------------------------------------
+  fix_rounding                            ✓         ✓             ✓       ✓
+  bug_locate_promo_boundary               ✓         ✓             ✓       ✓
   ...
-  5 verified  —  of 5 case(s)
+
+  case                                  NO-BUG    TRAP-CAUGHT   NO-REG  STABLE
+  ----------------------------------------------------------------------------
+  false_bug_max_uses                      ✓         ✓             ✓       ✓
+
+  7 verified  —  of 7 case(s)
 ```
+
+两张表，因为前两列量的**不是同一件事**（见下）——合成一张就等于让列名对不上它测的东西，
+而这份文件存在的意义正是防这个。
 
 四项检查，各挡住一种"用例悄悄失效"：
 
@@ -204,6 +213,19 @@ uv run python examples/coding_agent/check.py
 `solutions/<id>/`，只喂给 check.py，agent 永远看不到。没有参考实现的用例会报
 UNVERIFIED——能跑，但没人证明过它可解。
 
+**「正确答案是什么都不改」的用例反着验。** 这类用例（`metadata:
+{expects_no_change: true}`）手里那份 bug 报告本身是错的，没有参考实现可写。
+check.py 换成另外两项检查，对照 `traps/<id>/` 里那个**照报告改**的版本：
+
+| 检查 | 没过说明 |
+|---|---|
+| **NO-BUG** 隐藏测试在原始项目上必须**全过** | 真有缺陷 —— 这就是条普通的改 bug 用例，标错了 |
+| **TRAP-CAUGHT** 套上 `traps/<id>/` 后必须被抓住 | 错的改法和什么都不做分不开，这条用例区分不了克制与运气 |
+
+这类用例的打分信号不是隐藏测试（什么都不做就能全过），是 `state_delta`：
+一个源文件都不许改。隐藏测试的作用是**诊断**——用例挂了的时候告诉你是把逻辑改坏了，
+还是只是绕着改了点别的。
+
 ### 用例配比
 
 关键是**要有区分度**：全过或全挂的用例集什么都测不出来。`suite.yaml` 里按类型排好了槽位：
@@ -214,8 +236,10 @@ UNVERIFIED——能跑，但没人证明过它可解。
 | 改 bug · 需要定位 | 2 | 症状在 A，根因在 B |
 | 需求 · 增量 | 2 | 现有模块加个函数 |
 | 需求 · 跨模块 | 2 | 动 2~3 个文件，接口要自己设计 |
+| 需求 · 规则组合 | 1~2 | 两条规则各自都简单，难在怎么叠 —— 天然适合部分给分 |
 | 陷阱 · 引发回归 | 1~2 | 最直观的改法会弄坏别的 |
 | 陷阱 · 需求有歧义 | 1 | 看 agent 是暴露假设还是闷头猜 |
+| 陷阱 · 这个 bug 不存在 | 1~2 | 工单说错了，正确动作是不动手并讲清楚 |
 
 **多少条取决于你在测什么**，这两件事差一个数量级：
 
@@ -226,6 +250,37 @@ UNVERIFIED——能跑，但没人证明过它可解。
 
 后者别拍脑袋定数量：先跑一轮，看 `compass compare` 报的 **MDE**（最小可检测效应），
 它会告诉你还差多少样本。
+
+**但 MDE 变小主要不靠"再加几条"，靠加对类型。** 两个模型都必过的用例，加多少条、
+跑多少 trials，对区分度的贡献都是 0。真正让 MDE 掉下来的是两件事：
+
+- **让用例落在两个模型概率不同的难度带里。** 上面表格后三类（组合、陷阱、伪 bug）
+  就是为此存在的——它们都有一条又快又错的路，弱一点的模型会走上去。
+- **让单条用例给出 `[0,1]` 的连续分，而不是 `{0, 1}`。** 隐藏测试写成 8 条互相
+  独立的断言，结构对了一半的运行拿 5/8 而不是 0。
+
+`interaction_promo_then_tier_rounding` 是照这个思路做的第一条：五种把两级折扣
+组合错的方式，分别落在 0.50 和 0.88，跟正确的 1.00 和什么都不做的 0.00 都分得开。
+
+**这个连续分现在只在 `evaluator_results[].score` 里，取它要绕两道：**
+
+```python
+[e["score"] for c in run["case_results"] if c["case_id"] == "..."
+ for e in c["evaluator_results"]
+ if e["name"] == "integration_test" and "{{GRADERS}}" in ...]   # 按 script 认
+```
+
+两个原因，都是设计使然，不是 bug：
+
+1. **`overall_score` 里没有它。** gate grader 的分数按定义不进加权平均——gate 只
+   回答"过没过"，不该再把分数塞进那个数（见 `GraderConfig` 的 docstring）。这套
+   用例的 `overall_score` 因此是**过程成本**的聚合，不是正确性的。
+2. **`breakdown` 会把同名 grader 折叠成一个键。** 一条用例里两个
+   `integration_test`（隐藏测试 + 回归守卫）在 `breakdown` 里只剩一个值。
+
+所以 `compass compare` 目前比的是 `overall_score`，**看不到**这个连续分——它比的
+仍然是 pass/fail 加过程成本。想让部分给分真正进到配对比较里，需要 compare 支持
+"按某个 grader 的分数比"，那是另一件事。
 
 ### 然后就是普通的多变体运行
 

@@ -24,6 +24,33 @@ quietly worthless:
 A case with no ``solutions/<id>/`` directory is reported as UNVERIFIED rather
 than skipped silently: it can still be run, but nobody has shown it is
 solvable, and that is worth seeing in the summary.
+
+── Cases where the right answer is to change nothing ──────────────────────
+
+A case carrying ``metadata: {expects_no_change: true}`` is handed a *false*
+bug report: the behaviour complained about is already correct, and the work is
+to say so rather than to edit. Those four checks make no sense for it — the
+hidden tests describe what is already true, and there is no reference solution
+because there is nothing to write. Validating one against the RED/GREEN table
+would fail it for being what it is.
+
+So it is validated backwards, against ``traps/<id>/`` — a directory holding the
+tempting *wrong* fix, the change the bug report is asking for:
+
+    NO-BUG       hidden tests pass on the untouched project
+                 -> failing here means there really is a defect, and the case
+                    is an ordinary fix case that has been mislabelled.
+    TRAP         hidden tests fail once the trap is applied
+                 -> failing here means the wrong fix is indistinguishable from
+                    doing nothing, so the case cannot tell restraint from luck.
+    NO-REGRESS   the project's own suite passes on the untouched project
+                 -> the premise of the case is a healthy repository.
+    STABLE       NO-BUG repeated.
+
+The scoring signal for such a case is ``state_delta`` (no source file modified),
+not the hidden tests — an agent that does nothing at all passes those. What the
+hidden tests add is the ability to tell *how* a failing run failed: a broken
+counter, or an edit that merely wandered.
 """
 
 from __future__ import annotations
@@ -42,6 +69,7 @@ _HERE = Path(__file__).parent
 _PROJECT = _HERE / "project"
 _HIDDEN = _HERE / "grader_tests"
 _SOLUTIONS = _HERE / "solutions"
+_TRAPS = _HERE / "traps"
 _SUITE = _HERE / "suite.yaml"
 
 _STABILITY_RUNS = 3
@@ -50,6 +78,9 @@ _STABILITY_RUNS = 3
 @dataclass
 class CaseReport:
     case_id: str
+    # "fix": the ordinary shape — a defect to repair or a feature to add.
+    # "no_change": the report is false; the right answer is to edit nothing.
+    kind: str = "fix"
     red: bool | None = None
     green: bool | None = None
     no_regress: bool | None = None
@@ -62,8 +93,16 @@ class CaseReport:
 
     @property
     def unverified(self) -> bool:
-        """No reference solution, so only RED could be checked."""
+        """Nothing to compare the hidden tests against.
+
+        For a fix case that is a missing ``solutions/<id>/``; for a no-change
+        case a missing ``traps/<id>/``. Either way only the first check ran.
+        """
         return self.green is None
+
+
+def case_kind(case: dict) -> str:
+    return "no_change" if (case.get("metadata") or {}).get("expects_no_change") else "fix"
 
 
 # ---------------------------------------------------------------------------
@@ -133,22 +172,29 @@ def _run_pytest(workdir: Path, target: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
-def _workspace(dest: Path, solution: Path | None) -> Path:
-    """A fresh copy of the project, optionally with a solution applied."""
+def _workspace(dest: Path, overlay: Path | None) -> Path:
+    """A fresh copy of the project, optionally with an overlay applied.
+
+    The overlay is a reference solution for a fix case, and the tempting wrong
+    fix for a no-change one — same mechanics, opposite expectation.
+    """
     work = dest / "work"
     if work.exists():
         shutil.rmtree(work)
     shutil.copytree(_PROJECT, work)
-    if solution is not None:
-        for src in solution.rglob("*"):
+    if overlay is not None:
+        for src in overlay.rglob("*"):
             if src.is_file():
-                target = work / src.relative_to(solution)
+                target = work / src.relative_to(overlay)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, target)
     return work
 
 
 def check_case(case: dict, tmp: Path) -> CaseReport:
+    if case_kind(case) == "no_change":
+        return check_no_change_case(case, tmp)
+
     report = CaseReport(case_id=case["id"])
     hidden = hidden_tests_for(case)
     solution = _SOLUTIONS / case["id"]
@@ -192,6 +238,68 @@ def check_case(case: dict, tmp: Path) -> CaseReport:
     return report
 
 
+def check_no_change_case(case: dict, tmp: Path) -> CaseReport:
+    """Validate a case whose correct answer is to edit nothing.
+
+    Same four slots on ``CaseReport``, read differently: ``red`` holds NO-BUG,
+    ``green`` holds TRAP. Reusing the fields keeps ``verified`` honest — all
+    four still have to be true — and ``print_report`` labels each table for
+    what its columns actually mean.
+    """
+    report = CaseReport(case_id=case["id"], kind="no_change")
+    hidden = hidden_tests_for(case)
+    trap = _TRAPS / case["id"]
+
+    # NO-BUG — the behaviour the report complains about is already correct.
+    work = _workspace(tmp, None)
+    report.red, output = _run_pytest(work, str(hidden))
+    if not report.red:
+        report.notes.append(
+            f"hidden tests fail on the untouched project — there IS a defect, so "
+            f"this is not a no-change case: {_tail(output)}"
+        )
+
+    # NO-REGRESS — and the repository it ships is healthy to begin with.
+    report.no_regress, output = _run_pytest(work, "tests/")
+    if not report.no_regress:
+        report.notes.append(f"the project's own suite is already red: {_tail(output)}")
+
+    if not trap.is_dir():
+        report.notes.append(
+            f"no traps/{case['id']}/ — nobody has shown the wrong fix is detectable"
+        )
+        return report
+
+    # TRAP — the change the bug report asks for must be caught by something.
+    work = _workspace(tmp, trap)
+    trap_hidden, _ = _run_pytest(work, str(hidden))
+    trap_suite, _ = _run_pytest(work, "tests/")
+    report.green = not (trap_hidden and trap_suite)
+    if not report.green:
+        report.notes.append(
+            "the trap fix passes both suites — this case cannot tell restraint "
+            "from a lucky edit; tighten the hidden tests"
+        )
+    elif trap_hidden:
+        report.notes.append(
+            "the trap is caught only by the project's own suite, not by the "
+            "hidden tests — fine, but the diagnosis will be coarser"
+        )
+
+    # STABLE — repeat NO-BUG; anything that flips is flaky.
+    report.stable = True
+    if report.red:
+        work = _workspace(tmp, None)
+        for _ in range(_STABILITY_RUNS - 1):
+            again, _ = _run_pytest(work, str(hidden))
+            if not again:
+                report.stable = False
+                report.notes.append("hidden tests are flaky — they flipped on a rerun")
+                break
+
+    return report
+
+
 def _tail(output: str, lines: int = 2) -> str:
     interesting = [
         line for line in output.splitlines()
@@ -207,14 +315,34 @@ def _mark(value: bool | None) -> str:
     return {True: "  ✓ ", False: "  ✗ ", None: "  – "}[value]
 
 
-def print_report(reports: list[CaseReport]) -> None:
-    print(f"\n  {'case':<38}{'RED':<6}{'GREEN':<7}{'NO-REG':<8}{'STABLE':<8}")
-    print(f"  {'-' * 66}")
+def _print_table(reports: list[CaseReport], headers: tuple[str, str]) -> None:
+    """One table per case kind — the first two columns mean different things.
+
+    Printing both kinds under a single ``RED  GREEN`` header would be the same
+    mistake this whole file exists to prevent: a column whose name no longer
+    matches what was measured.
+    """
+    first, second = headers
+    print(f"\n  {'case':<38}{first:<10}{second:<14}{'NO-REG':<8}{'STABLE':<8}")
+    print(f"  {'-' * 76}")
     for r in reports:
         print(
-            f"  {r.case_id:<38}{_mark(r.red):<6}{_mark(r.green):<7}"
+            f"  {r.case_id:<38}{_mark(r.red):<10}{_mark(r.green):<14}"
             f"{_mark(r.no_regress):<8}{_mark(r.stable):<8}"
         )
+
+
+def print_report(reports: list[CaseReport]) -> None:
+    fixes = [r for r in reports if r.kind == "fix"]
+    no_change = [r for r in reports if r.kind == "no_change"]
+
+    if fixes:
+        _print_table(fixes, ("RED", "GREEN"))
+    if no_change:
+        _print_table(no_change, ("NO-BUG", "TRAP-CAUGHT"))
+        print("    (no-change cases: hidden tests pass on the base project, and")
+        print("     the wrong fix in traps/<id>/ is caught)")
+
     for r in reports:
         for note in r.notes:
             print(f"    {r.case_id}: {note}")
@@ -224,7 +352,7 @@ def print_report(reports: list[CaseReport]) -> None:
     broken = len(reports) - verified - unverified
     print(f"\n  {verified} verified", end="")
     if unverified:
-        print(f", {unverified} unverified (no reference solution)", end="")
+        print(f", {unverified} unverified (no reference solution / trap)", end="")
     if broken:
         print(f", {broken} BROKEN", end="")
     print(f"  —  of {len(reports)} case(s)\n")

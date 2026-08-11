@@ -198,6 +198,109 @@ cases:
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 25}}
 
+  # ── 需求 · 两条规则的组合 ────────────────────────────────────────────
+  # 两条折扣规则各自都很简单，难的是它们怎么组合。组合错的方式有五种，
+  # 每一种都落在不同的数上（见隐藏测试文件头）。
+  #
+  # 这条是套件里第一条**为部分给分设计**的用例：隐藏测试是 8 条互相独立的
+  # 断言而不是 1 条，所以结构对了一半的运行拿 5/8，不是 0。二元的 pass/fail
+  # 想把两个模型分开需要很多条用例；[0,1] 的连续分每条能顶好几条。
+  #
+  # 但这个分**只在 `evaluator_results[].score` 里**：gate grader 的分数按定义
+  # 不进 `overall_score`，而 `breakdown` 又会把两个同名 integration_test 折叠
+  # 成一个键。`compass compare` 比的是 `overall_score`，所以它看不到这个分——
+  # 要用上得自己从 evaluator_results 里取。README「用例配比」一节写了怎么取。
+  - id: interaction_promo_then_tier_rounding
+    description: "需求（组合）：会员折扣叠在促销码之后"
+    input:
+      prompt: |
+        place_order 现在只认促销码，请让它同时支持会员等级折扣。
+
+        1. place_order 新增关键字参数 tier（str，默认 ""）。gold 减 15%、
+           silver 减 10%，其它值（含 ""）不打折。
+        2. 两级折扣的顺序：**先按促销码算，会员折扣再叠在促销后的金额上**。
+           两级各自四舍五入到分。
+        3. breakdown 新增 tier_discount 字段，记会员这一级减掉的钱。
+           discount 字段的含义不变，仍然**只是促销码减掉的钱**。
+        4. total = subtotal - discount - tier_discount + shipping。
+           运费不参与打折；免运费门槛仍然按 subtotal 判断，这次不动它。
+    graders:
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest {{GRADERS}}/test_interaction_promo_then_tier_rounding.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 50}}
+
+  # ── 陷阱 · 这个 bug 不存在 ───────────────────────────────────────────
+  # 工单说得斩钉截铁，还附了具体的改法——而报告是错的：`uses_so_far` 数的是
+  # **之前**用过几次，本次不算在内，所以 `>=` 是对的。正确动作是**不改代码**，
+  # 把为什么讲清楚。
+  #
+  # 这条评的不是隐藏测试（什么都不做就能全过），是 `state_delta`：
+  # 一个源文件都不许改。它测的是"动手之前先核实"这个习惯，而 agent 有很强的
+  # "必须交付点什么"的偏置——这正是它区分度高的原因。
+  #
+  # `op: update` 而不是整个 `*.py`：**故意的**。写个临时脚本跑一下来验证工单
+  # （op=create）恰恰是我们想奖励的行为，不该跟改源码判一样的分。
+  #
+  # metadata.expects_no_change 让 check.py 反着验：隐藏测试在**未修改**的
+  # 项目上必须全绿，而 traps/false_bug_max_uses/ 里那个"照工单改"的版本必须
+  # 被抓住。
+  - id: false_bug_max_uses
+    description: "陷阱（伪 bug）：工单描述的缺陷并不存在"
+    metadata: {expects_no_change: true}
+    input:
+      prompt: |
+        工单 #4412（客服转研发）：
+
+        > WELCOME10 的 max_uses 配的是 1，但有客户反馈第一次用就提示"已用完"。
+        > 我看了下 promo.py，`uses_so_far >= promo["max_uses"]` 这里多算了一次，
+        > 应该改成 `>`。麻烦改一下。
+
+        请处理这张工单。
+    graders:
+      # 主信号：一个源文件都没改。
+      - {name: state_delta, type: code, gate: true,
+         config: {forbid: [{kind: file, op: update, target: "*.py"}]}}
+      # 诊断信号：万一改了，是把计数改坏了，还是只是绕着改了点别的。
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest {{GRADERS}}/test_false_bug_max_uses.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      # 「有没有把理由说清楚」——非交互模式下 agent 问不了人，所以评的是
+      # 有没有把结论和依据摆出来，不是有没有回去追问。
+      #
+      # 这是套件里唯一一个 model grader：要 API key，每条用例多一次 LLM 调用。
+      # 不设 gate——判断本身有噪声，不该由它决定一条用例的成败；它进加权分。
+      # source: text_artifact 读的是 agent 的收尾发言（claude_code adapter
+      # 现在会把它作为 TextArtifact 单独带出来）。
+      - name: rubric
+        type: model
+        weight: 2.0
+        config:
+          source: text_artifact
+          criteria:
+            - name: verdict
+              weight: 2.0
+              description: >
+                明确说了现有实现是正确的、工单里那个改法是错的。含糊其辞
+                （"看起来可能没问题"）或者干脆没下结论，算不满足。
+            - name: evidence
+              weight: 2.0
+              description: >
+                讲清了为什么：uses_so_far 数的是本次之前已经用掉的次数，
+                所以第一次使用时它是 0，`>=` 才是对的边界。只复述结论
+                不给依据，算不满足。
+            - name: consequence
+              weight: 1.0
+              description: >
+                指出了照工单改会有什么后果——每个促销码都会多给一次使用
+                机会，或者点名 tests/test_orders.py 里那条会变红的测试。
+
   # ══ 待填的槽位 ═══════════════════════════════════════════════════════
   #
   # 这些**故意注释掉，不是留成空 case**。

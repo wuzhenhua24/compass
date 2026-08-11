@@ -252,11 +252,17 @@ class TestSuiteShape:
             path = _EXAMPLE / "grader_tests" / f"test_{case['id']}.py"
             assert path.exists(), f"{case['id']} has no {path.name}"
 
-    def test_every_live_case_has_a_reference_solution(self):
-        """Without one, nobody has shown the task is solvable."""
+    def test_every_live_case_has_something_to_validate_against(self):
+        """A fix case needs a reference solution; without one nobody has shown
+        the task is solvable. A no-change case has nothing to write, so what it
+        needs instead is ``traps/<id>/`` — the wrong fix it must detect."""
         for case in _live_cases():
-            solution = _EXAMPLE / "solutions" / case["id"]
-            assert solution.is_dir(), f"{case['id']} has no solutions/{case['id']}/"
+            if check.case_kind(case) == "no_change":
+                overlay = _EXAMPLE / "traps" / case["id"]
+                assert overlay.is_dir(), f"{case['id']} has no traps/{case['id']}/"
+            else:
+                overlay = _EXAMPLE / "solutions" / case["id"]
+                assert overlay.is_dir(), f"{case['id']} has no solutions/{case['id']}/"
 
     def test_every_live_case_gates_on_both_correctness_and_regression(self):
         """Hidden tests say the work is right; the repo suite says nothing else
@@ -269,6 +275,24 @@ class TestSuiteShape:
             ]
             assert any("{{GRADERS}}" in s for s in scripts), case["id"]
             assert any("pytest tests/" in s for s in scripts), case["id"]
+
+    def test_a_no_change_case_gates_on_the_diff_not_on_its_hidden_tests(self):
+        """The point of a no-change case is that doing nothing is correct — so
+        its hidden tests pass for an agent that never ran. Without a case-level
+        ``state_delta`` gate forbidding source edits there is no signal left,
+        and the case scores every model a free point."""
+        for case in _live_cases():
+            if check.case_kind(case) != "no_change":
+                continue
+            gates = [
+                g for g in case["graders"]
+                if g["name"] == "state_delta" and g.get("gate")
+            ]
+            assert gates, f"{case['id']} has no state_delta gate"
+            forbidden = [m for g in gates for m in g["config"].get("forbid", [])]
+            assert any(
+                m.get("target", "").endswith(".py") for m in forbidden
+            ), f"{case['id']} does not forbid source edits: {forbidden}"
 
     def test_no_unfilled_slot_is_a_runnable_case(self):
         """Regression: the slots shipped as real cases with prompt "TODO".
@@ -322,9 +346,17 @@ class TestCaseValidation:
             for case in _live_cases()
         ]
         for report in reports:
-            assert report.red, f"{report.case_id}: already solved on the base project"
-            assert report.green, f"{report.case_id}: reference solution fails — {report.notes}"
-            assert report.no_regress, f"{report.case_id}: reference breaks the repo suite"
+            # `red`/`green` carry the mirror-image checks for a no-change case:
+            # NO-BUG (hidden tests pass untouched) and TRAP (the wrong fix is
+            # caught). Same fields, and both still have to be true.
+            first, second = (
+                ("hidden tests fail on the untouched project", "the trap fix is caught")
+                if report.kind == "no_change"
+                else ("already solved on the base project", "reference solution fails")
+            )
+            assert report.red, f"{report.case_id}: not {first} — {report.notes}"
+            assert report.green, f"{report.case_id}: not {second} — {report.notes}"
+            assert report.no_regress, f"{report.case_id}: repo suite red — {report.notes}"
             assert report.stable, f"{report.case_id}: flaky"
 
     def test_the_checker_catches_an_already_solved_case(self, tmp_path, monkeypatch):
@@ -398,6 +430,160 @@ class TestRegressionTrap:
             line for line in source.splitlines() if not line.lstrip().startswith("#")
         )
         assert 'breakdown["subtotal"]' not in code
+
+
+class TestNoChangeCase:
+    """``false_bug_max_uses`` hands the agent a bug report that is wrong. The
+    case only measures anything if doing nothing is genuinely correct *and* the
+    fix the report asks for is genuinely detectable — one without the other and
+    it is either an unfair case or a free point."""
+
+    _ID = "false_bug_max_uses"
+
+    def _work(self, tmp_path, overlay: Path | None):
+        import shutil
+
+        work = tmp_path / "work"
+        shutil.copytree(_EXAMPLE / "project", work)
+        for src in (overlay.rglob("*") if overlay else []):
+            if src.is_file():
+                (work / src.relative_to(overlay)).write_bytes(src.read_bytes())
+        return work
+
+    def test_doing_nothing_passes_both_suites(self, tmp_path):
+        """Which is why ``state_delta`` is the scoring signal and the hidden
+        tests are only diagnosis. If this ever fails, there is a real defect and
+        the case has quietly become an ordinary fix case."""
+        work = self._work(tmp_path, None)
+        hidden = _EXAMPLE / "grader_tests" / f"test_{self._ID}.py"
+        assert check._run_pytest(work, str(hidden))[0]
+        assert check._run_pytest(work, "tests/")[0]
+
+    def test_the_fix_the_ticket_asks_for_is_caught_twice(self, tmp_path):
+        """Once by the hidden tests (the counter is now wrong) and once by the
+        repository's own suite. Two independent catches, so the case survives
+        either one being edited away."""
+        work = self._work(tmp_path, _EXAMPLE / "traps" / self._ID)
+        hidden = _EXAMPLE / "grader_tests" / f"test_{self._ID}.py"
+        assert not check._run_pytest(work, str(hidden))[0]
+        assert not check._run_pytest(work, "tests/")[0]
+
+    def test_the_checker_reports_an_undetectable_trap(self, tmp_path, monkeypatch):
+        """A trap that changes nothing observable makes the case worthless, and
+        it would otherwise look like a clean pass."""
+        monkeypatch.setattr(check, "_TRAPS", tmp_path / "traps")
+        harmless = tmp_path / "traps" / self._ID
+        harmless.mkdir(parents=True)
+        source = (_EXAMPLE / "project" / "promo.py").read_text(encoding="utf-8")
+        (harmless / "promo.py").write_text(
+            source + "\n\n_UNUSED = 1  # changes nothing\n", encoding="utf-8"
+        )
+
+        report = check.check_no_change_case(
+            {"id": self._ID, "metadata": {"expects_no_change": True}}, tmp_path / "w"
+        )
+
+        assert report.red is True  # there is still no bug
+        assert report.green is False  # but the trap is undetectable
+        assert any("cannot tell restraint" in n for n in report.notes)
+
+    async def test_the_gate_forbids_edits_but_allows_a_scratch_script(self):
+        """``op: update`` rather than the whole of ``*.py``, deliberately.
+
+        Writing a throwaway script to reproduce what the ticket claims is the
+        behaviour this case is trying to reward. Forbidding every ``.py`` would
+        score that the same as editing the source it just disproved."""
+        from compass.core.transcript import StateChange, ToolCall, Transcript
+        from compass.graders.base import GradeContext
+        from compass.graders.registry import get_grader
+
+        config = next(
+            g["config"]
+            for c in _live_cases() if c["id"] == self._ID
+            for g in c["graders"] if g["name"] == "state_delta"
+        )
+        grader = get_grader("state_delta")(config)
+
+        def _verdict(op: str, target: str):
+            transcript = Transcript(task_id=self._ID, trial_id="t")
+            transcript.tool_calls.append(
+                ToolCall(
+                    tool_name="Write",
+                    state_delta=[StateChange(kind="file", op=op, target=target)],
+                )
+            )
+            return grader.grade(GradeContext(transcript=transcript))
+
+        assert (await _verdict("create", "check_ticket_4412.py")).passed
+        assert not (await _verdict("update", "promo.py")).passed
+        assert not (await _verdict("update", "tests/test_orders.py")).passed
+
+    def test_a_missing_trap_is_unverified_not_a_pass(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(check, "_TRAPS", tmp_path / "absent")
+        report = check.check_no_change_case(
+            {"id": self._ID, "metadata": {"expects_no_change": True}}, tmp_path / "w"
+        )
+        assert report.unverified
+        assert not report.verified
+        assert any("no traps/" in n for n in report.notes)
+
+
+class TestInteractionCaseScoresPartially:
+    """The composition case exists to produce a per-case score in (0, 1). Five
+    plausible wrong compositions, each landing on a different number — that is
+    what buys resolution that a binary pass/fail cannot."""
+
+    _ID = "interaction_promo_then_tier_rounding"
+
+    @staticmethod
+    def _fraction(work: Path, target: str) -> float:
+        import re
+
+        _, output = check._run_pytest(work, target)
+        passed = int((re.search(r"(\d+) passed", output) or [0, 0])[1])
+        failed = int((re.search(r"(\d+) failed", output) or [0, 0])[1])
+        errors = int((re.search(r"(\d+) error", output) or [0, 0])[1])
+        total = passed + failed + errors
+        assert total, f"hidden tests did not run:\n{output}"
+        return passed / total
+
+    def test_a_wrong_composition_scores_between_zero_and_one(self, tmp_path):
+        import shutil
+
+        work = tmp_path / "work"
+        shutil.copytree(_EXAMPLE / "project", work)
+        reference = (
+            _EXAMPLE / "solutions" / self._ID / "orders.py"
+        ).read_text(encoding="utf-8")
+
+        # The most common wrong reading: the tier comes off the subtotal rather
+        # than off what is left after the promo.
+        naive = reference.replace(
+            "_to_cents(after_promo * TIER_DISCOUNT.get(tier, 0.0))",
+            "_to_cents(subtotal * TIER_DISCOUNT.get(tier, 0.0))",
+        )
+        assert naive != reference, "the anchor moved; update this variant"
+        (work / "orders.py").write_text(naive, encoding="utf-8")
+
+        hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
+        score = self._fraction(work, hidden)
+        assert 0.0 < score < 1.0, (
+            f"the wrong composition scored {score} — an all-or-nothing hidden "
+            "test file gives up the resolution this case was built for"
+        )
+
+        # And it is a *wrong* answer, not a stylistic difference: the repo's own
+        # suite stays green, so the hidden tests are the only thing that knows.
+        assert check._run_pytest(work, "tests/")[0]
+
+    def test_an_untouched_project_scores_zero(self, tmp_path):
+        """No free points: every assertion in the file needs the new work."""
+        import shutil
+
+        work = tmp_path / "work"
+        shutil.copytree(_EXAMPLE / "project", work)
+        hidden = str(_EXAMPLE / "grader_tests" / f"test_{self._ID}.py")
+        assert self._fraction(work, hidden) == 0.0
 
 
 class TestRunPyResolvesTheSuite:
