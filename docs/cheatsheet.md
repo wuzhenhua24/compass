@@ -21,7 +21,7 @@ tags: []                          # 所有 case 的默认标签
 leak_markers: []                  # 答案泄漏标记，与 case 级合并
 
 agent:                            # 必填
-  adapter: image                  # 内置：image / coding / environment / claude_code；其余用 @register_adapter
+  adapter: image                  # 内置：image / coding / environment / claude_code / pi；其余用 @register_adapter
   endpoint: ""                    # 便捷字段，会并入 config
   workflow: ""                    # 同上
   config: {}                      # 传给 adapter；`compass test -m` 覆盖这里的 model 键
@@ -166,6 +166,25 @@ graders:
     config: {criteria: ["构图是否合理"]}
 ```
 
+**在真实仓库上比编程 Agent**（`claude_code` / `pi`：一次性 worktree + diff + 完整轨迹）
+
+```yaml
+agent:
+  adapter: pi                    # 或 claude_code
+  config:
+    repo: "./fixtures/svc"
+    model: "google/gemini-3.6-flash"   # pi 是 provider 无关的：模型就是 -m 那条轴
+    save_stream_to: "./streams"        # 存原始事件流，之后 compass import 免费重放
+```
+
+```bash
+compass test s.yaml -m google/gemini-2.5-flash -m google/gemini-3.6-flash
+compass test s.yaml --model-key thinking -m low -m high     # 换一条轴扫
+```
+
+配 `state_delta` 做完整性 gate（`forbid: [{kind: file, target: "tests/*"}]`）——
+不然一个改测试让测试变绿的 agent 会拿满分。
+
 **LLM 判官 + 受控词表标签**
 
 ```yaml
@@ -244,6 +263,7 @@ compass compare a.json b.json                # 配对比较：翻转 + 95% CI + 
 compass compare a.json b.json --on correctness  # 只比某个 grader 的分（gate 分不进 overall_score）
 compass compare a.json b.json --metric turns    # 比过程量：turns/cost_usd/tool_calls/calls_<tool>
 compass site build results.json -o site/     # 发布静态站（细节默认脱敏，轨迹需显式 --trace-dir）
+compass site compare a.json b.json -o site/   # 把配对比较也发布进站点（逐 grader + 过程指标）
 compass site serve results.json              # 本地实时看：每请求现算，跑到一半也能看
 compass trace traces/case.json --steps       # 看轨迹
 compass import session.jsonl                 # 导入 pi / OTLP / Claude / OpenAI Agents 轨迹
@@ -264,6 +284,6 @@ compass docs <topic>                         # 本文档体系
 | 改了 grader 后 `compare` 报 `regraded` 警告 | 两侧判分契约指纹不同，差异不能归因于 agent |
 | `expect: fail` 的 case「通过」了 | 负向测试：agent 被拦截或 grader 判否即为通过 |
 | sandbox 里跑带凭证的 agent，认证总是失败 | 密钥过滤器拦了 `ANTHROPIC_API_KEY`（前缀+子串双命中），三条注入路径都拦；用 `sandbox_config.env_allow` 显式放行，订阅制凭证还要 `preserve_home: true` |
-| `claude_code` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
-| `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 会记 delta，Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
+| `claude_code` / `pi` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
+| `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有编辑类工具会记 delta（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`，pi 的 `write`/`edit`），Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
 | `state_delta` 的 `target` glob 一条都匹配不上 | 用相对 session cwd 的路径（`src/*`），不是绝对路径——worktree 每次都是新的临时目录 |
