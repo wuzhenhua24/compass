@@ -265,6 +265,132 @@ class TestPublishDoc:
 # Slugs
 # ------------------------------------------------------------------
 
+class TestComparisons:
+    """Publishing a paired comparison beside the runs it compares."""
+
+    @staticmethod
+    def _results(tmp_path, name, scores):
+        """A results file whose cases score as given, one grader per case."""
+        cases = [
+            _case(
+                f"c{i}",
+                passed=score >= 0.5,
+                score=score,
+                evaluator_results=[
+                    {
+                        "name": "correctness",
+                        "label": "correctness",
+                        "score": score,
+                        "weight": 1.0,
+                        "weighted_score": score,
+                        "passed": score >= 0.5,
+                        "gate": True,
+                        "grader_scope": "outcome",
+                        "grader_type": "code",
+                        "metrics": {"cost_usd": 0.1 * (i + 1)},
+                    }
+                ],
+            )
+            for i, score in enumerate(scores)
+        ]
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(_payload(name, cases)), encoding="utf-8")
+        return path
+
+    def _doc(self, tmp_path, **kwargs):
+        from compass.report.site import collect_comparison
+
+        a = self._results(tmp_path, "baseline", [1.0, 1.0, 0.2])
+        b = self._results(tmp_path, "candidate", [1.0, 0.4, 0.9])
+        return collect_comparison(
+            a, b, name="A vs B", generated="2026-08-10T00:00:00+00:00", **kwargs
+        )
+
+    def test_it_compares_the_graders_both_runs_measured(self, tmp_path):
+        doc = self._doc(tmp_path)
+
+        assert doc["schema"] == "compass.comparison/1"
+        assert [s["on"] for s in doc["scoped"]] == ["correctness"]
+        assert doc["comparison"]["n_paired"] == 3
+
+    def test_gate_only_correctness_is_reachable_per_grader(self, tmp_path):
+        """The whole reason the page compares every grader: a gate never reaches
+        the case score, so the overall comparison cannot see correctness."""
+        doc = self._doc(tmp_path)
+        scoped = doc["scoped"][0]
+
+        assert scoped["mean_score_a"] == pytest.approx((1.0 + 1.0 + 0.2) / 3)
+        assert scoped["mean_score_b"] == pytest.approx((1.0 + 0.4 + 0.9) / 3)
+        assert [f["case_id"] for f in scoped["regressed"]] == ["c1"]
+        assert [f["case_id"] for f in scoped["improved"]] == ["c2"]
+
+    def test_both_sides_are_named_the_same_way_everywhere(self, tmp_path):
+        """Each sub-report labels itself from the path it loaded; the document
+        has to agree with itself about what to call a run."""
+        doc = self._doc(tmp_path, label_a="A side", label_b="B side")
+
+        for section in (doc["comparison"], *doc["scoped"], *doc["metrics"]):
+            assert section["label_a"] == "A side"
+            assert section["label_b"] == "B side"
+
+    def test_labels_default_to_the_filename_not_the_whole_path(self, tmp_path):
+        doc = self._doc(tmp_path)
+        assert doc["comparison"]["label_a"] == "baseline"
+        assert doc["comparison"]["label_b"] == "candidate"
+
+    def test_publishing_a_comparison_keeps_the_runs(self, tmp_path):
+        """The merge property, extended: two accumulating arrays in one file,
+        so each writer has to carry the other through."""
+        from compass.report.site import build_comparison, build_site
+
+        site = tmp_path / "site"
+        build_site(_doc(name="a"), site, slug="a")
+        build_comparison(self._doc(tmp_path), site, slug="a-vs-b")
+        build_site(_doc(name="b"), site, slug="b")
+
+        index = _index(site)
+        assert [r["slug"] for r in index["runs"]] == ["a", "b"]
+        assert [c["slug"] for c in index["comparisons"]] == ["a-vs-b"]
+        assert (site / "comparisons" / "a-vs-b" / "comparison.json").is_file()
+
+    def test_the_index_entry_carries_the_attribution_check(self, tmp_path):
+        from compass.report.site import build_comparison
+
+        site = tmp_path / "site"
+        result = build_comparison(self._doc(tmp_path), site, slug="a-vs-b")
+
+        assert result.entry["paired_cases"] == 3
+        assert result.entry["regraded"] == 0
+        assert "verdict" in result.entry
+
+    def test_a_regraded_case_is_counted_for_the_index(self, tmp_path):
+        """Different grading contracts mean the diff is not the agent's doing,
+        and the index has to say so without being opened."""
+        from compass.report.site import build_comparison, collect_comparison
+
+        a = self._results(tmp_path, "baseline", [1.0])
+        b = self._results(tmp_path, "candidate", [0.5])
+        for path, fingerprint in ((a, "fp-one"), (b, "fp-two")):
+            payload = json.loads(path.read_text())
+            payload["results"][0]["case_results"][0]["grader_fingerprint"] = fingerprint
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        doc = collect_comparison(a, b, name="A vs B")
+        result = build_comparison(doc, tmp_path / "site", slug="a-vs-b")
+
+        assert doc["comparison"]["regraded"] == ["c0"]
+        assert result.entry["regraded"] == 1
+
+    def test_a_slug_cannot_write_outside_the_site(self, tmp_path):
+        from compass.report.site import build_comparison
+
+        site = tmp_path / "site"
+        result = build_comparison(self._doc(tmp_path), site, slug="../escape")
+
+        assert result.comparison_dir.is_relative_to((site / "comparisons").resolve())
+        assert not (tmp_path / "escape").exists()
+
+
 class TestSlugify:
     def test_normalizes_names(self):
         assert slugify("Image Evals / nightly") == "image-evals-nightly"
@@ -508,6 +634,60 @@ class TestViewer:
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
+
+class TestSiteCompareCommand:
+    def _pair(self, tmp_path):
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        a.write_text(json.dumps(_payload(cases=[_case("c1"), _case("c2")])))
+        b.write_text(
+            json.dumps(_payload(cases=[_case("c1"), _case("c2", passed=False, score=0.1)]))
+        )
+        return a, b
+
+    def test_publishes_a_comparison(self, tmp_path):
+        a, b = self._pair(tmp_path)
+        site = tmp_path / "site"
+
+        out = CliRunner().invoke(cli, ["site", "compare", str(a), str(b), "-o", str(site)])
+
+        assert out.exit_code == 0, out.output
+        assert _index(site)["comparisons"][0]["slug"] == "a-vs-b"
+        assert (site / "comparisons" / "a-vs-b" / "comparison.json").is_file()
+
+    def test_labels_default_to_the_filenames(self, tmp_path):
+        a, b = self._pair(tmp_path)
+        site = tmp_path / "site"
+
+        CliRunner().invoke(cli, ["site", "compare", str(a), str(b), "-o", str(site)])
+
+        entry = _index(site)["comparisons"][0]
+        assert (entry["label_a"], entry["label_b"]) == ("a", "b")
+
+    def test_runs_published_first_are_left_alone(self, tmp_path):
+        a, b = self._pair(tmp_path)
+        site = tmp_path / "site"
+        CliRunner().invoke(cli, ["site", "build", str(a), "-o", str(site), "--slug", "base"])
+
+        CliRunner().invoke(cli, ["site", "compare", str(a), str(b), "-o", str(site)])
+
+        index = _index(site)
+        assert [r["slug"] for r in index["runs"]] == ["base"]
+        assert len(index["comparisons"]) == 1
+
+    def test_two_runs_sharing_no_case_ids_is_an_error(self, tmp_path):
+        """An empty comparison is not a null result — it means the two runs
+        were never comparable, and saying so beats publishing a blank page."""
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        a.write_text(json.dumps(_payload(cases=[_case("only-in-a")])))
+        b.write_text(json.dumps(_payload(cases=[_case("only-in-b")])))
+
+        out = CliRunner().invoke(
+            cli, ["site", "compare", str(a), str(b), "-o", str(tmp_path / "site")]
+        )
+
+        assert out.exit_code == 1
+        assert "No cases paired" in out.output
+
 
 class TestSiteBuildCommand:
     def _write_results(self, tmp_path, name="results", cases=None):

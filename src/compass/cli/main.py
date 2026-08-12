@@ -1921,6 +1921,118 @@ def site_build(
     console.print(f"[dim]Preview with:[/dim] python -m http.server -d {last.site_dir}")
 
 
+@site.command("compare")
+@click.argument("results_a", type=click.Path(exists=True))
+@click.argument("results_b", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), default="site", show_default=True,
+              help="Site directory; merged into if it already exists")
+@click.option("--slug", help="Name to index this comparison under (default: from the filenames)")
+@click.option("--name", help="Display name for the comparison (default: the slug)")
+@click.option("--label-a", help="What to call the baseline run (default: its filename)")
+@click.option("--label-b", help="What to call the candidate run (default: its filename)")
+@click.option("--on", "on", multiple=True,
+              help="Grader to scope to, repeatable (default: every grader both runs measured)")
+@click.option("--metric", "metrics", multiple=True,
+              help="Process metric to compare, repeatable (default: cost_usd, turns, tool_calls)")
+@click.option("--missing-as-zero", is_flag=True,
+              help="Treat an absent metric as a measured 0 — see `compass compare`")
+def site_compare(
+    results_a: str,
+    results_b: str,
+    output: str,
+    slug: str | None,
+    name: str | None,
+    label_a: str | None,
+    label_b: str | None,
+    on: tuple[str, ...],
+    metrics: tuple[str, ...],
+    missing_as_zero: bool,
+) -> None:
+    """Publish a paired comparison of two runs into a static site.
+
+    RESULTS_A is the baseline, RESULTS_B the candidate — the same inputs
+    `compass compare` takes, and the same statistics. What the page adds is all
+    of them at once: the overall score, then *every* grader both runs measured,
+    then the process metrics.
+
+    That per-grader table is not a nicety. Gate scores are excluded from the
+    case score by design, so when correctness is decided by gates the overall
+    comparison is measuring process cost and the correctness signal never
+    reaches it.
+
+    \b
+      compass site build a.json -o site/ --slug baseline
+      compass site build b.json -o site/ --slug candidate
+      compass site compare a.json b.json -o site/ --slug baseline-vs-candidate
+      python -m http.server -d site/
+
+    Runs and comparisons accumulate in the same directory: publishing either
+    one leaves the other alone.
+
+    A comparison is only meaningful when both runs were graded the same way.
+    Cases whose grading contract differs are counted and shown as *regraded* —
+    their difference is not attributable to the agent.
+    """
+    from compass.report.site import build_comparison, collect_comparison, slugify
+
+    path_a, path_b = Path(results_a), Path(results_b)
+    comparison_slug = slugify(slug or f"{path_a.stem}-vs-{path_b.stem}")
+
+    try:
+        doc = collect_comparison(
+            path_a,
+            path_b,
+            name=name or slug or comparison_slug,
+            label_a=label_a or path_a.stem,
+            label_b=label_b or path_b.stem,
+            on=list(on) or None,
+            metrics=list(metrics) or None,
+            missing_as_zero=missing_as_zero,
+        )
+    except Exception as e:  # noqa: BLE001 — surfaced, not swallowed
+        console.print(f"[red]Could not compare: {e}[/red]")
+        sys.exit(1)
+
+    body = doc["comparison"]
+    if not body.get("n_paired"):
+        console.print(
+            "[red]No cases paired between the two runs[/red] — they share no case ids."
+        )
+        sys.exit(1)
+
+    result = build_comparison(doc, output, slug=comparison_slug)
+
+    table = Table(title=f"Published to {result.site_dir}")
+    table.add_column("Comparison", style="bold cyan")
+    table.add_column("Paired", justify="right")
+    table.add_column("Graders", justify="right")
+    table.add_column("Metrics", justify="right")
+    table.add_column("Flips", justify="right")
+    table.add_row(
+        result.slug,
+        str(body["n_paired"]),
+        str(len(doc["scoped"])),
+        str(len(doc["metrics"])),
+        f"+{len(body['improved'])}/-{len(body['regressed'])}",
+    )
+    console.print(table)
+    console.print(f"[dim]{body['verdict']}[/dim]")
+
+    if body.get("regraded"):
+        console.print(
+            f"[yellow]⚠ {len(body['regraded'])} case(s) were graded by a different "
+            f"grader spec in B than in A — their diff is not attributable to the "
+            f"agent:[/yellow] {', '.join(body['regraded'][:10])}"
+        )
+    for skip in doc["skipped"]:
+        console.print(
+            f"[yellow]Skipped {skip.get('on') or skip.get('metric')}:[/yellow] {skip['reason']}"
+        )
+
+    console.print(f"[green]{result.comparisons} comparison(s) in this site[/green]")
+    console.print(f"[dim]Preview with:[/dim] python -m http.server -d {result.site_dir}")
+
+
 @site.command("serve")
 @click.argument("sources", type=click.Path(exists=True), nargs=-1, required=True)
 @click.option("--port", "-p", default=7001, show_default=True, help="Port to listen on")

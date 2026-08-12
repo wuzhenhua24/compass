@@ -429,7 +429,38 @@ site/
 
 **趋势线只留摘要**：同一个 slug 重复 build 时，上一次的汇总数字（pass rate / 平均分 / 用例数 / 判分契约 id）进入 `history`，默认留 20 次（`--history`）。留的是画一条趋势线所需的数，不是归档——case 行和产物只有最新一次在站上。运行页据此画趋势图，并在判分契约变化处断开（见下文"CI 配方"）。
 
-**跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用 `compass compare` 对同一批 case 做配对检验。
+**跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用下面的 `compass site compare` 对同一批 case 做配对检验。
+
+### 把配对比较也发布出去（`compass site compare`）
+
+`compass compare` 一次只回答一个问题（总分、或某个 grader、或某个指标），结果打在终端里。页面有地方一次放下全部，而这正是读者要的——**B 做得更对吗，代价是多少**：
+
+```bash
+compass site build a.json -o site/ --slug baseline
+compass site build b.json -o site/ --slug candidate
+compass site compare a.json b.json -o site/ --slug baseline-vs-candidate \
+    --label-a "Baseline" --label-b "Candidate"
+```
+
+```
+site/
+  index.json                              runs 与 comparisons 两个数组
+  comparisons/<slug>/comparison.json      该次比较的文档
+```
+
+同一份文档里跑三遍同样的统计：
+
+| 层 | 比什么 | 为什么必须单列 |
+|---|---|---|
+| 总体 | case 的 `overall_score` | 一眼看整体挪了没有 |
+| **逐 grader** | 两侧都测过的每一个 grader（`--on` 可指定） | **gate 分按设计不进 `overall_score`**——正确性由 gate 判定时，总体比较其实在比过程开销，正确性信号根本到不了那里 |
+| 逐过程指标 | `cost_usd` / `turns` / `tool_calls`（`--metric` 可改） | 指标没有通过/失败，而且多数指标**负值才是更好的那一边** |
+
+grader 清单默认自动发现，取两次运行都测过的那些；某条 case 里一个名字对上两个 grader 实例（没有 `label` 区分）时，那一项被跳过并写明原因——猜一个会产出一份看起来没问题、却回答了没人问过的问题的比较。
+
+**合并语义和 runs 一样**：runs 和 comparisons 是同一份清单里的两个数组，任一边发布都会把另一边原样读回来写下去。少了这一步，发布一次运行会顺手删光旁边所有的比较。
+
+**页面顶上先说能不能归因**：两侧判分契约不同的 case 数（`regraded`）在总览列表里就能看到，不用点进去。非 0 就意味着差异不是 agent 造成的。
 
 ### 实时查看（`compass site serve`）
 

@@ -468,8 +468,8 @@ def _snapshot(entry: Mapping[str, Any]) -> dict[str, Any]:
     return {key: entry.get(key) for key in _SNAPSHOT_FIELDS}
 
 
-def load_index(site_dir: Path) -> list[dict[str, Any]]:
-    """Existing manifest entries, or none.
+def _index_array(site_dir: Path, key: str) -> list[dict[str, Any]]:
+    """One array out of the manifest, or none.
 
     A corrupt manifest is treated as absent rather than fatal: refusing to
     build because some other writer left half a file behind would make the
@@ -482,8 +482,277 @@ def load_index(site_dir: Path) -> list[dict[str, Any]]:
         data = json.loads(index_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
-    entries = data.get("runs") if isinstance(data, Mapping) else None
+    entries = data.get(key) if isinstance(data, Mapping) else None
     return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def load_index(site_dir: Path) -> list[dict[str, Any]]:
+    """Existing run entries, or none."""
+    return _index_array(Path(site_dir), "runs")
+
+
+def load_comparisons(site_dir: Path) -> list[dict[str, Any]]:
+    """Existing comparison entries, or none."""
+    return _index_array(Path(site_dir), "comparisons")
+
+
+def _write_index(
+    site_dir: Path,
+    *,
+    runs: list[dict[str, Any]] | None = None,
+    comparisons: list[dict[str, Any]] | None = None,
+    live: bool = False,
+) -> None:
+    """Rewrite the manifest, carrying through the array this build did not touch.
+
+    The site's whole basis is that a build writes its own slug and leaves
+    everything else alone. Runs and comparisons are two accumulating arrays in
+    one file, so each writer has to read the other back or publishing a run
+    would silently delete every comparison beside it.
+    """
+    site_dir = Path(site_dir)
+    payload = {
+        "schema": SCHEMA,
+        "generated": now_iso(),
+        "live": live,
+        "runs": load_index(site_dir) if runs is None else runs,
+        "comparisons": load_comparisons(site_dir) if comparisons is None else comparisons,
+    }
+    (site_dir / "index.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comparisons
+# ---------------------------------------------------------------------------
+
+COMPARISON_SCHEMA = "compass.comparison/1"
+
+#: Process metrics compared by default. Every one of them is emitted by a
+#: built-in transcript grader, so a suite that runs the usual process guards
+#: gets them without naming anything.
+DEFAULT_COMPARE_METRICS = ("cost_usd", "turns", "tool_calls")
+
+
+def _measured_grader_keys(path: str | Path) -> list[str]:
+    """Every grader key a results path measured, in first-seen order.
+
+    Reads ``grader_summary`` (the across-trials view), then the case breakdown,
+    then the grader records themselves — the same ladder
+    ``compare.select_grader_score`` walks, so auto-discovery cannot offer a key
+    that selection would then fail to find, nor miss one it could have used.
+    """
+    from compass.report.analyzer import iter_case_dicts
+
+    path = Path(path)
+    files = [path] if path.is_file() else sorted(path.glob("**/*.json"))
+    keys: dict[str, None] = {}
+    for file in files:
+        try:
+            payload = json.loads(file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for case in iter_case_dicts(payload):
+            found = (
+                list(case.get("grader_summary") or {})
+                or list(case.get("breakdown") or {})
+                or _grader_keys(case.get("evaluator_results") or [])
+            )
+            for key in found:
+                keys.setdefault(str(key), None)
+    return list(keys)
+
+
+def collect_comparison(
+    path_a: str | Path,
+    path_b: str | Path,
+    *,
+    name: str = "",
+    label_a: str = "",
+    label_b: str = "",
+    on: Sequence[str] | None = None,
+    metrics: Sequence[str] | None = None,
+    missing_as_zero: bool = False,
+    generated: str | None = None,
+) -> dict[str, Any]:
+    """A paired comparison of two runs, as a publishable document.
+
+    ``compass compare`` answers one question per invocation — the overall
+    score, or one grader, or one metric. A page has room for all of them at
+    once, which is what a reader actually needs: *did B do the job better, and
+    what did it cost.* So this runs the same comparison three ways:
+
+    - **overall**, on the case score;
+    - **per grader**, for every grader both runs measured (``on``), which is
+      the only way correctness shows up at all when it is decided by gates —
+      gate scores are excluded from ``overall_score`` by design;
+    - **per process metric** (``metrics``), where lower is usually better and
+      there is no pass/fail at all.
+
+    Graders that are ambiguous in a case (two instances, no distinguishing
+    ``label``) are skipped with their reason recorded rather than guessed at.
+
+    Args:
+        path_a: Baseline results file or directory.
+        path_b: Candidate results file or directory.
+        name: Display name for the comparison.
+        label_a: What to call the baseline on the page. Defaults to the file's
+            stem — ``compare_paths`` labels a side with its whole path, which is
+            a machine's answer to "which run is this" and unreadable as a
+            column heading.
+        label_b: Same, for the candidate.
+        on: Grader keys to scope to. Defaults to every grader both runs share.
+        metrics: Process metrics to compare. Defaults to
+            :data:`DEFAULT_COMPARE_METRICS`.
+        missing_as_zero: Forwarded to the metric comparison — see
+            ``compass compare --missing-as-zero``; it is off for a reason.
+        generated: Timestamp override, for reproducible output in tests.
+    """
+    from compass.report.compare import (
+        AmbiguousGraderError,
+        compare_metric,
+        compare_paths,
+    )
+
+    overall = compare_paths(path_a, path_b)
+    if on is None:
+        shared = set(_measured_grader_keys(path_a)) & set(
+            _measured_grader_keys(path_b)
+        )
+        on = [key for key in _measured_grader_keys(path_a) if key in shared]
+
+    scoped: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for key in on:
+        try:
+            report = compare_paths(path_a, path_b, on=key)
+        except AmbiguousGraderError as exc:
+            skipped.append({"on": key, "reason": str(exc)})
+            continue
+        row = report.to_dict()
+        row["on"] = key
+        scoped.append(row)
+
+    measured: list[dict[str, Any]] = []
+    for metric in DEFAULT_COMPARE_METRICS if metrics is None else metrics:
+        try:
+            report_m = compare_metric(path_a, path_b, metric, missing_as_zero)
+        except (AmbiguousGraderError, ValueError) as exc:
+            skipped.append({"metric": metric, "reason": str(exc)})
+            continue
+        if report_m.n_paired:
+            measured.append(report_m.to_dict())
+
+    doc = {
+        "schema": COMPARISON_SCHEMA,
+        "generated": generated or now_iso(),
+        "comparison": {"name": name, **overall.to_dict()},
+        "scoped": scoped,
+        "metrics": measured,
+        "skipped": skipped,
+    }
+    return _relabel(
+        doc,
+        label_a or Path(path_a).stem,
+        label_b or Path(path_b).stem,
+    )
+
+
+def _relabel(doc: dict[str, Any], label_a: str, label_b: str) -> dict[str, Any]:
+    """Give every section of the document the same two names for the two runs.
+
+    Each sub-report labels itself from the path it loaded, so without this the
+    overall block, the per-grader rows and the metric rows could disagree about
+    what to call the same run.
+    """
+    for section in (doc["comparison"], *doc["scoped"], *doc["metrics"]):
+        section["label_a"] = label_a
+        section["label_b"] = label_b
+    return doc
+
+
+def comparison_entry(slug: str, doc: Mapping[str, Any]) -> dict[str, Any]:
+    """One comparison's row in the manifest — the index renders only these."""
+    body = doc["comparison"]
+    score = body.get("score_stats") or {}
+    return {
+        "slug": slug,
+        "name": body.get("name") or slug,
+        "generated": doc["generated"],
+        "label_a": body.get("label_a", ""),
+        "label_b": body.get("label_b", ""),
+        "pass_rate_a": body.get("pass_rate_a", 0.0),
+        "pass_rate_b": body.get("pass_rate_b", 0.0),
+        "improved": len(body.get("improved") or []),
+        "regressed": len(body.get("regressed") or []),
+        "paired_cases": (body.get("both_pass", 0) + body.get("both_fail", 0)
+                         + len(body.get("improved") or [])
+                         + len(body.get("regressed") or [])),
+        "score_diff": score.get("mean_diff"),
+        "significant": bool(score.get("significant")),
+        # Non-empty means the two sides were graded under different contracts,
+        # so the difference is not attributable to the agent. The index says so
+        # rather than making a reader open the page to find out.
+        "regraded": len(body.get("regraded") or []),
+        "verdict": body.get("verdict", ""),
+    }
+
+
+@dataclass
+class ComparisonBuildResult:
+    """What one ``build_comparison`` call did."""
+
+    slug: str
+    site_dir: Path
+    comparison_dir: Path
+    entry: dict[str, Any]
+    #: Every comparison now in the manifest, this one included.
+    comparisons: int
+
+
+def build_comparison(
+    doc: Mapping[str, Any],
+    site_dir: str | Path,
+    *,
+    slug: str,
+) -> ComparisonBuildResult:
+    """Add or refresh one comparison in a static site directory.
+
+    Same merge rule as :func:`build_site`: this slug is written, every other
+    entry — runs included — is carried through untouched.
+    """
+    site_dir = Path(site_dir)
+    slug = slugify(slug)
+
+    target = (site_dir / "comparisons" / slug).resolve()
+    root = (site_dir / "comparisons").resolve()
+    if not target.is_relative_to(root):
+        raise ValueError(f"unsafe slug: {slug!r}")
+
+    site_dir.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    (target / "comparison.json").write_text(
+        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+    )
+
+    entry = comparison_entry(slug, doc)
+    entries = [e for e in load_comparisons(site_dir) if e.get("slug") != slug]
+    entries.append(entry)
+    entries.sort(key=lambda e: str(e.get("slug", "")))
+
+    _write_index(site_dir, comparisons=entries)
+    (site_dir / "index.html").write_text(app_html(), encoding="utf-8")
+
+    return ComparisonBuildResult(
+        slug=slug,
+        site_dir=site_dir,
+        comparison_dir=target,
+        entry=entry,
+        comparisons=len(entries),
+    )
 
 
 @dataclass
@@ -580,13 +849,7 @@ def build_site(
     entries.append(entry)
     entries.sort(key=lambda e: str(e.get("slug", "")))
 
-    (site_dir / "index.json").write_text(
-        json.dumps(
-            {"schema": SCHEMA, "generated": now_iso(), "live": False, "runs": entries},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    _write_index(site_dir, runs=entries)
     (site_dir / "index.html").write_text(app_html(), encoding="utf-8")
 
     return BuildResult(
@@ -697,7 +960,16 @@ def make_server(
                 entry = index_entry(slug, doc)
                 entry["traces"] = len(doc.get("traces") or [])
                 entries.append(entry)
-            return {"schema": SCHEMA, "generated": now_iso(), "live": True, "runs": entries}
+            # No comparisons: serve recomputes runs from results files on every
+            # request, and a comparison is a published artefact of two finished
+            # ones. The key is present so the viewer sees one manifest shape.
+            return {
+                "schema": SCHEMA,
+                "generated": now_iso(),
+                "live": True,
+                "runs": entries,
+                "comparisons": [],
+            }
 
         def _serve_run(self, rest: str) -> None:
             slug, _, tail = rest.partition("/")
