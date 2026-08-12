@@ -232,12 +232,85 @@ def contract_id(
     return sha256("\n".join(parts).encode()).hexdigest()[:12]
 
 
+def _grader_keys(graders: Iterable[Mapping[str, Any]]) -> list[str]:
+    """The key each grader record is known by, matching ``CaseResult.breakdown``.
+
+    A case may legitimately run one grader twice — hidden acceptance tests and
+    the repository's own suite are both ``integration_test`` — so unlabelled
+    repeats take a ``#2``, ``#3`` suffix in declaration order. Collapsing them
+    to a bare name is data loss, not a display quirk.
+    """
+    keys: list[str] = []
+    seen: dict[str, int] = {}
+    for grader in graders:
+        key = str(grader.get("label") or grader.get("name") or "")
+        if not grader.get("label"):
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                key = f"{key}#{seen[key]}"
+        keys.append(key)
+    return keys
+
+
+def _trial_averaged_graders(
+    record: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, float]] | None:
+    """``evaluator_results`` re-scored with each grader's mean across trials.
+
+    ``evaluator_results`` deliberately holds *one* trial's detail (a merged
+    metadata payload would be meaningless). That makes it the wrong thing to
+    publish a number from on a multi-trial case: it samples one attempt while
+    ``overall_score`` beside it is the mean, so the two disagree. Observed on a
+    3-trial run whose agent edited ``tests/`` on one attempt — the published
+    ``state_delta`` read 1.00, a clean integrity gate, while ``grader_summary``
+    in the same document read 0.667.
+
+    ``grader_summary`` is keyed exactly like ``CaseResult.breakdown``, suffix
+    included, so the two can never disagree about what a name refers to.
+
+    Returns None when there is nothing to correct (a single trial, or a result
+    written before ``grader_summary`` existed).
+    """
+    summary = record.get("grader_summary") or {}
+    if not summary or int(record.get("total_trials") or 1) <= 1:
+        return None
+
+    graders = list(record.get("evaluator_results") or [])
+    rows: list[dict[str, Any]] = []
+    breakdown: dict[str, float] = {}
+    for key, grader in zip(_grader_keys(graders), graders, strict=True):
+        row = dict(grader)
+        aggregate = summary.get(key)
+        if isinstance(aggregate, Mapping):
+            mean = aggregate.get("score_mean")
+            row["score"] = mean
+            row["scored"] = mean is not None
+            weight = float(row.get("weight") or 1.0)
+            row["weighted_score"] = None if mean is None else float(mean) * weight
+            # Both rules match what the rest of the system already does with
+            # trials: the number is the mean (like ``overall_score``) and the
+            # verdict is the majority (like ``TrialResult.overall_passed``).
+            fraction = aggregate.get("pass_fraction")
+            if fraction is not None:
+                row["passed"] = float(fraction) >= 0.5
+                row["pass_fraction"] = fraction
+            row["trials"] = aggregate.get("trials")
+        rows.append(row)
+        if _measured(row) and row.get("weighted_score") is not None:
+            breakdown[key] = float(row["weighted_score"])
+    return rows, breakdown
+
+
 def _case_row(record: Mapping[str, Any], scenario: str) -> dict[str, Any]:
     row = dict(record)
     row.pop("grade_results", None)  # verbatim alias of evaluator_results
     row["scenario"] = scenario
     row.setdefault("case_id", row.get("task_id", ""))
     row.setdefault("task_id", row["case_id"])
+
+    averaged = _trial_averaged_graders(row)
+    if averaged is not None:
+        row["evaluator_results"], row["breakdown"] = averaged
     row.update(scope_scores(row.get("evaluator_results") or []))
     return row
 

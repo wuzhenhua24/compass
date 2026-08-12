@@ -7,6 +7,7 @@ from separate repositories into one directory without a server.
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from compass.cli.main import cli
@@ -119,6 +120,116 @@ class TestCollectRunPayload:
 # ------------------------------------------------------------------
 # Redaction
 # ------------------------------------------------------------------
+
+class TestMultiTrialCasesPublishTheMean:
+    """A published grader number must be the mean over trials, not one sample.
+
+    ``evaluator_results`` holds one trial's detail by design. Publishing a score
+    straight from it put a *sampled* number next to ``overall_score``, which is
+    the mean — so the two disagreed. Seen on a real 3-trial run whose agent
+    edited ``tests/`` on one attempt: the site published ``state_delta 1.00``,
+    a clean integrity gate, while ``grader_summary`` in the same document said
+    0.667.
+    """
+
+    @staticmethod
+    def _multi_trial_case():
+        return _case(
+            "c1",
+            score=0.9,
+            total_trials=3,
+            passed_trials=2,
+            evaluator_results=[
+                {
+                    "name": "state_delta",
+                    # The sampled trial happened to be a clean one.
+                    "score": 1.0,
+                    "weight": 1.0,
+                    "weighted_score": 1.0,
+                    "passed": True,
+                    "gate": True,
+                    "grader_scope": "transcript",
+                    "grader_type": "code",
+                },
+                {
+                    "name": "integration_test",
+                    "score": 1.0,
+                    "weight": 1.0,
+                    "weighted_score": 1.0,
+                    "passed": True,
+                    "grader_scope": "outcome",
+                    "grader_type": "code",
+                },
+                {
+                    "name": "integration_test",
+                    "score": 1.0,
+                    "weight": 1.0,
+                    "weighted_score": 1.0,
+                    "passed": True,
+                    "grader_scope": "outcome",
+                    "grader_type": "code",
+                },
+            ],
+            grader_summary={
+                "state_delta": {
+                    "score_mean": 2 / 3,
+                    "pass_fraction": 2 / 3,
+                    "trials": 3,
+                    "metrics": {},
+                },
+                "integration_test": {
+                    "score_mean": 1.0,
+                    "pass_fraction": 1.0,
+                    "trials": 3,
+                    "metrics": {},
+                },
+                "integration_test#2": {
+                    "score_mean": 0.5,
+                    "pass_fraction": 0.0,
+                    "trials": 3,
+                    "metrics": {},
+                },
+            },
+        )
+
+    def _case_row(self):
+        doc = _doc(cases=[self._multi_trial_case()])
+        return doc["scenarios"][0]["cases"][0]
+
+    def test_breakdown_reports_the_trial_mean(self):
+        row = self._case_row()
+        assert row["breakdown"]["state_delta"] == pytest.approx(2 / 3)
+
+    def test_the_grader_row_carries_the_mean_and_its_denominator(self):
+        row = self._case_row()
+        delta = next(
+            g for g in row["evaluator_results"] if g["name"] == "state_delta"
+        )
+        assert delta["score"] == pytest.approx(2 / 3)
+        assert delta["pass_fraction"] == pytest.approx(2 / 3)
+        assert delta["trials"] == 3
+
+    def test_unlabelled_repeats_keep_their_positional_key(self):
+        """Two `integration_test` graders are two signals, not one."""
+        row = self._case_row()
+        assert row["breakdown"]["integration_test"] == pytest.approx(1.0)
+        assert row["breakdown"]["integration_test#2"] == pytest.approx(0.5)
+
+    def test_scope_scores_follow_the_averaged_numbers(self):
+        row = self._case_row()
+        assert row["outcome_score"] == pytest.approx(0.75)  # (1.0 + 0.5) / 2
+        assert row["transcript_score"] == pytest.approx(2 / 3)
+
+    def test_a_single_trial_case_is_passed_through_untouched(self):
+        """No grader_summary and no trials to average — nothing to correct, and
+        nothing invented either: the row keeps exactly the fields it arrived
+        with."""
+        case = _case("c1", score=0.4, breakdown={"semantic_match": 0.4})
+        row = _doc(cases=[case])["scenarios"][0]["cases"][0]
+
+        assert row["breakdown"] == {"semantic_match": 0.4}
+        assert row["evaluator_results"] == case["evaluator_results"]
+
 
 class TestPublishDoc:
     def test_grader_metadata_is_dropped_by_default(self):
