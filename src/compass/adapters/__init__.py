@@ -6,6 +6,7 @@ from compass.adapters import (
     coding,  # noqa: F401
     environment,  # noqa: F401
     image,  # noqa: F401
+    pi,  # noqa: F401
 )
 from compass.adapters.base import Adapter, AgentInput, AgentOutput
 from compass.adapters.llm import (

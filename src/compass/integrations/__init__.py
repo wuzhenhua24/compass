@@ -24,8 +24,10 @@ from compass.integrations.otlp import (
 )
 from compass.integrations.pi_sessions import (
     PiSessionError,
+    PiStreamReconstructor,
     import_pi_session,
     import_pi_sessions,
+    import_pi_stream_json,
     load_pi_session,
 )
 
@@ -38,8 +40,10 @@ __all__ = [
     "WireReconstructor",
     "import_claude_stream_json",
     "PiSessionError",
+    "PiStreamReconstructor",
     "import_pi_session",
     "import_pi_sessions",
+    "import_pi_stream_json",
     "load_pi_session",
     "OTLPImportError",
     "import_otlp_file",

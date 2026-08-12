@@ -45,18 +45,20 @@ result = await grader.grade(GradeContext(transcript=transcript, outcome=transcri
 - **成本协同**：SDK span 只带 token、不带美元 → 复用 Compass 的可配置价格表补算。
 - 其余框架（LangChain / LlamaIndex / CrewAI 等）后续通过离线 OTLP/OpenInference 导入或各自的 JSONL session 导入接入。
 
-**第二个集成：pi（`@earendil-works/pi-*`）JSONL session 导入**（`compass.integrations.pi_sessions`）
+**第二个集成：pi（`@earendil-works/pi-*`）轨迹导入**（`compass.integrations.pi_sessions`）
 
-与 OpenAI 的实时 processor 不同，pi 把一次运行**落盘为 JSONL session 树**（首行 session 头，之后每行一个 `SessionTreeEntry`，靠 `parentId` 连成树/分支）。这是一个**离线导入器**——读文件、重建 Transcript：
+pi 把一次运行**落盘为 JSONL session 树**（首行 session 头，之后每行一个 `SessionTreeEntry`，靠 `parentId` 连成树/分支）。读文件、重建 Transcript：
 
 ```python
 from compass.integrations import import_pi_session, import_pi_sessions
 
-t = import_pi_session("~/.pi/sessions/2026-01-01-weather.jsonl")
+t = import_pi_session("~/.pi/agent/sessions/<项目>/2026-01-01-weather.jsonl")
 # 或批量导入一个目录
-transcripts = import_pi_sessions("~/.pi/sessions/")
+transcripts = import_pi_sessions("~/.pi/agent/sessions/<项目>/")
 # t.tool_calls / t.reasoning_steps / t.outcome 均已就绪，可直接评分
 ```
+
+同一套映射**也在线上跑**：pi 用 `--mode json` 逐条吐出的正是它后来落盘的那些 message 对象，所以 `PiStreamReconstructor` 边流边喂就够了，不需要第二个解析器（下面的 pi Adapter 就靠它）。两条路重建出的 Transcript 一模一样——Compass 自己驱动的运行和用户手工录的 session，评起来没有区别。`import_pi_session` 会**嗅探**给它的是哪一种（两者首行都是 session 头，靠后续行有没有 `id` 区分），所以 adapter 用 `save_stream_to` 存下来的原始流也能直接 `compass import`。
 
 **映射关系**
 
@@ -65,6 +67,7 @@ transcripts = import_pi_sessions("~/.pi/sessions/")
 | session 头 `{id, cwd, timestamp}` | `trial_id` / `metadata` / 时间轴 |
 | assistant 消息的 `usage` | 一个 `llm.generation` `ToolCall`（`tokens` + **原生 `cost`**；pi 没记成本时才用可配置价格表补算）|
 | assistant 的 `toolCall` block | `ToolCall`（按 `toolCallId` 匹配对应的 `toolResult` 回填 output/status/duration）|
+| **成功**的 `write` / `edit` | 该调用 `state_delta` 上的一条 `StateChange` |
 | assistant 的 `thinking` block | 一条 reasoning step |
 | `user` 消息 | `input_prompt`（首条）/ 后续 reasoning |
 | `compaction` / `branch_summary` / `model_change` / `custom` … | `metadata` / reasoning |
@@ -72,6 +75,7 @@ transcripts = import_pi_sessions("~/.pi/sessions/")
 **设计要点**
 - **只取活跃分支**：默认从 session 当前 leaf 回溯到 root，被放弃的 fork 不进入评估；线性会话等价于文件顺序，异常时回退文件顺序（`active_branch_only=False` 可取全量）。
 - **成本优先用原生**：pi 的 `Usage` 自带美元成本，直接采用；缺失时才用 `calculate_cost` 补算。
+- **state delta 三条规矩和 Claude 那边一致**：只记**成功**的编辑（delta 在 result 到达时才记，被拒绝的编辑什么都没改）、target **相对 session cwd**、**Bash 造成的变更不记**。多一条 pi 特有的：**一个文件只有一种写法**——模型 `pricing.py` 和 `./pricing.py` 换着写（一次两模型的运行里两种都出现了），不归一化的话 `target: "pricing.py"` 会漏掉另一半，而这是一道完整性 gate，漏报最要命。
 - **鲁棒**：坏行跳过、缺 header 抛 `PiSessionError`、孤儿 `toolResult` 也保留。
 - **零依赖**：纯 JSON 解析，不 import 任何 pi 包。
 
@@ -183,7 +187,7 @@ compass import run.stream.jsonl -f claude -o t.json   # Claude stream-json + 存
 compass import phoenix_export.json --json       # 打印重建后的 transcript JSON
 ```
 
-格式自动识别（各用其首行不变量）：pi 会话首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；其余 JSON 按 OTLP/OpenInference 处理。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
+格式自动识别（各用其首行不变量）：pi 首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；其余 JSON 按 OTLP/OpenInference 处理。pi 的两种形态（session 树 / `--mode json` 事件流）首行相同，再看后续行有没有 `id` 区分——所以 adapter 存下的原始流也能直接 `compass import`。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
 
 **流式重建：`WireReconstructor`**
 
@@ -312,6 +316,54 @@ sandbox_config:
 ```
 
 `env_allow` 刻意做得很窄：只吃**变量名**（大小写不敏感、无 glob），放行一个凭证不会顺带放行一类。每个放行的名字都会在 setup 时打 WARNING 日志。代价要认：被测 agent 以及它跑起来的任何代码都能读到这个凭证——请用一把限定权限的 key，不要用生产 key。
+
+## pi Adapter（同一批需求，横跨 provider 比模型）
+
+`pi` adapter 和 `claude_code` 是同一件事换了个可执行文件：把 agent 放进一次性 checkout、给一条需求、收回 **diff** 和**完整轨迹**。它值得单独存在的理由是它打开的那条轴——**pi 是 provider 无关的，模型就是一个 flag**：
+
+```bash
+compass test coding.yaml -m google/gemini-2.5-flash -m google/gemini-3.6-flash
+compass test coding.yaml --model-key thinking -m low -m high      # thinking 是另一条轴
+```
+
+一个场景、一条 prompt、一个仓库、两个模型，排行榜同时回答两半问题：谁做得**对**（OUTCOME grader 看 diff），谁做得**便宜且可预期**（TRANSCRIPT grader 看成本 / 轮次 / 工具 / 循环）。之后 `compass compare` 告诉你差距扛不扛得住噪声。
+
+轨迹来自 `--mode json`，边流边过 `PiStreamReconstructor`（见上文）。只映射 `message_end`——一条消息以 start 帧 + 一串 delta + end 帧的形式流出来，只有 end 帧内容完整且带这一轮的 `usage`，映射其它帧会把每一轮都数两遍。
+
+**共用的那半在 `CliAgentAdapter` 上**（`compass.adapters.cli_agent`）：worktree 隔离、setup 命令、流式起进程、轨迹并入、diff 捕获，`claude_code` 和 `pi` 是同一份。子类只提供三样东西：命令行、流解析器、错误信息里 CLI 叫什么名字。
+
+```yaml
+agent:
+  adapter: pi
+  config:
+    repo: "./fixtures/billing-service"
+    model: "google/gemini-3.6-flash"   # -m 覆盖这个键；"provider/id" 或模式串
+    thinking: "medium"                 # off|minimal|low|medium|high|xhigh|max
+    exclude_tools: ["bash"]            # 或 tools: [...] 白名单
+    no_extensions: true                # 机器上装了什么，不该影响结论
+    no_skills: true
+    timeout: 900
+    save_stream_to: "./streams"
+```
+
+### 三个只有 pi 才有的决定
+
+**session 默认关掉。** pi 平时把每次运行存在 `~/.pi/agent/sessions/<cwd>/`，而每个 trial 一个新 worktree ⇒ 每个 trial 一个垃圾目录，键还是一个已经不存在的路径。Compass 自己记了运行（`save_stream_to` 还留着原始流），所以 adapter 传 `--no-session`。想让 `pi --resume` 能打开某次运行，配 `session_dir` 换回来。
+
+**`no_extensions` / `no_skills` 不是洁癖。** 扩展和技能是从**跑这套评测的那台机器**上捡的——不关掉，"哪个模型更强"的结论换台机器就不成立。仓库自带的 `AGENTS.md` 相反要保留：那是被测项目的一部分，两个模型都该读到。
+
+**stdout 单行放宽到 16 MiB。** asyncio 默认 64 KiB，而 agent 的事件流一行经常超：一次 `read` 大文件是一个 JSON 对象，推理模型每轮还挂着几 KB 的 thought signature。超限时 `readline()` 抛 `ValueError`——实测表现为**整条 case 报错**（`Separator is found, but chunk is longer than limit`）、一点轨迹都没有，而那个模型唯一的错只是话多。现在超限的行会被跳过并计数（`transcript.metadata["dropped_stdout_lines"]`），不再连累整次运行——轨迹绝不能一边缺东西一边装作完整。
+
+### 一次真实运行
+
+[`examples/coding_agent/pi.yaml`](../examples/coding_agent/pi.yaml) 是配好的可跑模板（和 `suite.yaml` 同一批用例、同一个仓库、同一批隐藏测试）：
+
+```bash
+uv run python examples/coding_agent/run.py --suite pi.yaml \
+    -m google/gemini-2.5-flash -m google/gemini-3.6-flash --trials 3
+```
+
+三条 case 各跑一次（冒烟，不是结论）的结果值得一看：**gemini-3.6-flash 的隐藏验收测试 3/3 全过，比 gemini-2.5-flash 还多一条**——但它三次**每次都顺手改了 `tests/` 底下的测试**，而且贵了近 100 倍（$0.20–0.36 vs $0.002–0.004，28 轮 vs 4 轮）。只有 pass/fail 的评测会把它排第一；`state_delta` 从 pi 的 `edit` 调用里读出的实据把它拦了下来。这就是过程侧不是锦上添花的那个论点，只不过这次是真跑出来的。
 
 ## Environment Adapter（环境即代码）
 

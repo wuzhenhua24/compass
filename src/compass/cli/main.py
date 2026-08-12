@@ -1328,7 +1328,8 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
     SOURCE is an offline trace file (or a directory of pi sessions):
 
     \b
-      pi      a pi (@earendil-works/pi-*) JSONL session file, or a directory of them
+      pi      a pi (@earendil-works/pi-*) JSONL session file, a saved `--mode json`
+              event stream, or a directory of either
       otlp    an OTLP / OpenInference trace JSON (LangChain / LlamaIndex / CrewAI …
               exported via Arize Phoenix); a single file may hold many traces
       claude  a Claude Code `--output-format stream-json` file

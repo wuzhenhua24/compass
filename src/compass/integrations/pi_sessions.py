@@ -1,4 +1,4 @@
-"""Import a pi (``@earendil-works/pi-*``) JSONL *session* file into a Compass Transcript.
+"""Import a pi (``@earendil-works/pi-*``) run into a Compass Transcript.
 
 pi persists an agent run as a **JSONL session tree**: the first line is a session
 header, and every subsequent line is a ``SessionTreeEntry`` linked to its parent by
@@ -9,11 +9,16 @@ Compass's transcript-scope graders **without writing a per-agent adapter**::
 
     from compass.integrations import import_pi_session
 
-    transcript = import_pi_session("~/.pi/sessions/2026-01-01-weather.jsonl")
+    transcript = import_pi_session("~/.pi/agent/sessions/<project>/run.jsonl")
     # transcript.tool_calls / .reasoning_steps / .outcome are ready to grade
 
-Unlike the OpenAI Agents SDK bridge (a live ``TracingProcessor``), pi sessions are
-files on disk, so this is a pure importer.
+The same mapping also runs **live**, over the event stream pi emits with
+``--mode json``, through :class:`PiStreamReconstructor` — that is what the ``pi``
+adapter uses to record a run it drives itself (see :mod:`compass.adapters.pi`).
+The two formats share a first line (the session header) and share the message
+payloads, so they share the mapping; :func:`import_pi_session` sniffs which one a
+file holds, and a stream saved by ``save_stream_to`` imports as readily as a
+session does.
 
 Mapping (pi -> Compass):
 - session header ``{id, cwd, timestamp}``     -> ``trial_id`` / metadata / timing
@@ -22,6 +27,8 @@ Mapping (pi -> Compass):
   not record a cost)
 - assistant ``toolCall`` content block         -> a ``ToolCall`` (matched to its
   ``toolResult`` message by ``toolCallId`` to fill output / status / duration)
+- a **successful** ``write`` / ``edit``        -> a ``StateChange`` on that call's
+  ``state_delta`` (see below)
 - assistant ``thinking`` block                 -> a reasoning step
 - ``user`` message                             -> ``input_prompt`` (first) / reasoning
 - ``compaction`` / ``branch_summary`` / ``model_change`` / ``custom`` … -> metadata /
@@ -30,6 +37,23 @@ Mapping (pi -> Compass):
 By default only the **active branch** (the path from the session's current leaf back
 to the root) is reconstructed, so abandoned forks do not pollute the evaluation. For
 the common linear session this is identical to file order.
+
+**State delta — what the agent changed, not what it said.** Compass defines the
+``StateChange`` slot but leaves *capturing* deltas to importers. pi's file-editing
+tools carry their target in the tool input, so the mapping is exact rather than
+inferred::
+
+    graders:
+      - name: state_delta
+        config:
+          forbid: [{kind: file, target: "tests/*"}]   # don't rewrite the tests
+
+Same three properties as the Claude mapping: only **successful** calls count (the
+delta is recorded when the result arrives), targets are **relative to the session
+cwd** so a glob still matches inside a throwaway worktree, and **shell-mediated
+changes are not captured** — an agent that deletes a file with ``bash(rm …)``
+records nothing here, so read an empty ``state_delta`` as "nothing recorded",
+never as "nothing changed".
 
 Zero dependency on any pi package: the format is plain JSON, parsed directly.
 """
@@ -45,12 +69,47 @@ from pathlib import Path
 from typing import Any
 
 from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
-from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
+from compass.core.transcript import (
+    CostInfo,
+    StateChange,
+    TokenUsage,
+    ToolCall,
+    Transcript,
+)
 
 logger = logging.getLogger(__name__)
 
 # Max characters kept for a single reasoning step (thinking blocks can be huge).
 _MAX_STEP_CHARS = 4000
+
+# pi's file-editing tools -> the tool-input key holding the path they change.
+# Only these produce a StateChange: `read`/`ls`/`glob` change nothing, and
+# `bash` is deliberately excluded (see the module docstring).
+_FILE_EDIT_TOOLS: dict[str, str] = {"write": "path", "edit": "path"}
+
+# `edit` requires the file to already exist, so "update" is the tool contract
+# rather than a guess. `write` does both and its result does not say which, so
+# it falls back to _write_op — match on `target`, not `op`, when it matters.
+_FILE_EDIT_OPS: dict[str, str] = {"edit": "update"}
+
+# Event types that appear only in the ``--mode json`` stream, never in a saved
+# session file. Used both to tell the two formats apart and to skip the events
+# whose payload a message event already carries.
+_STREAM_EVENT_TYPES = frozenset(
+    {
+        "agent_start",
+        "agent_end",
+        "agent_settled",
+        "turn_start",
+        "turn_end",
+        "message_start",
+        "message_update",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_update",
+        "tool_execution_end",
+    }
+)
 
 
 class PiSessionError(ValueError):
@@ -67,13 +126,19 @@ def import_pi_session(
     *,
     active_branch_only: bool = True,
 ) -> Transcript:
-    """Import a single pi JSONL session file into a Compass :class:`Transcript`.
+    """Import a single pi JSONL file into a Compass :class:`Transcript`.
+
+    Accepts either of pi's two on-disk shapes — a **session tree** (what pi
+    persists under its session dir) or a saved **``--mode json`` event stream**
+    (what the ``pi`` adapter writes with ``save_stream_to``). Both start with the
+    same session header, so the format is sniffed from the lines after it.
 
     Args:
-        path: Path to a pi ``*.jsonl`` session file.
+        path: Path to a pi ``*.jsonl`` session or stream file.
         active_branch_only: If True (default), reconstruct only the path from the
             session's current leaf back to the root (abandoned forks are dropped).
-            If False, use every entry in file (append) order.
+            If False, use every entry in file (append) order. Ignored for a
+            stream, which is linear by construction.
 
     Returns:
         A reconstructed :class:`~compass.core.transcript.Transcript`.
@@ -83,10 +148,11 @@ def import_pi_session(
         FileNotFoundError: If ``path`` does not exist.
     """
     path = Path(path).expanduser()
-    content = path.read_text(encoding="utf-8")
-    header, entries = _parse_session(content, str(path))
-    ordered = _active_path(entries) if active_branch_only else entries
-    return _reconstruct(header, ordered, source=str(path))
+    return load_pi_session(
+        path.read_text(encoding="utf-8"),
+        source=str(path),
+        active_branch_only=active_branch_only,
+    )
 
 
 def load_pi_session(
@@ -95,14 +161,38 @@ def load_pi_session(
     source: str = "<string>",
     active_branch_only: bool = True,
 ) -> Transcript:
-    """Reconstruct a Transcript from the raw text of a pi session file.
+    """Reconstruct a Transcript from the raw text of a pi session or stream file.
 
     Same as :func:`import_pi_session` but takes the file *content* directly, which
     is convenient for tests and in-memory pipelines.
     """
-    header, entries = _parse_session(content, source)
+    header, objects = _parse_lines(content, source)
+    if _looks_like_stream(objects):
+        return _reconstruct_stream([header, *objects], source=source)
+    entries = _valid_entries(objects, source)
     ordered = _active_path(entries) if active_branch_only else entries
     return _reconstruct(header, ordered, source=source)
+
+
+def import_pi_stream_json(
+    path: str | Path,
+    *,
+    task_id: str | None = None,
+) -> Transcript:
+    """Import a saved pi ``--mode json`` event stream into a Transcript.
+
+    :func:`import_pi_session` already detects this shape; use this when you know
+    what you have and want to name the task yourself.
+
+    Args:
+        path: Path to the saved stream (JSON lines).
+        task_id: Optional task id; defaults to the run's session id.
+    """
+    path = Path(path).expanduser()
+    reconstructor = PiStreamReconstructor(task_id=task_id, source=str(path))
+    for line in path.read_text(encoding="utf-8").splitlines():
+        reconstructor.feed_line(line)
+    return reconstructor.finish()
 
 
 def import_pi_sessions(
@@ -144,11 +234,13 @@ def import_pi_sessions(
 # ---------------------------------------------------------------------------
 
 
-def _parse_session(content: str, source: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Split a pi session file into (header, entries).
+def _parse_lines(content: str, source: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Split a pi JSONL file into (header, objects) without interpreting them.
 
-    The header line is validated; malformed entry lines are skipped with a warning
-    so a single corrupt line does not sink the whole import.
+    The header line is validated; malformed lines are skipped with a warning so a
+    single corrupt line does not sink the whole import. Which *shape* the objects
+    are — session-tree entries or stream events — is decided by the caller, since
+    the two formats share this header.
     """
     lines = [ln for ln in content.split("\n") if ln.strip()]
     if not lines:
@@ -161,18 +253,45 @@ def _parse_session(content: str, source: str) -> tuple[dict[str, Any], list[dict
     if not isinstance(header, dict) or header.get("type") != "session":
         raise PiSessionError(f"{source}: first line is not a pi session header")
 
-    entries: list[dict[str, Any]] = []
+    objects: list[dict[str, Any]] = []
     for i, line in enumerate(lines[1:], start=2):
         try:
-            entry = json.loads(line)
+            obj = json.loads(line)
         except (ValueError, TypeError):
             logger.warning("%s: line %d is not valid JSON, skipping", source, i)
             continue
-        if not isinstance(entry, dict) or "type" not in entry or "id" not in entry:
+        if not isinstance(obj, dict) or "type" not in obj:
             logger.warning("%s: line %d is not a valid session entry, skipping", source, i)
             continue
-        entries.append(entry)
-    return header, entries
+        objects.append(obj)
+    return header, objects
+
+
+def _valid_entries(objects: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    """Keep the objects that are session-tree entries (``type`` **and** ``id``)."""
+    entries: list[dict[str, Any]] = []
+    for obj in objects:
+        if "id" not in obj:
+            logger.warning("%s: entry %r has no id, skipping", source, obj.get("type"))
+            continue
+        entries.append(obj)
+    return entries
+
+
+def _looks_like_stream(objects: list[dict[str, Any]]) -> bool:
+    """Whether these lines are ``--mode json`` events rather than session entries.
+
+    Session-tree entries all carry an ``id`` (that is what ``parentId`` points at);
+    stream events never do, and their type names are disjoint from the entry
+    types. Checking both ways round means neither an unknown entry type nor an
+    unknown event type can flip the answer on its own.
+    """
+    for obj in objects:
+        if obj.get("type") in _STREAM_EVENT_TYPES:
+            return True
+        if "id" in obj:
+            return False
+    return False
 
 
 def _leaf_id_after(entry: dict[str, Any]) -> str | None:
@@ -217,25 +336,45 @@ def _active_path(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _new_transcript(
+    header: dict[str, Any], *, source: str, task_id: str | None = None
+) -> Transcript:
+    """An empty Transcript carrying the session header's bookkeeping."""
+    transcript = Transcript(task_id=task_id or "pi_session", trial_id="pi_session")
+    transcript.input_params = {"cwd": "", "source": source}
+    transcript.metadata = {"importer": "pi"}
+    _apply_header(transcript, header, task_id=task_id)
+    return transcript
+
+
+def _apply_header(
+    transcript: Transcript, header: dict[str, Any], *, task_id: str | None = None
+) -> None:
+    """Fold a session header into the transcript (also the stream's first event)."""
+    session_id = str(header.get("id") or "pi_session")
+    cwd = header.get("cwd", "") or transcript.input_params.get("cwd", "")
+    transcript.trial_id = session_id
+    if not task_id:
+        transcript.task_id = session_id
+    transcript.input_params["cwd"] = cwd
+    transcript.metadata.update(
+        {
+            "session_id": session_id,
+            "cwd": cwd,
+            "session_version": header.get("version"),
+        }
+    )
+    if header.get("parentSession"):
+        transcript.metadata["parent_session"] = header["parentSession"]
+
+
 def _reconstruct(
     header: dict[str, Any],
     entries: list[dict[str, Any]],
     *,
     source: str,
 ) -> Transcript:
-    session_id = str(header.get("id") or "pi_session")
-    cwd = header.get("cwd", "")
-
-    transcript = Transcript(task_id=session_id, trial_id=session_id)
-    transcript.input_params = {"cwd": cwd, "source": source}
-    transcript.metadata = {
-        "importer": "pi",
-        "session_id": session_id,
-        "cwd": cwd,
-        "session_version": header.get("version"),
-    }
-    if header.get("parentSession"):
-        transcript.metadata["parent_session"] = header["parentSession"]
+    transcript = _new_transcript(header, source=source)
 
     # toolCallId -> the ToolCall awaiting its result.
     pending: dict[str, ToolCall] = {}
@@ -244,8 +383,7 @@ def _reconstruct(
     turn = 0  # each assistant message starts a new turn
 
     for entry in entries:
-        etype = entry.get("type")
-        if etype == "message":
+        if entry.get("type") == "message":
             message = entry.get("message") or {}
             if message.get("role") == "assistant":
                 turn += 1
@@ -254,36 +392,57 @@ def _reconstruct(
                 last_assistant_text = text
             if model:
                 last_model = model
-        elif etype == "model_change":
-            transcript.metadata.setdefault("model_changes", []).append(
-                {"provider": entry.get("provider"), "modelId": entry.get("modelId")}
-            )
-        elif etype == "active_tools_change":
-            transcript.metadata["active_tools"] = entry.get("activeToolNames")
-        elif etype == "thinking_level_change":
-            transcript.metadata["thinking_level"] = entry.get("thinkingLevel")
-        elif etype == "compaction":
-            summary = _truncate(str(entry.get("summary", "")))
-            transcript.add_reasoning_step(f"[compaction] {summary}")
-            transcript.metadata.setdefault("compactions", []).append(
-                {"summary": summary, "tokens_before": entry.get("tokensBefore")}
-            )
-        elif etype == "branch_summary":
-            summary = _truncate(str(entry.get("summary", "")))
-            transcript.add_reasoning_step(f"[branch_summary] {summary}")
-        elif etype in ("custom", "custom_message"):
-            ctype = entry.get("customType", "custom")
-            body = _truncate(_content_to_text(entry.get("content", "")))
-            transcript.add_reasoning_step(f"[{ctype}] {body}")
-        elif etype == "session_info":
-            name = entry.get("name")
-            if name:
-                transcript.task_id = str(name)
-                transcript.metadata["session_name"] = name
-        # "label" / "leaf" are structural — ignored.
+        else:
+            _handle_meta_entry(transcript, entry)
 
-    _finalize(transcript, header, entries, last_assistant_text, last_model)
+    _finalize(
+        transcript,
+        header,
+        _last_message_epoch(entries),
+        last_assistant_text,
+        last_model,
+    )
     return transcript
+
+
+def _handle_meta_entry(transcript: Transcript, entry: dict[str, Any]) -> bool:
+    """Map a non-message session entry. False if the type is unknown here.
+
+    These entries also show up in the ``--mode json`` stream (a mid-run model
+    switch, a compaction), so both paths route through this.
+    """
+    etype = entry.get("type")
+    if etype == "model_change":
+        transcript.metadata.setdefault("model_changes", []).append(
+            {"provider": entry.get("provider"), "modelId": entry.get("modelId")}
+        )
+    elif etype == "active_tools_change":
+        transcript.metadata["active_tools"] = entry.get("activeToolNames")
+    elif etype == "thinking_level_change":
+        transcript.metadata["thinking_level"] = entry.get("thinkingLevel")
+    elif etype == "compaction":
+        summary = _truncate(str(entry.get("summary", "")))
+        transcript.add_reasoning_step(f"[compaction] {summary}")
+        transcript.metadata.setdefault("compactions", []).append(
+            {"summary": summary, "tokens_before": entry.get("tokensBefore")}
+        )
+    elif etype == "branch_summary":
+        summary = _truncate(str(entry.get("summary", "")))
+        transcript.add_reasoning_step(f"[branch_summary] {summary}")
+    elif etype in ("custom", "custom_message"):
+        ctype = entry.get("customType", "custom")
+        body = _truncate(_content_to_text(entry.get("content", "")))
+        transcript.add_reasoning_step(f"[{ctype}] {body}")
+    elif etype == "session_info":
+        name = entry.get("name")
+        if name:
+            transcript.task_id = str(name)
+            transcript.metadata["session_name"] = name
+    elif etype in ("label", "leaf"):
+        pass  # structural — the branch walk already used them
+    else:
+        return False
+    return True
 
 
 def _handle_message(
@@ -433,21 +592,93 @@ def _handle_tool_result(
     call_ts = tc.metadata.pop("call_ts", None)
     if call_ts and result_ts:
         tc.duration_ms = max(0.0, (result_ts - call_ts) * 1000.0)
+    if not is_error:
+        _record_state_delta(transcript, tc, result_text)
+
+
+def _record_state_delta(
+    transcript: Transcript, call: ToolCall, result_text: str
+) -> None:
+    """Attach the file change a successful editing tool just made.
+
+    Recorded here, at result time, rather than when the call was opened: until
+    the result arrives the change has not happened, and it may never (a denied
+    permission, a killed run). ``state_delta`` records what the environment
+    *did*, not what the model asked for.
+    """
+    path_key = _FILE_EDIT_TOOLS.get(call.tool_name)
+    if path_key is None:
+        return
+    raw_path = (call.input or {}).get(path_key)
+    if not isinstance(raw_path, str) or not raw_path:
+        return
+
+    target, absolute = _relativize(raw_path, str(transcript.metadata.get("cwd") or ""))
+    metadata: dict[str, Any] = {"tool": call.tool_name}
+    if absolute and absolute != target:
+        metadata["absolute_path"] = absolute
+
+    call.state_delta.append(
+        StateChange(
+            kind="file",
+            op=_FILE_EDIT_OPS.get(call.tool_name) or _write_op(result_text),
+            target=target,
+            metadata=metadata,
+        )
+    )
+
+
+def _relativize(raw_path: str, cwd: str) -> tuple[str, str]:
+    """(target, absolute) — target relative to the session cwd, normalized.
+
+    Two things have to happen for a user's glob to work:
+
+    - **Relative to the cwd.** A ``pi`` trial runs in a throwaway worktree, so an
+      absolute target is a different random path every run and no glob could
+      match it. The absolute form is kept on the change's metadata.
+    - **One spelling per file.** pi passes the path through as the agent typed
+      it, and models type both ``pricing.py`` and ``./pricing.py`` for the same
+      file — observed in a single two-model run. Left alone, ``target:
+      "pricing.py"`` matches one run and silently misses the other, which is the
+      worst possible failure for an integrity gate.
+    """
+    path = Path(raw_path)
+    if not path.is_absolute():
+        target = os.path.normpath(raw_path)
+        return target, (os.path.normpath(os.path.join(cwd, raw_path)) if cwd else target)
+    if cwd:
+        try:
+            return str(path.relative_to(cwd)), str(path)
+        except ValueError:
+            pass  # outside the session cwd — the absolute path *is* the target
+    return str(path), str(path)
+
+
+def _write_op(result_text: str) -> str:
+    """``create`` or ``update`` for a ``write``, read off the tool's own result.
+
+    ``write`` is the one editing tool that does both, and its input cannot tell
+    them apart. pi's success message ("Successfully wrote N bytes to X") does not
+    distinguish either, so this defaults to ``update`` — true either way, since
+    the contents changed. Match on ``target`` rather than ``op`` when you need
+    certainty.
+    """
+    return "create" if "created" in (result_text or "").lower() else "update"
 
 
 def _finalize(
     transcript: Transcript,
     header: dict[str, Any],
-    entries: list[dict[str, Any]],
+    end_ts: float,
     last_assistant_text: str | None,
     last_model: str | None,
 ) -> None:
+    """Timing, model and outcome. Safe to call repeatedly (the stream does)."""
     if last_model:
         transcript.environment.model_version = last_model
 
     # Timing: prefer the session header start + last message timestamp.
     start = _parse_iso(header.get("timestamp"))
-    end_ts = _last_message_epoch(entries)
     if start:
         transcript.start_time = start
         if end_ts:
@@ -462,6 +693,125 @@ def _finalize(
             output_data={"final_output": last_assistant_text},
             metadata={"session_id": transcript.metadata.get("session_id")},
         )
+
+
+# ---------------------------------------------------------------------------
+# Streaming (pi --mode json)
+# ---------------------------------------------------------------------------
+
+
+class PiStreamReconstructor:
+    """Incremental form of the mapping, fed pi's ``--mode json`` event stream.
+
+    Same mapping as the offline importer — pi emits the *same message objects*
+    live that it later persists — so a driven run and an imported session grade
+    identically. Two things fall out of consuming it as it arrives: a run killed
+    by a timeout still yields the steps it completed (:meth:`finish` is valid at
+    any point), and a live progress view is possible without a second parser.
+
+    ::
+
+        r = PiStreamReconstructor(task_id="add-rate-limit")
+        for line in proc.stdout:
+            r.feed_line(line)      # non-JSON lines return False, never raise
+        transcript = r.finish()
+
+    Only ``message_end`` is mapped, never ``message_start`` / ``message_update``:
+    a message is streamed as a start frame, a run of deltas and an end frame, and
+    only the end frame carries the finished content and the turn's ``usage``.
+    Mapping any of the others would double-count every turn.
+    """
+
+    def __init__(
+        self, *, task_id: str | None = None, source: str = "<stream>"
+    ) -> None:
+        self._task_id = task_id
+        self._transcript = _new_transcript({}, source=source, task_id=task_id)
+        self._header: dict[str, Any] = {}
+        self._pending: dict[str, ToolCall] = {}
+        self._turn = 0
+        self._last_text: str | None = None
+        self._last_model: str | None = None
+        self._last_ts = 0.0
+        self._unhandled: dict[str, int] = {}
+
+    def feed(self, event: dict[str, Any]) -> None:
+        """Consume one stream event.
+
+        Event types this mapping does not model are counted into
+        ``transcript.metadata["unhandled_events"]`` rather than discarded — a
+        count is enough to answer the question that matters: did something happen
+        during this run that the transcript does not explain?
+        """
+        etype = event.get("type")
+        if etype == "session":
+            self._header = event
+            _apply_header(self._transcript, event, task_id=self._task_id)
+            return
+        if etype == "message_end":
+            self._consume_message(event.get("message") or {})
+            return
+        if etype in _STREAM_EVENT_TYPES:
+            return  # bracketing frames; message_end already carried the payload
+        if not _handle_meta_entry(self._transcript, event):
+            self._unhandled[str(etype or "unknown")] = (
+                self._unhandled.get(str(etype or "unknown"), 0) + 1
+            )
+
+    def feed_line(self, line: str) -> bool:
+        """Consume one raw stdout line. Returns False if it was not JSON.
+
+        pi prints the occasional non-JSON line to stdout, and a partial trace
+        beats a crashed harness — so a bad line is reported, not raised.
+        """
+        line = line.strip()
+        if not line:
+            return False
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(event, dict):
+            return False
+        self.feed(event)
+        return True
+
+    def finish(self) -> Transcript:
+        """The Transcript reconstructed so far. Safe to call mid-stream."""
+        if self._unhandled:
+            self._transcript.metadata["unhandled_events"] = dict(self._unhandled)
+        _finalize(
+            self._transcript,
+            self._header,
+            self._last_ts,
+            self._last_text,
+            self._last_model,
+        )
+        return self._transcript
+
+    def _consume_message(self, message: dict[str, Any]) -> None:
+        if message.get("role") == "assistant":
+            self._turn += 1
+        text, model = _handle_message(
+            self._transcript, message, self._pending, self._turn
+        )
+        if text is not None:
+            self._last_text = text
+        if model:
+            self._last_model = model
+        ts = _ms_to_epoch(message.get("timestamp"))
+        if ts:
+            self._last_ts = ts
+
+
+def _reconstruct_stream(
+    events: list[dict[str, Any]], *, source: str
+) -> Transcript:
+    """Offline form: replay a saved event stream through the reconstructor."""
+    reconstructor = PiStreamReconstructor(source=source)
+    for event in events:
+        reconstructor.feed(event)
+    return reconstructor.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -568,12 +918,22 @@ def _last_message_epoch(entries: list[dict[str, Any]]) -> float:
 
 
 def _parse_iso(value: Any) -> datetime | None:
+    """A pi ISO timestamp as a *local* naive datetime.
+
+    Local, not UTC, because the other end of the same subtraction comes from
+    :func:`datetime.fromtimestamp`, which is local. Dropping the offset instead
+    (the obvious ``replace(tzinfo=None)``) made every session's duration off by
+    the host's UTC offset — eight hours of "latency" in Shanghai, none in London.
+    """
     if not value or not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone().replace(tzinfo=None)
 
 
 def _opt_float(value: Any) -> float | None:
