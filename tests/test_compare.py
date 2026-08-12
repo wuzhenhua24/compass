@@ -271,6 +271,24 @@ class TestSelectGraderScore:
         assert select_grader_score(case, "rubric") == (0.75, True)
         assert select_grader_score(case, "explains_itself") == (0.75, True)
 
+    def test_the_summary_supplies_a_real_pass_fraction(self):
+        """Without it, `--on` forces a 3-trial case to 1.0/0.0 and throws away
+        two thirds of what was measured."""
+        case = case_dict("t1", True, total_trials=3, grader_summary={
+            "correctness": {"score_mean": 0.75, "pass_fraction": 2 / 3,
+                            "trials": 3, "metrics": {}},
+        })
+        score, fraction = select_grader_score(case, "correctness")
+        assert score == 0.75
+        assert fraction == pytest.approx(2 / 3)
+
+    def test_a_summary_that_never_measured_is_unmeasured(self):
+        case = case_dict("t1", True, grader_summary={
+            "rubric": {"score_mean": None, "pass_fraction": 0.0,
+                       "trials": 0, "metrics": {}},
+        })
+        assert select_grader_score(case, "rubric") is None
+
     def test_an_absent_grader_is_unmeasured_not_zero(self):
         """The distinction the whole design turns on: 'never measured' must not
         read as 'the agent scored 0'."""
@@ -473,6 +491,34 @@ class TestCompareMetric:
         a = self._write(tmp_path, "a.json", [case])
         with pytest.raises(AmbiguousGraderError, match="different values"):
             compare_metric(a, a, "tool_calls")
+
+    def test_the_cross_trial_summary_wins_over_one_trial_s_detail(self, tmp_path):
+        """The whole point: on the real 3-trial run this moved `turns` from
+        26 (the last trial) to 30.33 (the mean of 38/27/26), and that moved the
+        comparison from 'not significant' to significant."""
+        def case(cid, one_trial, mean):
+            d = self._case(cid, turns=one_trial)
+            d["total_trials"] = 3
+            d["grader_summary"] = {
+                "turn_count": {"score_mean": 1.0, "pass_fraction": 1.0,
+                               "trials": 3, "metrics": {"turns": mean}},
+            }
+            return d
+
+        a = self._write(tmp_path, "a.json", [case("t1", 26.0, 30.0)])
+        b = self._write(tmp_path, "b.json", [case("t1", 26.0, 18.0)])
+        cmp = compare_metric(a, b, "turns")
+        assert cmp.mean_a == 30.0 and cmp.mean_b == 18.0
+        # And the single-trial caveat is gone, because it no longer applies.
+        assert cmp.multi_trial_cases == 0
+
+    def test_results_without_a_summary_still_work(self, tmp_path):
+        """Older results files predate `grader_summary`; they must keep
+        comparing rather than silently reporting nothing."""
+        a = self._write(tmp_path, "a.json", [self._case("t1", turns=20.0)])
+        b = self._write(tmp_path, "b.json", [self._case("t1", turns=14.0)])
+        cmp = compare_metric(a, b, "turns")
+        assert cmp.n_paired == 1 and cmp.stats.mean_diff == pytest.approx(-6.0)
 
     def test_the_same_value_from_two_graders_is_not_ambiguous(self, tmp_path):
         """Only a disagreement is unresolvable. Two graders that counted the

@@ -567,9 +567,18 @@ grader 自己的 `details`）里写：
   "没测过"而被踢出统计——而那恰恰可能正是你要的结论。`--missing-as-zero` 把这些
   case 读成实测 0。**别对 `cost_usd` 用它**：成本缺失意味着 grader 没跑，
   那不是一次"零成本的运行"。两种读法都对，只是对不同的指标，所以要显式选。
-- **多 trial 时它比的是一次尝试，不是均值。** 一个 case 的 grader 结果来自
-  单次 trial（`total_trials: 3` 的 case 也只带一份），所以 `--metric`（和 `--on`）
-  在多 trial 运行上是**抽了一次**。命令行会就此告警。
+- **多 trial 会自动取跨 trial 均值。** `evaluator_results` 按设计只带**一次**
+  trial 的明细（合并 `metadata` 没有意义），所以每个 case 另外带一份
+  `grader_summary`：按 `label or name` 归类，给出 `score_mean`、`pass_fraction`、
+  `trials` 和各指标的均值。`--on` / `--metric` 优先读它，读不到才退回单次明细
+  （老的结果文件），退回时命令行会告警。
+
+  这不是锦上添花。真实那次 60 trial 的运行里，某条用例三次分别是 38 / 27 / 26 轮，
+  单次抽样报 26；换成均值 30.33 之后，`turns` 的比较从**不显著**
+  （CI [−17.05, +1.45]）变成**显著**（CI [−12.65, −1.16]）。
+
+  `trials` 是这个 grader 的**分母**：三次里只测出两次，就是两次的均值，不是把
+  没测出来的那次当 0 算——和 case 级聚合是同一条规则。
 
 #### `label:`：一个 case 跑同一个 grader 两次时
 

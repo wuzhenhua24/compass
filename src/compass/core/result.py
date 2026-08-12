@@ -131,6 +131,22 @@ class CaseResult:
     error_trials: int = 0  # Trials lost to harness errors, excluded from metrics
     trial_metrics: dict[str, Any] | None = None  # pass@k, pass^k, pass_rate, etc.
 
+    #: Per-grader aggregate **across trials**, keyed by ``label or name``.
+    #:
+    #: ``evaluator_results`` deliberately holds one trial's detail — a merged
+    #: ``metadata`` payload would be meaningless, and the last evaluated trial
+    #: is the honest thing to show. But that makes it the wrong input for
+    #: comparing runs: on a 3-trial case it samples one attempt, so a case
+    #: whose trials took 38/27/26 turns reports 26 as though it were the
+    #: figure. ``overall_score`` has always been the mean across trials; this
+    #: gives every grader's score and metrics the same treatment.
+    #:
+    #: Each entry: ``{"score_mean", "pass_fraction", "trials", "metrics"}``.
+    #: ``trials`` is the number of trials that actually measured that grader,
+    #: which is its denominator — a grader that ran twice out of three is a
+    #: mean over two, not a mean with a zero in it.
+    grader_summary: dict[str, dict[str, Any]] = field(default_factory=dict)
+
     # Audit provenance: content hash of the grading contract applied to this
     # case (graders + aggregation + leak markers + expect). Automatic, so a
     # score is only comparable across runs when this matches — no reliance on a
@@ -286,6 +302,7 @@ class EvalResult:
                     "passed_trials": r.passed_trials,
                     "error_trials": r.error_trials,
                     "trial_metrics": r.trial_metrics,
+                    "grader_summary": r.grader_summary,
                 }
                 for r in self.case_results
             ],

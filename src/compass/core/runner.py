@@ -803,7 +803,71 @@ class Compass:
                     metrics_config.consistency if metrics_config else True
                 ),
             ),
+            grader_summary=self._summarize_graders(evaluated),
         )
+
+    @staticmethod
+    def _summarize_graders(trials: list[Any]) -> dict[str, dict[str, Any]]:
+        """Per-grader aggregate across trials, keyed by ``label or name``.
+
+        The counterpart to ``overall_score`` being ``score_mean``: without it,
+        anything reading a grader's number off a multi-trial case is reading
+        one attempt and calling it the result.
+
+        Only trials that actually measured a grader count toward it, so an
+        unscored attempt shrinks the denominator instead of averaging in as a
+        zero — the same rule the case-level aggregate follows. A grader that
+        never produced a number in any trial gets ``score_mean: None`` rather
+        than being dropped, because "ran and never measured" is itself worth
+        seeing.
+        """
+        collected: dict[str, dict[str, Any]] = {}
+        for trial in trials:
+            seen: dict[str, int] = {}
+            for raw in trial.grader_results or []:
+                r = raw if isinstance(raw, EvaluatorResult) else (
+                    EvaluatorResult.from_dict(raw) if isinstance(raw, dict) else None
+                )
+                if r is None or r.skipped:
+                    continue
+                # Same keying as CaseResult.breakdown, including the positional
+                # suffix, so the two never disagree about what a name refers to.
+                key = r.label or r.name
+                if not r.label:
+                    seen[key] = seen.get(key, 0) + 1
+                    if seen[key] > 1:
+                        key = f"{key}#{seen[key]}"
+                bucket = collected.setdefault(
+                    key, {"scores": [], "passed": [], "metrics": {}}
+                )
+                if r.score is not None:
+                    bucket["scores"].append(float(r.score))
+                bucket["passed"].append(bool(r.passed))
+                for name, value in (r.metrics or {}).items():
+                    if isinstance(value, (int, float, bool)):
+                        bucket["metrics"].setdefault(name, []).append(value)
+
+        summary: dict[str, dict[str, Any]] = {}
+        for key, bucket in collected.items():
+            scores = bucket["scores"]
+            flags = bucket["passed"]
+            metrics: dict[str, float] = {}
+            for name, values in bucket["metrics"].items():
+                # bool first: a flag averaged as 0.67 is a rate, not a score,
+                # but both come out as a float here — the naming is what keeps
+                # them apart, exactly as in the analyzer.
+                metrics[name] = (
+                    sum(1 for v in values if v) / len(values)
+                    if all(isinstance(v, bool) for v in values)
+                    else sum(float(v) for v in values) / len(values)
+                )
+            summary[key] = {
+                "score_mean": (sum(scores) / len(scores)) if scores else None,
+                "pass_fraction": (sum(flags) / len(flags)) if flags else 0.0,
+                "trials": len(scores),
+                "metrics": metrics,
+            }
+        return summary
 
     async def _run_graders(
         self,

@@ -13,6 +13,8 @@ round-major and top up to a target instead of re-running from scratch.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from compass.adapters.base import Adapter, AgentInput, AgentOutput
@@ -351,6 +353,96 @@ class TestUnscoredIsNotZero:
             "integration_test#2": pytest.approx(1.0),
             "cost_budget": pytest.approx(0.9),
         }
+
+    def test_grader_summary_averages_across_trials(self):
+        """`evaluator_results` is one trial's detail by design, which makes it
+        the wrong input for comparing runs: a 3-trial case would report one
+        attempt's numbers as though they were the result."""
+        trials = [
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="turn_count", score=1.0, passed=True,
+                                metrics={"turns": 38.0}),
+            ]),
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="turn_count", score=0.5, passed=False,
+                                metrics={"turns": 27.0}),
+            ]),
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="turn_count", score=1.0, passed=True,
+                                metrics={"turns": 26.0}),
+            ]),
+        ]
+        summary = Compass._summarize_graders(trials)["turn_count"]
+        assert summary["metrics"]["turns"] == pytest.approx(30 + 1 / 3)
+        assert summary["score_mean"] == pytest.approx(2.5 / 3)
+        assert summary["pass_fraction"] == pytest.approx(2 / 3)
+        assert summary["trials"] == 3
+
+    def test_an_unscored_trial_shrinks_the_denominator(self):
+        """Same rule as the case aggregate: a trial that measured nothing is a
+        missing sample, not a zero. Averaging it in as 0.0 would report an
+        agent that scored badly where the truth is a grader that crashed."""
+        trials = [
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="rubric", score=0.8, passed=True),
+            ]),
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="rubric", score=None, passed=False,
+                                error="judge timed out"),
+            ]),
+        ]
+        summary = Compass._summarize_graders(trials)["rubric"]
+        assert summary["score_mean"] == pytest.approx(0.8)  # not 0.4
+        assert summary["trials"] == 1
+
+    def test_a_grader_that_never_measured_is_none_not_absent(self):
+        trials = [SimpleNamespace(grader_results=[
+            EvaluatorResult(name="rubric", score=None, passed=False),
+        ])]
+        summary = Compass._summarize_graders(trials)
+        assert summary["rubric"]["score_mean"] is None
+        assert summary["rubric"]["trials"] == 0
+
+    def test_a_boolean_metric_summarizes_as_a_rate(self):
+        trials = [
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="loop_detection", score=1.0, passed=True,
+                                metrics={"has_critical_loop": flag}),
+            ])
+            for flag in (True, False, False, False)
+        ]
+        summary = Compass._summarize_graders(trials)["loop_detection"]
+        assert summary["metrics"]["has_critical_loop"] == pytest.approx(0.25)
+
+    def test_skipped_trials_do_not_enter_the_summary(self):
+        trials = [
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="rubric", score=0.6, passed=True),
+            ]),
+            SimpleNamespace(grader_results=[
+                EvaluatorResult(name="rubric", score=None, passed=False,
+                                skipped=True, skip_reason="short_circuit"),
+            ]),
+        ]
+        summary = Compass._summarize_graders(trials)["rubric"]
+        assert summary["trials"] == 1
+        assert summary["pass_fraction"] == 1.0  # the skipped trial is not a fail
+
+    def test_the_summary_keys_match_the_breakdown_keys(self):
+        """Two `integration_test` graders must land under the same keys the
+        breakdown uses, or a `--on` selector would mean different things
+        depending on which one it read."""
+        trials = [SimpleNamespace(grader_results=[
+            EvaluatorResult(name="integration_test", score=0.5, passed=False),
+            EvaluatorResult(name="integration_test", score=1.0, passed=True),
+            EvaluatorResult(name="rubric", score=0.9, passed=True,
+                            label="explains_itself"),
+        ])]
+        case = CaseResult(
+            case_id="c", status=TestStatus.FAILED, passed=False, overall_score=0.8,
+            evaluator_results=list(trials[0].grader_results),
+        )
+        assert set(Compass._summarize_graders(trials)) == set(case.breakdown)
 
     def test_a_label_names_the_breakdown_key(self):
         """And is what to use: the #2 suffix moves if grader order changes,

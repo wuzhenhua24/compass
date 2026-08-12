@@ -69,8 +69,12 @@ class AmbiguousGraderError(ValueError):
 
 def select_grader_score(
     item: dict[str, Any], on: str
-) -> tuple[float, bool] | None:
-    """``(score, passed)`` for the grader *on* names, or None if unmeasured.
+) -> tuple[float, float] | None:
+    """``(score, pass_fraction)`` for the grader *on* names, or None.
+
+    Prefers ``grader_summary`` — the mean across trials — and falls back to
+    ``evaluator_results``, which is one trial's detail, for results written
+    before the summary existed.
 
     Matches ``label`` first, then falls back to ``name`` — so a scenario that
     labels its grader instances can select them precisely, and one that does
@@ -81,6 +85,15 @@ def select_grader_score(
     skipped by a short-circuit, or crashed. Scoring those as 0.0 would report
     an agent failure where the truth is a missing sample.
     """
+    summary = item.get("grader_summary") or {}
+    if on in summary:
+        entry = summary[on]
+        if entry.get("score_mean") is None:
+            return None
+        # pass_fraction, not a boolean: on a 3-trial case "passed twice" is a
+        # real number and forcing it to 1.0/0.0 throws away two thirds of it.
+        return float(entry["score_mean"]), float(entry.get("pass_fraction") or 0.0)
+
     graders = item.get("evaluator_results") or item.get("grade_results") or []
     matches = [
         g for g in graders
@@ -102,7 +115,9 @@ def select_grader_score(
     match = matches[0]
     if match.get("skipped") or match.get("score") is None:
         return None
-    return float(match["score"]), bool(match.get("passed"))
+    # No summary to draw on (an older results file, or a single trial), so the
+    # pass fraction can only be the boolean.
+    return float(match["score"]), 1.0 if match.get("passed") else 0.0
 
 
 def select_metric(item: dict[str, Any], metric: str) -> float | None:
@@ -116,6 +131,27 @@ def select_metric(item: dict[str, Any], metric: str) -> float | None:
     guess, for the same reason an ambiguous ``on`` is: silently picking one
     produces a comparison that looks fine and answers a question nobody asked.
     """
+    summary = item.get("grader_summary") or {}
+    if summary:
+        # The cross-trial aggregate wins wherever it exists: it is a mean over
+        # every trial that measured the metric, where evaluator_results is one
+        # trial's number.
+        from_summary = [
+            (key, float(entry["metrics"][metric]))
+            for key, entry in summary.items()
+            if metric in (entry.get("metrics") or {})
+        ]
+        if from_summary:
+            if len({v for _, v in from_summary}) > 1:
+                raise AmbiguousGraderError(
+                    f"{item.get('case_id') or item.get('task_id')!r}: metric "
+                    f"{metric!r} was emitted with different values by "
+                    f"{', '.join(sorted(k for k, _ in from_summary))}. "
+                    "Rename one of them."
+                )
+            return from_summary[0][1]
+        return None
+
     graders = item.get("evaluator_results") or item.get("grade_results") or []
     found: list[tuple[str, float]] = []
     for g in graders:
@@ -156,11 +192,8 @@ def _extract_case_records(
         selected = select_grader_score(item, on)
         if selected is None:
             return None
-        score, passed = selected
-        # Trial counts are recorded per case, not per grader, so the finer
-        # pass fraction is not available here — a 3-of-5 case cannot be split
-        # into which trials this particular grader passed.
-        pass_fraction = 1.0 if passed else 0.0
+        score, pass_fraction = selected
+        passed = pass_fraction >= 1.0
     else:
         passed = bool(item["passed"])
         score = float(
@@ -607,7 +640,11 @@ def _load_metric(
                 unmeasured.append(str(case_id))
             else:
                 values[str(case_id)] = value
-                if (item.get("total_trials") or 1) > 1:
+                # Only a caveat when the value really did come from one trial;
+                # with a grader_summary present it is already the mean.
+                if (item.get("total_trials") or 1) > 1 and not item.get(
+                    "grader_summary"
+                ):
                     multi_trial.add(str(case_id))
     return values, sorted(set(unmeasured) - values.keys()), multi_trial
 
