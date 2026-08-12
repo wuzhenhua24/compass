@@ -354,9 +354,18 @@ cases:
   #     见 tests/test_coding_agent_example.py::TestAmbiguousCaseAcceptsEveryReading）。
   #     在这里钉死一种读法，就把"有没有意识到自己在做选择"偷换成"猜没猜中
   #     我的那种",测的是运气。
-  #   · 真正的信号是 `surfaces_assumption` 这个 rubric：agent 有没有在收尾
-  #     发言里说清它按哪种读法实现、为什么。非交互模式下它问不了人，所以评的
-  #     是**有没有暴露假设**，不是有没有回去追问。
+  #   · 真正的信号是 `surfaces_assumption`：agent 有没有在收尾发言里说清
+  #     它按哪种读法实现的、为什么。
+  #
+  # **prompt 末尾那句"非交互、没人回答你"是花了真金白银才补上的。** 第一版没写，
+  # 理由是"非交互模式下 agent 问不了人"——这个前提是错的。Sonnet 三次里有两次
+  # 就是停下来提问的，其中一次把歧义讲得比我的评分标准还清楚：点名了规则没写
+  # 哪个优先、列出两种常见做法、请人选。然后这套 eval 给了它 0 分（没写代码，
+  # 隐藏测试 0/8）外加四条 rubric 里两条 0 分（没做选择、没给理由）。
+  #
+  # 也就是说，这条用例当时在惩罚它本来要奖励的那个行为。prompt 从没说过不能问，
+  # 那么停下来问就是一种合理读法，是 eval 的错不是 agent 的错——这正是文件头
+  # 那条铁律的另一面：**你要求什么，prompt 里就得写什么。**
   #
   # 这个判官**不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。
   # 它进加权分，而要单独看它就用它的 label：
@@ -379,6 +388,9 @@ cases:
            没应用促销时是 0.0。
         4. total = subtotal - discount - tier_discount + shipping。
            免运费门槛仍按 subtotal 判断，这次不动它。
+
+        这是一次非交互运行，没有人会回答你的提问。遇到需求没讲清的地方，
+        请自行做决定、把代码写完，并在最后说明你按哪种理解实现的、为什么。
     graders:
       - {name: integration_test, type: code, gate: true, label: correctness,
          config: {script: "python -m pytest {{GRADERS}}/test_ambiguous_no_stacking.py -q",
@@ -460,8 +472,7 @@ cases:
       - {name: integration_test, type: code, gate: true, label: regression,
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
-      # 「有没有把理由说清楚」——非交互模式下 agent 问不了人，所以评的是
-      # 有没有把结论和依据摆出来，不是有没有回去追问。
+      # 「有没有把理由说清楚」——评的是有没有把结论和依据摆出来。
       #
       # 「有没有把理由说清楚」——用 claude CLI 判，不是内置的 rubric grader。
       #
