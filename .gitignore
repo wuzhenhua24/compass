@@ -105,6 +105,7 @@ docs/*-insights.md
 # UV
 .uv/
 
-# Live eval runs (examples/coding_agent/run.py --out). Contains a nested git
-# repo, traces and raw streams — all reproducible, none of it source.
-coding-eval-run/
+# Live eval runs (examples/coding_agent/run.py --out). A nested git repo,
+# traces and raw streams — all reproducible, none of it source. The glob also
+# keeps ruff off the scratch files an agent wrote during a run.
+coding-eval-run*/

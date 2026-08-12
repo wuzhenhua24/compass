@@ -22,7 +22,27 @@ agent:
   config:
     repo: "{{REPO}}"           # ← 你的项目；run.py 会填
     permission_mode: acceptEdits
-    allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash(python:*)"]
+    # `Bash(python:*)` alone is a trap: agents overwhelmingly reach for
+    # `python3`, and `python:*` does not match it. In the first 10-case run
+    # that one gap produced permission denials in **16 of 20 runs** — and it
+    # does not fail loudly, it just truncates. Sonnet ended one case with
+    # "I need your approval to run the test suite", which the judge then
+    # correctly scored 0 for surfacing no assumptions. That 0 was about the
+    # allowlist, not about Sonnet.
+    #
+    # `cat` is here because agents write scratch repro scripts with heredocs.
+    # Whatever you allow, read the run's `permission_denials` afterwards: a
+    # blocked tool call is a truncated run wearing the costume of a bad one.
+    allowed_tools:
+      - "Read"
+      - "Grep"
+      - "Glob"
+      - "Edit"
+      - "Write"
+      - "Bash(python:*)"
+      - "Bash(python3:*)"
+      - "Bash(cat:*)"
+      - "Bash(find:*)"
     max_turns: 40
     timeout: 900
     # 原始 stream-json 落盘。一次真实运行很贵，而 importer 只映射它认识的事件
@@ -329,7 +349,7 @@ cases:
   #     发言里说清它按哪种读法实现、为什么。非交互模式下它问不了人，所以评的
   #     是**有没有暴露假设**，不是有没有回去追问。
   #
-  # rubric **不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。
+  # 这个判官**不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。
   # 它进加权分，而要单独看它就用它的 label：
   #
   #     compass compare a.json b.json --on surfaces_assumption
@@ -358,12 +378,14 @@ cases:
          config: {script: "python -m pytest tests/ -q",
                   workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
       - {name: diff_size, type: code, config: {max_total_changes: 50}}
-      - name: rubric
-        type: model
+      - name: external_checker
+        type: code
         label: surfaces_assumption
         weight: 3.0
         config:
-          source: text_artifact
+          command: ["{{JUDGE}}"]
+          judge_model: sonnet
+          timeout: 300
           criteria:
             - name: names_the_gap
               weight: 3.0
@@ -432,22 +454,29 @@ cases:
       # 「有没有把理由说清楚」——非交互模式下 agent 问不了人，所以评的是
       # 有没有把结论和依据摆出来，不是有没有回去追问。
       #
-      # model grader：要 API key，每条用例多一次 LLM 调用。
+      # 「有没有把理由说清楚」——用 claude CLI 判，不是内置的 rubric grader。
+      #
+      # **内置 model grader 一律走 provider SDK，SDK 要 API key。** Claude 订阅
+      # 认证的是 CLI 不是 SDK，所以订阅场景下唯一能用的判官是 `claude -p`。
+      # 第一版这里配的是 rubric 且没写 provider，默认走 OpenAI——真跑那一轮四次
+      # 判断全部死在 "openai package required"，还连累两条用例判负。
+      #
       # 不设 gate——判断本身有噪声，不该由它决定一条用例的成败；它进加权分，
       # 要单独看就 `compass compare … --on explains_the_verdict`。
       #
-      # label 不只是为了消歧：`rubric` 是注册名，套件里另一条用例
-      # （ambiguous_no_stacking）也用 rubric，量的却是完全不同的东西。
-      # 按 name 选会把两个不同的度量混成一个轴。
+      # 判官模型写死在配置里，**不跟被测模型走**：每条臂用自己的模型判，
+      # 比的就成了判官而不是 agent。
       #
-      # source: text_artifact 读的是 agent 的收尾发言（claude_code adapter
-      # 现在会把它作为 TextArtifact 单独带出来）。
-      - name: rubric
-        type: model
+      # 注意：external_checker 需要 grade workspace，也就是跑的时候要带
+      # `--trace-dir`（run.py 一直带）。没有的话它会判为 unscored。
+      - name: external_checker
+        type: code
         label: explains_the_verdict
         weight: 2.0
         config:
-          source: text_artifact
+          command: ["{{JUDGE}}"]
+          judge_model: sonnet
+          timeout: 300
           criteria:
             - name: verdict
               weight: 2.0

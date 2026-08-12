@@ -345,6 +345,54 @@ class TestHarnessFailures:
         assert result.passed is False
         assert "checker_timeout" in result.failure_tags
 
+    async def test_a_checker_can_declare_it_could_not_measure(self, tmp_path):
+        """The distinction `score is None` exists for, extended to checkers.
+
+        An LLM-judge checker whose model is unreachable has failed at *its*
+        job. Without a way to say so it exits non-zero and scores 0.0, which
+        reads as "the agent did badly" — evidence about the agent invented out
+        of a harness failure.
+        """
+        checker = _script(
+            tmp_path, "cannot_judge",
+            "import json,sys\n"
+            "print(json.dumps({'unscored': True, 'notes': 'judge unreachable'}))\n"
+            "sys.exit(1)\n",
+        )
+        result = await _grade({"command": str(checker)}, tmp_path / "ws")
+
+        assert result.score is None, "a declared non-measurement scored the agent"
+        assert result.passed is False
+        assert "checker_unavailable" in result.failure_tags
+        assert "judge unreachable" in (result.error or "")
+
+    async def test_a_declared_non_measurement_beats_a_score_in_the_same_payload(
+        self, tmp_path
+    ):
+        """Claiming both a measurement and its absence is a checker bug. The
+        safe reading is the one that does not invent evidence."""
+        checker = _script(
+            tmp_path, "confused",
+            "import json\n"
+            "print(json.dumps({'unscored': True, 'score': 1.0}))\n",
+        )
+        result = await _grade({"command": str(checker)}, tmp_path / "ws")
+
+        assert result.score is None
+        assert result.passed is False
+
+    async def test_unscored_false_is_an_ordinary_verdict(self, tmp_path):
+        """Only the literal `true` opts in — otherwise every checker that
+        happens to emit the key gets silently excluded from scoring."""
+        checker = _script(
+            tmp_path, "fine",
+            "import json; print(json.dumps({'unscored': False, 'score': 0.5}))\n",
+        )
+        result = await _grade({"command": str(checker)}, tmp_path / "ws")
+
+        assert result.score == 0.5
+        assert result.passed is True
+
     async def test_no_workspace_is_reported_not_crashed(self):
         transcript = Transcript(task_id="t", trial_id="t1")
         context = GradeContext(prompt="x", transcript=transcript, outcome=Outcome())

@@ -62,6 +62,7 @@ def resolve_suite(repo: Path, out: Path, *, trials: int | None) -> Path:
         raw.replace("{{REPO}}", str(repo.resolve()))
         .replace("{{GRADERS}}", str((_HERE / "grader_tests").resolve()))
         .replace("{{STREAMS}}", str((out / "streams").resolve()))
+        .replace("{{JUDGE}}", str((_HERE / "judge_cli.py").resolve()))
     )
     if trials is not None:
         raw = raw.replace("  trials: 1\n", f"  trials: {trials}\n", 1)

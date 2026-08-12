@@ -369,9 +369,25 @@ pass/fail、它的翻转。5/8 与 8/8 的差值这才进得了统计，而 pass
 compass compare a.json b.json --on surfaces_assumption
 ```
 
-rubric **不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。它进加权分，
+判官**不设 gate**：LLM 判断本身有噪声，不该由它决定一条用例的成败。它进加权分，
 真要看就用 `--on` 单独把它拎出来。这也是 `label:` 除了消歧之外的第二个用处——
-给一个 grader 起个"它到底在量什么"的名字，比 `rubric` 这个注册名有用得多。
+给一个 grader 起个"它到底在量什么"的名字，比注册名有用得多。
+
+**判官走 `claude` CLI，不是内置的 `rubric` grader。** 内置 model grader 一律走
+provider SDK，而 SDK 要 API key——Claude 订阅认证的是 CLI，不是 SDK。所以订阅场景下
+唯一能用的判官是 `claude -p`，接法是 `external_checker` + [`judge_cli.py`](judge_cli.py)。
+
+第一版这里配的是 `rubric` 且没写 `provider`，默认值是 `openai`：真跑那一轮四次判断
+全部死在 "openai package required"，还连累两条用例判负。三个后来加上的护栏：
+
+| 护栏 | 防的是什么 |
+|---|---|
+| 判官失败输出 `{"unscored": true}` | 判官挂了 ≠ agent 得 0 分。前者要排除出分母，后者是证据 |
+| 判官模型写死在配置里 | 每条臂用自己的模型判，比的就成了判官不是 agent |
+| `--tools ""` | 判官拿到 Read 就会跑去翻仓库——那是在评 diff，不是评它该评的那段话 |
+
+判官提示词里那句"论证得再清楚，结论相反就是 0 分"也是踩出来的：第一版把 Haiku
+那条**自信但完全错误**的分析判了 0.8。奖励流畅度是 LLM 判官最坏的失效模式。
 
 ### 然后就是普通的多变体运行
 

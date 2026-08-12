@@ -41,9 +41,21 @@ check that fails without emitting a score leaves the grade *unscored*. Compass
 gives "unscored" a stronger meaning — it is excluded from the score denominator
 **and** fails the case, because it means "we could not measure this". A checker
 exiting non-zero is a measurement ("this check failed"), so it scores 0.0.
-``score=None`` is reserved for the cases where Compass genuinely learned
-nothing: the program is missing or not executable, it timed out, or a signal
-killed it.
+``score=None`` is otherwise reserved for the cases where Compass genuinely
+learned nothing: the program is missing or not executable, it timed out, or a
+signal killed it.
+
+A checker that knows it could not measure says so explicitly::
+
+    {"unscored": true, "notes": "judge model unreachable"}
+
+Without that, a checker whose *own* dependency failed has no way to distinguish
+itself from a checker reporting that the agent did badly — it would exit
+non-zero and score 0.0, which reads as evidence about the agent. That
+distinction is the whole reason ``score is None`` exists, so the checker gets
+to draw it too. ``score`` in the same payload is ignored: claiming both a
+measurement and the absence of one is a bug in the checker, and the safe
+reading is the one that does not invent evidence.
 
 Security: this executes whatever the scenario names, exactly like a Python
 grader module does. Treat scenario files as trusted input.
@@ -75,7 +87,7 @@ DEFAULT_TIMEOUT = 60.0
 
 #: Keys the checker owns at the top level of its JSON output. Everything else
 #: is folded into ``details`` so a checker can never clobber a core field.
-_RESULT_KEYS = {"score", "passed", "tags", "metrics", "notes", "details"}
+_RESULT_KEYS = {"score", "passed", "unscored", "tags", "metrics", "notes", "details"}
 
 
 @register_grader("external_checker")
@@ -268,6 +280,17 @@ class ExternalCheckerGrader(CodeGrader):
         info = _parse_output(stdout)
         passed = code == 0
 
+        # The checker declaring it could not measure. Checked before the exit
+        # code, because a checker in this state has usually exited non-zero
+        # too, and that exit is about its own failure rather than the agent's.
+        if info.get("unscored"):
+            return self._fail(
+                str(info.get("notes") or "checker reported it could not measure"),
+                unscored=True,
+                tag="checker_unavailable",
+                details={**dict(info.get("details") or {}), "exit_code": code},
+            )
+
         score = info.get("score")
         if score is None:
             # No explicit measurement: the exit code is the measurement.
@@ -389,6 +412,8 @@ def _parse_output(stdout: str) -> dict[str, Any]:
         result["tags"] = [str(t) for t in data["tags"]]
     if data.get("notes"):
         result["notes"] = str(data["notes"])
+    if data.get("unscored") is True:
+        result["unscored"] = True
 
     raw_details = data.get("details")
     details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}

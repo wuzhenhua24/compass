@@ -277,6 +277,19 @@ class TestSuiteShape:
             assert any("{{GRADERS}}" in s for s in scripts), case["id"]
             assert any("pytest tests/" in s for s in scripts), case["id"]
 
+    def test_the_allowlist_covers_the_interpreter_agents_actually_call(self):
+        """`Bash(python:*)` does not match `python3`, and agents reach for
+        `python3`. In the first 10-case run that gap denied a tool call in 16
+        of 20 runs, and a denial does not fail loudly — it truncates. One
+        Sonnet run ended with "I need your approval to run the test suite" and
+        was scored 0 for surfacing no assumptions, which measured the allowlist
+        rather than the model."""
+        allowed = _suite()["agent"]["config"]["allowed_tools"]
+        for interpreter in ("python:*", "python3:*"):
+            assert f"Bash({interpreter})" in allowed, (
+                f"Bash({interpreter}) missing — runs will truncate silently"
+            )
+
     def test_no_case_has_two_graders_under_the_same_key(self):
         """`label or name` has to be unique within a case, or the grader is
         unreachable: `--on <key>` refuses an ambiguous match, and `breakdown`
@@ -306,7 +319,10 @@ class TestSuiteShape:
         it surface its assumption'), and averaging them is meaningless.
         """
         # Per grader name, the config key that decides what is being measured.
-        DEFINES_THE_MEASUREMENT = {"rubric": "criteria", "integration_test": "script"}
+        DEFINES_THE_MEASUREMENT = {
+            "external_checker": "criteria",
+            "integration_test": "script",
+        }
 
         by_name: dict[str, list[tuple[str, str, str]]] = {}
         for case in _live_cases():
