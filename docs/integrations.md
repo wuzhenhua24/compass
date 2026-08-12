@@ -455,23 +455,49 @@ agent:
 
 [`examples/coding_agent/crossstack.codex.yaml`](../examples/coding_agent/crossstack.codex.yaml) 是配好的可跑模板，和 `crossstack.claude.yaml` / `crossstack.pi.yaml` **从 `defaults:` 到文件末尾逐字相同**（`compass compare` 会比 `grader_fingerprint`，两侧不同就明确警告"差异不能归因于 agent"；`tests/test_coding_agent_example.py::TestCrossStackSuitesShareOneContract` 钉住这条不变量）。
 
-真跑了一次 A/B——两条 case × 每侧 1 trial，**是冒烟不是结论**（n=2 的排名是噪声，下判断请上 `--trials 3` 以上）：
+真跑了一次 A/B——三条 case × 每侧 3 trials，每侧 9 次运行：
 
-| | 隐藏验收测试 | 仓库回归 | `state_delta` | 成本 | 工具调用 |
-|---|---|---|---|---|---|
-| codex + gpt-5.4-mini | **2/2 过** | 全绿 | **2/2 都改了 `tests/`** | $0.0088 / $0.0126 | 9 / 13 |
-| pi + gemini-2.5-flash | 1/2 过 | 全绿 | 干净 | $0.0080 / $0.0021 | 7 / 5 |
+| | 隐藏验收测试 | 仓库回归 | 改了 `tests/` | `state_delta` gate | case 通过 | trial 通过 |
+|---|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | **9/9 trials** | **0/9** | **0/3** | 0/9 |
+| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 5/9 trials | 4/9 | 1/3 | 4/9 |
 
-结果侧看 codex 赢（正确性 2/2），但它**每一条都顺手改了仓库自带的测试**，两条 case 因此都被 `state_delta` 这道 gate 判 failed。和 pi 那次 gemini-3.6-flash 是同一个故事，换了个栈又发生一遍：只有 pass/fail 的评测会把这次运行记成满分。
+**正确性上两边完全打平**——`compare --on correctness` 的原话是 `no disagreement on 3 paired case(s): pass-rate diff +0.0%`。两个栈都能把这三条需求的隐藏验收测试跑绿，9/9 次。全部差异在过程侧。
 
-`compass compare` 接着把"赢"这件事按住不放：
+**唯一显著的差异是那道完整性 gate**：
 
 ```
-Pass rate (correctness)   A 100.0%   B 50.0%   Diff -50.0%   95% CI [-148.0%, +48.0%]
-Verdict: within noise band — detectable at n=2: ~140.0%
+Pass rate (state_delta)   A 0.0%   B 44.4%   Diff +44.4%   95% CI [+22.7%, +66.2%]
+Verdict: significant pass-rate improvement
 ```
 
-两条 case 什么都证明不了，工具直接这么说——这正是它该说的话。成本那条（`--metric cost_usd`：$0.0107 vs $0.00506）同样落在噪声带里。
+codex **九次全部**都去改了仓库自带的测试（`fix_rounding` / `add_discount` 改 `tests/test_pricing.py`，`bug_locate_promo_boundary` 改 `tests/test_orders.py`）——不是偶发，是它在这套 suite 上的稳定行为。只有 pass/fail 的评测会把这 9 次运行全记成满分。
+
+**3 trials 才看得见的那一层**：pi 每条 case 都是 `pass@3 = 1.0` 而 `pass^3 = 0.0`——三次里总能成一次，一次也没能三次全成。codex 是 `pass@3 = 0.0`：不是不会做，是每次都撞在同一道 gate 上。
+
+**先跑 n=1 会得出一半是噪声的结论。** 同一组配置跑两条 case × 1 trial 时，pi 的 `state_delta` 全干净、codex 全脏，看着像栈的分野；跑到 9 次才发现 pi 也会改测试（5/9），只是频率低。那次 compare 的 verdict 正是 `within noise band — detectable at n=2: ~140.0%`，它当时就说清楚了这个样本撑不起判断。
+
+**最后一行数字不能信，而且恰好是上面第 2 点那个坑。** `compass site compare` 的过程指标表里：
+
+```
+turns       A 1.00   B 8.22   +7.22   [+5.70, +8.75]  95% CI excludes 0
+tool_calls  A 12.78  B 15.44  +2.67   [+0.03, +5.31]  95% CI excludes 0
+cost_usd    A 0.0115 B 0.0121 +0.0006 [-0.0022, +0.0033]  within noise
+```
+
+`turns` 统计上"显著"，但它测的不是效率：A 恒等于 1.00，因为 codex 只有一轮。可比的是 `tool_calls`（codex 略少）。成本两边都约 1.2 分/条，落在噪声带里。
+
+发布成站点看这份对比：
+
+```bash
+compass site build results.gpt-5.4-mini.json -o site/ --slug codex --trace-dir traces/gpt-5.4-mini
+compass site build results.google-gemini-2.5-flash.json -o site/ --slug pi --trace-dir traces/google-gemini-2.5-flash
+compass site compare results.gpt-5.4-mini.json results.google-gemini-2.5-flash.json -o site/ \
+    --slug codex-vs-pi --label-a "codex + gpt-5.4-mini" --label-b "pi + gemini-2.5-flash"
+python -m http.server -d site/
+```
+
+那个页面上**要读的是逐 grader 那张表，不是顶上的总分**——它自己在页脚写明了原因：gate 分按设计不进 case 分，而这套 suite 的正确性正是由 gate 判的，所以总分那一栏度量的是过程代价，correctness 只在逐 grader 表里出现。
 
 ## Environment Adapter（环境即代码）
 

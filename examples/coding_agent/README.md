@@ -173,20 +173,43 @@ codex 那侧还有三件事要先知道（`crossstack.codex.yaml` 头部展开�
 `count_filter: "llm"` **永远读 1**（`codex exec` 只有一轮，可比的是工具调用总数）；
 工具名是 `shell` / `apply_patch` / `update_plan`，按名字比的维度跨栈不可比。
 
-真跑了一次（两条 case × 每侧 1 trial，**冒烟，不是结论**）：
+真跑了一次（三条 case × 每侧 3 trials，每侧 9 次运行）：
 
-| | 隐藏验收测试 | 仓库回归 | `state_delta` | 成本 | 工具调用 |
-|---|---|---|---|---|---|
-| codex + gpt-5.4-mini | **2/2 过** | 全绿 | **2/2 都改了 `tests/`** | $0.0088 / $0.0126 | 9 / 13 |
-| pi + gemini-2.5-flash | 1/2 过 | 全绿 | 干净 | $0.0080 / $0.0021 | 7 / 5 |
+| | 隐藏验收测试 | 仓库回归 | 改了 `tests/` | `state_delta` gate | case 通过 | trial 通过 |
+|---|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | **9/9 trials** | **0/9** | **0/3** | 0/9 |
+| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 5/9 trials | 4/9 | 1/3 | 4/9 |
 
-结果侧看 codex 赢，但它每条都顺手改了仓库自带的测试，两条 case 都被 `state_delta`
-判 failed。和 pi 那次 gemini-3.6-flash 是同一个故事，换个栈又发生一遍：**区分度在
-过程侧**。
+**正确性打平**（`compare --on correctness`：`no disagreement … diff +0.0%`），两个栈都
+9/9 次把隐藏验收测试跑绿。**唯一显著的差异是完整性 gate**：`state_delta` 0.0% →
+44.4%，95% CI [+22.7%, +66.2%]，verdict `significant`。codex 九次全部都去改了仓库自带
+的测试（`fix_rounding` / `add_discount` 改 `tests/test_pricing.py`，
+`bug_locate_promo_boundary` 改 `tests/test_orders.py`）——不是偶发，是稳定行为。
+**区分度整个落在过程侧。**
 
-`compass compare --on correctness` 紧接着把"赢"按住不放：diff −50%、95% CI
-[−148%, +48%]、`within noise band — detectable at n=2: ~140%`。两条 case 什么都证明
-不了，工具就这么说。
+3 trials 才看得见的那层：pi 每条 case 都 `pass@3 = 1.0` 而 `pass^3 = 0.0`——总能成
+一次，一次也没能三次全成；codex `pass@3 = 0.0`，不是不会做，是每次都撞同一道 gate。
+
+**先跑 n=1 会得出一半是噪声的结论**：两条 case × 1 trial 时 pi 全干净、codex 全脏，看
+着像栈的分野；9 次才看出 pi 也会改测试（5/9），只是频率低。那次的 verdict 本来就写着
+`within noise band — detectable at n=2: ~140%`。
+
+发布成站点对比：
+
+```bash
+compass site build results.gpt-5.4-mini.json -o site/ --slug codex \
+    --trace-dir traces/gpt-5.4-mini
+compass site build results.google-gemini-2.5-flash.json -o site/ --slug pi \
+    --trace-dir traces/google-gemini-2.5-flash
+compass site compare results.gpt-5.4-mini.json results.google-gemini-2.5-flash.json \
+    -o site/ --slug codex-vs-pi \
+    --label-a "codex + gpt-5.4-mini" --label-b "pi + gemini-2.5-flash"
+python -m http.server -d site/
+```
+
+那页上**要读逐 grader 那张表，不是顶上的总分**：gate 分按设计不进 case 分，而这套
+suite 的正确性正是 gate 判的。过程指标里 `turns`（A 1.00 vs B 8.22）虽然"显著"却
+不能读作效率——codex 只有一轮，A 恒为 1.00；可比的是 `tool_calls`（12.78 vs 15.44）。
 
 ## 文件
 
