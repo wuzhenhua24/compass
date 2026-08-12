@@ -6,6 +6,7 @@ from separate repositories into one directory without a server.
 """
 
 import json
+import re
 
 import pytest
 from click.testing import CliRunner
@@ -629,6 +630,78 @@ class TestViewer:
         """The page refuses data it cannot read — that check is worthless if
         the constant drifts."""
         assert f'SCHEMA = "{SCHEMA}"' in app_html()
+
+
+class TestViewerLanguages:
+    """The viewer ships two languages and a switch between them.
+
+    English is the fallback, which is exactly why a missing translation is
+    dangerous: the page keeps working and quietly serves English into a Chinese
+    reading of the same table. Nothing else would notice, so this does.
+    """
+
+    @staticmethod
+    def _catalogue(lang: str) -> dict[str, str]:
+        """Top-level keys of one MESSAGES catalogue, by brace matching."""
+        html = app_html()
+        start = html.index(f"\n  {lang}: {{")
+        depth, i = 0, html.index("{", start)
+        for j in range(i, len(html)):
+            if html[j] == "{":
+                depth += 1
+            elif html[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        block = html[i : j + 1]
+        return {
+            m.group(1): m.group(2)
+            for m in re.finditer(r"^    ([a-z_0-9]+):\s*(.*)$", block, re.M)
+        }
+
+    def test_both_catalogues_are_present(self):
+        assert len(self._catalogue("en")) > 40
+        assert len(self._catalogue("zh")) > 40
+
+    def test_every_english_string_has_a_chinese_one(self):
+        en, zh = self._catalogue("en"), self._catalogue("zh")
+
+        missing = sorted(set(en) - set(zh))
+        assert not missing, (
+            "these UI strings would silently render in English for a Chinese "
+            f"reader: {missing}"
+        )
+
+    def test_no_chinese_string_is_orphaned(self):
+        """A key only in `zh` is dead weight — nothing looks it up, and English
+        would fall through to the key name if anything ever did."""
+        en, zh = self._catalogue("en"), self._catalogue("zh")
+
+        orphans = sorted(set(zh) - set(en))
+        assert not orphans, f"translated keys with no English original: {orphans}"
+
+    def test_a_sentence_is_a_function_in_both_languages(self):
+        """Sentences with values interpolate through a per-language function so
+        each keeps its own word order. If one side is a bare string and the
+        other a function, the vars are dropped on one of them."""
+        en, zh = self._catalogue("en"), self._catalogue("zh")
+
+        mismatched = sorted(
+            key
+            for key in set(en) & set(zh)
+            if en[key].startswith("(v)") != zh[key].startswith("(v)")
+        )
+        assert not mismatched, (
+            f"these keys take vars in one language but not the other: {mismatched}"
+        )
+
+    def test_the_switch_and_its_persistence_are_wired(self):
+        html = app_html()
+
+        assert 'LANGS = [["en", "EN"], ["zh", "中文"]]' in html
+        assert 'LANG_KEY = "compass.lang"' in html      # remembered per reader
+        assert "navigator.language" in html             # first visit follows the browser
+        assert 'id="langs"' in html
 
 
 # ------------------------------------------------------------------

@@ -140,7 +140,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass grade <traces> -s <scenario.yaml>` | **离线评分**：给已落盘的轨迹打分，不重跑 Agent（`-n` grade set / `--regrade`） |
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
 | `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE；`--on <grader>` 按某个 grader 的分比，`--metric <name>` 比轮次/成本/工具调用这类过程量 |
-| `compass site build <results>` | 把结果发布成可分享的静态站；多个仓库可 build 进同一个目录，索引自动累积 |
+| `compass site build <results>` | 把结果发布成可分享的静态站（界面 EN/中文可切换）；多个仓库可 build 进同一个目录，索引自动累积 |
 | `compass site compare <a> <b>` | 把两次运行的**配对比较**发布进同一个站点：总体 + 逐 grader + 过程指标，并标出判分契约不同、差异不可归因的 case |
 | `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |

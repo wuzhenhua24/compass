@@ -431,6 +431,12 @@ site/
 
 **跨 slug 不排名**。A 项目和 B 项目的 case 不同，把它们的分数放进一张榜是误导，所以总览页只并列展示。要比大小，用下面的 `compass site compare` 对同一批 case 做配对检验。
 
+**双语界面（EN / 中文）**：页面右上角有一个语言开关。首次打开跟随浏览器语言（`navigator.language` 是 `zh*` 就用中文），之后按 `localStorage` 里的选择走；切换只重渲染内存里已有的数据——**不重新请求，也不会丢掉筛选条件和展开的行**。
+
+界面文案有两套目录，英文是 fallback。`tests/test_site_build.py::TestViewerLanguages` 钉住三条不变量：每个英文 key 都必须有中文对应（少一个不会报错，只会**静悄悄**给中文读者看英文）、不许有没人用的孤儿 key、带变量的句子必须两边都是函数（一边写成裸字符串就会把变量丢掉）。
+
+**数据永远不翻译**：case id、grader 名、场景名、标签、以及 analyzer 自己生成的散文，都保持运行时记录的原样。唯一的例外是**对比页顶上那句判词**——它是 `compare.py` 写好的英文散文，所以中文界面下由页面**用同一批结构化统计量（`pass_stats` / `score_stats` / n）重新组句**，分支顺序照抄 `ComparisonReport.verdict`；英文界面一律直接用 analyzer 的原句，因此不可能漂移，页面认不出的分支也会退回原句。
+
 ### 把配对比较也发布出去（`compass site compare`）
 
 `compass compare` 一次只回答一个问题（总分、或某个 grader、或某个指标），结果打在终端里。页面有地方一次放下全部，而这正是读者要的——**B 做得更对吗，代价是多少**：

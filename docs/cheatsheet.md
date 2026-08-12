@@ -264,7 +264,7 @@ compass analyze results.json                 # 分维度诊断 + 观察标签分
 compass compare a.json b.json                # 配对比较：翻转 + 95% CI + MDE
 compass compare a.json b.json --on correctness  # 只比某个 grader 的分（gate 分不进 overall_score）
 compass compare a.json b.json --metric turns    # 比过程量：turns/cost_usd/tool_calls/calls_<tool>
-compass site build results.json -o site/     # 发布静态站（细节默认脱敏，轨迹需显式 --trace-dir）
+compass site build results.json -o site/     # 发布静态站（细节默认脱敏，轨迹需显式 --trace-dir；界面右上角 EN/中文切换）
 compass site compare a.json b.json -o site/   # 把配对比较也发布进站点（逐 grader + 过程指标）
 compass site serve results.json              # 本地实时看：每请求现算，跑到一半也能看
 compass trace traces/case.json --steps       # 看轨迹

@@ -23,6 +23,19 @@
   header .crumb { opacity: .9; font-size: .9rem; margin-bottom: 8px; }
   header .crumb a { color: white; text-decoration: underline; }
   header .live { margin-left: 6px; color: #86efac; font-weight: 500; }
+  header .container { display: flex; align-items: flex-start; gap: 16px; }
+  header .heading { flex: 1; min-width: 0; }
+
+  .langs { display: flex; gap: 0; flex: none; margin-top: 2px; }
+  .langs button {
+    font: inherit; font-size: .82rem; line-height: 1; cursor: pointer;
+    padding: 6px 11px; color: white; background: rgba(255,255,255,.12);
+    border: 1px solid rgba(255,255,255,.35); border-right-width: 0;
+  }
+  .langs button:first-child { border-radius: 6px 0 0 6px; }
+  .langs button:last-child { border-radius: 0 6px 6px 0; border-right-width: 1px; }
+  .langs button:hover { background: rgba(255,255,255,.22); }
+  .langs button.on { background: white; color: #4c51bf; font-weight: 600; }
 
   .card {
     background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1);
@@ -82,12 +95,15 @@
 <body>
 <header>
   <div class="container">
-    <div class="crumb" id="crumb"></div>
-    <h1 id="title">Compass</h1>
-    <div class="timestamp" id="subtitle"></div>
+    <div class="heading">
+      <div class="crumb" id="crumb"></div>
+      <h1 id="title">Compass</h1>
+      <div class="timestamp" id="subtitle"></div>
+    </div>
+    <div class="langs" id="langs"></div>
   </div>
 </header>
-<div class="container" id="view"><div class="empty">Loading…</div></div>
+<div class="container" id="view"><div class="empty">…</div></div>
 
 <script>
 "use strict";
@@ -109,13 +125,357 @@ const num = (x) => Number(x || 0).toFixed(2);
 const grade = (x) => (x >= 0.7 ? "good" : x >= 0.4 ? "medium" : "poor");
 const plural = (n, one) => n + " " + one + (n === 1 ? "" : "s");
 
+// ---------- language ----------
+//
+// Two catalogues, one per language. A value is either a plain string (a label)
+// or a function of the interpolation vars (a sentence, so each language keeps
+// its own word order and its own plural rules instead of being assembled from
+// fragments). English is the fallback: a key missing from `zh` falls through to
+// it, and a key missing from both renders as itself so it cannot hide.
+//
+// Data is never translated — case ids, grader names, scenario names, tags and
+// the analyzer's own prose stay exactly as the run recorded them.
+const MESSAGES = {
+  en: {
+    loading: "Loading…",
+    loading_slug: (v) => `Loading ${v.slug}…`,
+    all_runs: "All runs",
+    back_to_runs: "Back to all runs",
+    live: "live",
+    live_title: "re-reading from disk",
+    lang_label: "Language",
+
+    // index
+    runs_built: (v) => `${plural(v.n, "run")} · built ${v.when}`,
+    no_runs: "No runs yet. Publish one with",
+    th_run: "Run",
+    th_pass_rate: "Pass Rate",
+    th_trend: "Trend",
+    th_passed: "Passed",
+    th_errors: "Errors",
+    th_avg_score: "Avg Score",
+    th_scopes: "Scopes",
+    th_updated: "Updated",
+    trend_alt: "pass rate trend",
+    index_note: "Each run is published independently — several repositories can build into this "
+      + "same directory and the list accumulates. Pass rates are over evaluated cases; harness "
+      + "errors are counted apart.",
+
+    // comparisons index
+    th_comparison: "Comparison",
+    th_pass_rate_ab: "Pass Rate A → B",
+    th_paired: "Paired",
+    th_flips: "Flips",
+    th_score_delta: "Score Δ",
+    th_regraded: "Regraded",
+    comparisons_note: (v) => `A comparison pairs two runs by case id. <strong>${v.regraded}</strong> `
+      + "counts cases the two runs graded under different contracts — their difference is not "
+      + "attributable to the agent.",
+    regraded_word: "Regraded",
+
+    // comparison view
+    // Set with textContent, so the labels must not be escaped here.
+    paired_cases: (v) => `${v.a} → ${v.b} · ${plural(v.n, "paired case")}`,
+    not_attributable: (v) => "<strong>Not attributable to the agent.</strong> "
+      + `${plural(v.n, "case")} were graded under a different contract in B than in A: ${v.ids}.`,
+    card_pass_rate: (v) => `${esc(v.label)} pass rate`,
+    card_fixed_by_b: "fixed by B",
+    card_broken_by_b: "broken by B",
+    card_both: "both pass / both fail",
+    th_grader: "Grader",
+    th_difference: "Difference (B − A)",
+    gate_note: "Gate scores are excluded from the case score by design, so correctness only "
+      + "shows up here — per grader.",
+    th_process_metric: "Process metric",
+    th_trials: "Trials",
+    metrics_note: (v) => "No pass/fail on a metric, and on most of these a <strong>negative</strong> "
+      + `difference is the better run. <strong>${v.sampled}</strong> marks cases where this metric `
+      + "came from one trial rather than the mean over them.",
+    sampled: (v) => `${v.n} sampled`,
+    sampled_word: "Sampled",
+    not_compared: "Not compared:",
+    not_measured: "not measured",
+    no_spread: "every pair moved alike — no spread to estimate from",
+    ci_excludes_zero: "95% CI excludes 0",
+    within_noise: (v) => `within noise · MDE ${v.mde}`,
+
+    // verdicts, recomposed from the same stats the analyzer used
+    verdict_significant: (v) => `significant pass-rate ${v.direction > 0 ? "improvement" : "regression"}: `
+      + `${v.diff} (95% CI [${v.low}, ${v.high}])`,
+    verdict_score_significant: (v) => "pass rate within noise band, but significant score "
+      + `${v.direction > 0 ? "improvement" : "regression"}: ${v.diff} (95% CI [${v.low}, ${v.high}])`,
+    verdict_no_spread: (v) => `no disagreement on ${v.n} paired case(s): pass-rate diff ${v.diff}, `
+      + "and with zero spread the resolution cannot be estimated from this sample — add cases "
+      + "that the two runs might answer differently",
+    verdict_noise: (v) => `within noise band: pass-rate diff ${v.diff} (95% CI [${v.low}, ${v.high}]); `
+      + `detectable at n=${v.n}: ~${v.mde}`,
+    verdict_none: "no paired cases — nothing to compare",
+
+    // run view
+    run_subtitle: (v) => `${plural(v.scenarios, "scenario")} · ${plural(v.cases, "case")} · `
+      + `${v.duration} · ${v.when}`,
+    card_scenarios: "Scenarios",
+    card_failed: "Failed",
+    pass_rate_evaluated: (v) => `Pass Rate (${v.n} evaluated)`,
+    details_redacted: (v) => "Grader details were left out of this build. Rebuild with "
+      + `<code>${v.flag}</code> to publish them.`,
+    trend_title: (v) => `Pass rate over ${plural(v.n, "build")}`,
+    trend_stale: (v) => `${v.n} earlier build(s) were graded under a different contract, so the `
+      + "line breaks there. Scores are only comparable within one contract — use "
+      + `<code>${v.cmd}</code> for a proper before/after.`,
+    trend_point: (v) => `${v.when}: ${v.rate} (${v.passed}/${v.total})`,
+    other_contract: " — graded under a different contract",
+    scatter_title: "Outcome vs Transcript",
+    axis_outcome: "Outcome Score",
+    axis_transcript: "Transcript Score",
+    scatter_point: (v) => `${v.id}: outcome=${v.outcome}, transcript=${v.transcript}`,
+    category_title: "Category Breakdown",
+    th_category: "Category",
+    th_total: "Total",
+    cases_title: "Cases",
+    filter_placeholder: "Filter by case id or scenario…",
+    all_statuses: "All statuses",
+    all_categories: "All categories",
+    all_tags: "All tags",
+    shown_of: (v) => `${v.shown} of ${v.total}`,
+    no_matches: "Nothing matches these filters.",
+    th_case: "Case",
+    th_scenario: "Scenario",
+    th_status: "Status",
+    th_score: "Score",
+    th_duration: "Duration",
+    th_tags: "Tags",
+    status_passed: "passed",
+    status_failed: "failed",
+    status_error: "error",
+
+    // case detail
+    meta_trials: (v) => `Trials: ${v.passed}/${v.total}`,
+    meta_best: (v) => `Best: ${v.score}`,
+    meta_harness_errors: (v) => `Harness errors: ${v.n}`,
+    meta_duration: (v) => `Duration: ${v.value}`,
+    meta_outcome: (v) => `Outcome: ${v.score}`,
+    meta_transcript: (v) => `Transcript: ${v.score}`,
+    meta_contract: (v) => `Contract: ${v.hash}`,
+    h_error: "Error",
+    h_graders: "Graders",
+    h_trial_metrics: "Trial metrics",
+    h_trace: "Trace",
+    no_graders: "No graders ran.",
+    th_scope: "Scope",
+    th_type: "Type",
+    th_weight: "Weight",
+    th_result: "Result",
+    th_observed: "Observed",
+    unscored: "unscored",
+    result_pass: "pass",
+    result_fail: "fail",
+    result_skipped: "skipped",
+
+    // errors
+    schema_mismatch: (v) => `This page reads <code>${v.expected}</code> but the data says `
+      + `<code>${v.found}</code>. Rebuild the site, or read the JSON directly — what is shown `
+      + "below may be wrong.",
+    index_unreadable: (v) => `Could not read <code>index.json</code>: ${v.error}. A browser will `
+      + `not fetch from <code>file://</code> — serve the directory over HTTP (<code>${v.cmd}</code>) `
+      + "or open the published URL.",
+    no_such_comparison: (v) => `No such comparison: <code>${v.slug}</code> (${v.error}).`,
+    no_such_run: (v) => `No such run: <code>${v.slug}</code> (${v.error}).`,
+  },
+
+  zh: {
+    loading: "加载中…",
+    loading_slug: (v) => `正在加载 ${v.slug}…`,
+    all_runs: "全部运行",
+    back_to_runs: "返回全部运行",
+    live: "实时",
+    live_title: "每次请求都从磁盘重新读取",
+    lang_label: "语言",
+
+    // index
+    runs_built: (v) => `${v.n} 次运行 · 构建于 ${v.when}`,
+    no_runs: "还没有运行记录。用这条命令发布一次：",
+    th_run: "运行",
+    th_pass_rate: "通过率",
+    th_trend: "趋势",
+    th_passed: "通过",
+    th_errors: "错误",
+    th_avg_score: "平均分",
+    th_scopes: "评分范围",
+    th_updated: "更新时间",
+    trend_alt: "通过率趋势",
+    index_note: "每次运行各自独立发布——多个仓库可以构建进同一个目录，列表会累积。通过率的分母是"
+      + "<strong>已评估</strong>的 case；harness 失败单独计数，不进分母。",
+
+    // comparisons index
+    th_comparison: "对比",
+    th_pass_rate_ab: "通过率 A → B",
+    th_paired: "配对 case",
+    th_flips: "翻转",
+    th_score_delta: "分数变化",
+    th_regraded: "判分契约不同",
+    comparisons_note: (v) => "一次对比按 case id 把两次运行配对。"
+      + `<strong>${v.regraded}</strong>：两侧判分契约不同的 case——它们的差异<strong>不能</strong>`
+      + "归因于 agent。",
+    regraded_word: "判分契约不同",
+
+    // comparison view
+    paired_cases: (v) => `${v.a} → ${v.b} · ${v.n} 个配对 case`,
+    not_attributable: (v) => "<strong>这些差异不能归因于 agent。</strong>"
+      + `有 ${v.n} 个 case 在 B 侧的判分契约与 A 侧不同：${v.ids}。`,
+    card_pass_rate: (v) => `${esc(v.label)} 通过率`,
+    card_fixed_by_b: "B 修好的",
+    card_broken_by_b: "B 弄坏的",
+    card_both: "都通过 / 都失败",
+    th_grader: "评分器",
+    th_difference: "差值（B − A）",
+    gate_note: "gate 的分数按设计不计入 case 总分——所以正确性只会出现在这里，逐评分器地看。",
+    th_process_metric: "过程指标",
+    th_trials: "试验",
+    metrics_note: (v) => "指标没有通过/失败之分；而且这里多数指标是<strong>负值更好</strong>（更省）。"
+      + `<strong>${v.sampled}</strong> 标记的是该指标只取了一次试验、而不是多次试验的均值。`,
+    sampled: (v) => `${v.n} 个取样`,
+    sampled_word: "取样",
+    not_compared: "未参与对比：",
+    not_measured: "未测量",
+    no_spread: "每个配对都同向同幅——没有离散度可供估计",
+    ci_excludes_zero: "95% 置信区间不含 0",
+    within_noise: (v) => `落在噪声带内 · 可检出下限 ${v.mde}`,
+
+    // verdicts
+    verdict_significant: (v) => `通过率${v.direction > 0 ? "显著提升" : "显著下降"}：`
+      + `${v.diff}（95% 置信区间 [${v.low}, ${v.high}]）`,
+    verdict_score_significant: (v) => "通过率落在噪声带内，但分数"
+      + `${v.direction > 0 ? "显著提升" : "显著下降"}：${v.diff}（95% 置信区间 [${v.low}, ${v.high}]）`,
+    verdict_no_spread: (v) => `${v.n} 个配对 case 上两侧没有任何分歧：通过率差 ${v.diff}。`
+      + "离散度为零，这个样本估不出分辨率——请补充两侧可能给出不同答案的 case",
+    verdict_noise: (v) => `落在噪声带内：通过率差 ${v.diff}（95% 置信区间 [${v.low}, ${v.high}]）；`
+      + `n=${v.n} 时能检出的最小差异约 ${v.mde}`,
+    verdict_none: "没有配对的 case——无从比较",
+
+    // run view
+    run_subtitle: (v) => `${v.scenarios} 个场景 · ${v.cases} 个 case · ${v.duration} · ${v.when}`,
+    card_scenarios: "场景",
+    card_failed: "失败",
+    pass_rate_evaluated: (v) => `通过率（已评估 ${v.n} 个）`,
+    details_redacted: (v) => "这次构建没有包含评分器细节。加上 "
+      + `<code>${v.flag}</code> 重新构建即可发布它们。`,
+    trend_title: (v) => `${v.n} 次构建的通过率`,
+    trend_stale: (v) => `有 ${v.n} 次更早的构建使用了不同的判分契约，折线在那里断开。`
+      + `分数只在同一份契约内可比——要做严谨的前后对比请用 <code>${v.cmd}</code>。`,
+    trend_point: (v) => `${v.when}：${v.rate}（${v.passed}/${v.total}）`,
+    other_contract: " —— 判分契约与当前不同",
+    scatter_title: "结果分 vs 过程分",
+    axis_outcome: "结果分（Outcome）",
+    axis_transcript: "过程分（Transcript）",
+    scatter_point: (v) => `${v.id}：结果=${v.outcome}，过程=${v.transcript}`,
+    category_title: "按分类拆解",
+    th_category: "分类",
+    th_total: "总数",
+    cases_title: "用例",
+    filter_placeholder: "按 case id 或场景名筛选…",
+    all_statuses: "全部状态",
+    all_categories: "全部分类",
+    all_tags: "全部标签",
+    shown_of: (v) => `${v.shown} / ${v.total}`,
+    no_matches: "没有符合当前筛选条件的 case。",
+    th_case: "用例",
+    th_scenario: "场景",
+    th_status: "状态",
+    th_score: "分数",
+    th_duration: "耗时",
+    th_tags: "标签",
+    status_passed: "通过",
+    status_failed: "失败",
+    status_error: "错误",
+
+    // case detail
+    meta_trials: (v) => `试验：${v.passed}/${v.total}`,
+    meta_best: (v) => `最佳：${v.score}`,
+    meta_harness_errors: (v) => `Harness 错误：${v.n}`,
+    meta_duration: (v) => `耗时：${v.value}`,
+    meta_outcome: (v) => `结果分：${v.score}`,
+    meta_transcript: (v) => `过程分：${v.score}`,
+    meta_contract: (v) => `判分契约：${v.hash}`,
+    h_error: "错误",
+    h_graders: "评分器",
+    h_trial_metrics: "多试验指标",
+    h_trace: "轨迹",
+    no_graders: "没有评分器运行。",
+    th_scope: "范围",
+    th_type: "类型",
+    th_weight: "权重",
+    th_result: "结果",
+    th_observed: "观测",
+    unscored: "未计分",
+    result_pass: "通过",
+    result_fail: "失败",
+    result_skipped: "跳过",
+
+    // errors
+    schema_mismatch: (v) => `本页面按 <code>${v.expected}</code> 读取，但数据声明的是 `
+      + `<code>${v.found}</code>。请重新构建站点，或直接读 JSON——下面显示的内容可能是错的。`,
+    index_unreadable: (v) => `读不到 <code>index.json</code>：${v.error}。浏览器不会从 `
+      + `<code>file://</code> 取数据——请用 HTTP 提供这个目录（<code>${v.cmd}</code>），`
+      + "或者打开已发布的 URL。",
+    no_such_comparison: (v) => `没有这个对比：<code>${v.slug}</code>（${v.error}）。`,
+    no_such_run: (v) => `没有这次运行：<code>${v.slug}</code>（${v.error}）。`,
+  },
+};
+
+const LANGS = [["en", "EN"], ["zh", "中文"]];
+const LANG_KEY = "compass.lang";
+let LANG = initialLang();
+
+function initialLang() {
+  // A stored choice wins; otherwise follow the browser, so a reader on a
+  // Chinese locale gets Chinese without having to find the switch.
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    if (saved && MESSAGES[saved]) return saved;
+  } catch (err) { /* storage blocked (private mode, file://) — fall through */ }
+  const nav = (navigator.language || navigator.userLanguage || "").toLowerCase();
+  return nav.startsWith("zh") ? "zh" : "en";
+}
+
+function t(key, vars) {
+  const table = MESSAGES[LANG] || MESSAGES.en;
+  const value = table[key] != null ? table[key] : MESSAGES.en[key];
+  if (value == null) return key;   // an untranslated key shows itself, loudly
+  return typeof value === "function" ? value(vars || {}) : value;
+}
+
+function setLang(lang) {
+  if (!MESSAGES[lang] || lang === LANG) return;
+  LANG = lang;
+  try { localStorage.setItem(LANG_KEY, lang); } catch (err) { /* see above */ }
+  applyLang();
+  // Re-render the current view from state that is already in memory: switching
+  // language must never re-fetch, and must not lose filters or open rows.
+  route();
+}
+
+function applyLang() {
+  document.documentElement.lang = LANG === "zh" ? "zh-Hans" : "en";
+  const box = document.getElementById("langs");
+  box.setAttribute("aria-label", t("lang_label"));
+  box.innerHTML = LANGS.map(([code, label]) =>
+    `<button type="button" data-lang="${code}" class="${code === LANG ? "on" : ""}"
+      aria-pressed="${code === LANG}">${label}</button>`).join("");
+  box.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => setLang(b.dataset.lang);
+  });
+}
+
 function bar(score) {
   const p = Math.max(0, Math.min(1, Number(score || 0))) * 100;
   return `<span class="bar"><div class="${grade(score)}" style="width:${p}%"></div></span>`;
 }
 
 function tags(list) {
-  return (list || []).map((t) => `<span class="badge tag">${esc(t)}</span>`).join("");
+  // Not `t` — that name is the translator now, and shadowing it here would be a
+  // trap for the next edit inside this function.
+  return (list || []).map((tag) => `<span class="badge tag">${esc(tag)}</span>`).join("");
 }
 
 function duration(ms) {
@@ -131,9 +491,8 @@ async function loadJSON(path) {
 
 function schemaNote(doc) {
   if (!doc || !doc.schema || doc.schema === SCHEMA) return "";
-  return `<div class="note warn">This page reads <code>${esc(SCHEMA)}</code> but the data says
-    <code>${esc(doc.schema)}</code>. Rebuild the site, or read the JSON directly — what is shown
-    below may be wrong.</div>`;
+  return `<div class="note warn">${t("schema_mismatch",
+    { expected: esc(SCHEMA), found: esc(doc.schema) })}</div>`;
 }
 
 // ---------- index view ----------
@@ -147,7 +506,7 @@ function sparkline(entry) {
   const points = series.map((v, i) => `${(i * step).toFixed(1)},${(h - v * h).toFixed(1)}`).join(" ");
   const last = series[series.length - 1], first = series[0];
   const color = last > first ? "#10b981" : last < first ? "#ef4444" : "#94a3b8";
-  return `<svg width="${w}" height="${h}" aria-label="pass rate trend">
+  return `<svg width="${w}" height="${h}" aria-label="${esc(t("trend_alt"))}">
     <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5"/>
     <circle cx="${w}" cy="${(h - last * h).toFixed(1)}" r="2.5" fill="${color}"/>
   </svg>`;
@@ -158,11 +517,11 @@ function renderIndex() {
   document.getElementById("crumb").innerHTML = "";
   document.getElementById("title").textContent = "Compass";
   document.getElementById("subtitle").textContent =
-    `${plural(runs.length, "run")} · built ${state.index.generated || ""}`;
+    t("runs_built", { n: runs.length, when: state.index.generated || "" });
 
   if (!runs.length) {
     view.innerHTML = `<div class="card"><div class="empty">
-      No runs yet. Publish one with <code>compass site build results.json -o .</code></div></div>`
+      ${t("no_runs")} <code>compass site build results.json -o .</code></div></div>`
       + comparisonsTable();
     view.querySelectorAll("tr[data-compare]").forEach((tr) => {
       tr.onclick = () => { location.hash = "#/compare/" + tr.dataset.compare; };
@@ -189,15 +548,14 @@ function renderIndex() {
   view.innerHTML = `${schemaNote(state.index)}
     <div class="card"><div class="scroll"><table>
       <thead><tr>
-        <th>Run</th><th class="num">Pass Rate</th><th class="num">Trend</th>
-        <th class="num">Passed</th><th class="num">Errors</th><th class="num">Avg Score</th>
-        <th class="num">Scopes</th><th>Updated</th>
+        <th>${t("th_run")}</th><th class="num">${t("th_pass_rate")}</th>
+        <th class="num">${t("th_trend")}</th><th class="num">${t("th_passed")}</th>
+        <th class="num">${t("th_errors")}</th><th class="num">${t("th_avg_score")}</th>
+        <th class="num">${t("th_scopes")}</th><th>${t("th_updated")}</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div></div>
-    <div class="note info">Each run is published independently — several repositories can build
-    into this same directory and the list accumulates. Pass rates are over evaluated cases;
-    harness errors are counted apart.</div>`;
+    <div class="note info">${t("index_note")}</div>`;
 
   view.insertAdjacentHTML("beforeend", comparisonsTable());
 
@@ -220,16 +578,17 @@ function signed(x, digits) {
 }
 
 function interval(stats, digits) {
-  if (!stats) return `<span class="mono" style="color:#888">not measured</span>`;
+  if (!stats) return `<span class="mono" style="color:#888">${t("not_measured")}</span>`;
   const d = digits == null ? 3 : digits;
   const range = `[${signed(stats.ci_low, d)}, ${signed(stats.ci_high, d)}]`;
   if (!stats.variance_observed) {
     return `<strong class="mono">${signed(stats.mean_diff, d)}</strong>
-      <div class="mono" style="color:#888">every pair moved alike — no spread to estimate from</div>`;
+      <div class="mono" style="color:#888">${t("no_spread")}</div>`;
   }
   const verdict = stats.significant
-    ? `<span class="badge passed">95% CI excludes 0</span>`
-    : `<span class="badge skipped">within noise · MDE ${Number(stats.mde || 0).toFixed(d)}</span>`;
+    ? `<span class="badge passed">${t("ci_excludes_zero")}</span>`
+    : `<span class="badge skipped">${t("within_noise",
+        { mde: Number(stats.mde || 0).toFixed(d) })}</span>`;
   return `<strong class="mono">${signed(stats.mean_diff, d)}</strong>
     <div class="mono" style="color:#888">${range}</div>${verdict}`;
 }
@@ -251,21 +610,59 @@ function comparisonsTable() {
     </tr>`).join("");
   return `<div class="card" style="margin-top:24px"><div class="scroll"><table>
       <thead><tr>
-        <th>Comparison</th><th class="num">Pass Rate A → B</th><th class="num">Paired</th>
-        <th class="num">Flips</th><th class="num">Score Δ</th><th class="num">Regraded</th>
+        <th>${t("th_comparison")}</th><th class="num">${t("th_pass_rate_ab")}</th>
+        <th class="num">${t("th_paired")}</th><th class="num">${t("th_flips")}</th>
+        <th class="num">${t("th_score_delta")}</th><th class="num">${t("th_regraded")}</th>
       </tr></thead><tbody>${body}</tbody>
     </table></div></div>
-    <div class="note info">A comparison pairs two runs by case id. <strong>Regraded</strong> counts
-    cases the two runs graded under different contracts — their difference is not attributable to
-    the agent.</div>`;
+    <div class="note info">${t("comparisons_note", { regraded: t("regraded_word") })}</div>`;
+}
+
+// The analyzer ships a one-line verdict, already written. It is English prose,
+// so for another language the sentence is recomposed here from the *same*
+// structured stats the analyzer used (`pass_stats` / `score_stats` / n) rather
+// than translated — the branch order below mirrors `ComparisonReport.verdict`.
+// English always uses the analyzer's own string, so it cannot drift; any shape
+// this function does not recognise falls back to it too.
+function verdictText(c) {
+  if (LANG === "en" || !c) return c && c.verdict ? c.verdict : "";
+  const pass = c.pass_stats, score = c.score_stats;
+  if (!c.n_paired) return t("verdict_none");
+  if (!pass || !score) return c.verdict || "";
+
+  const p1 = (x) => signedPct(x, 1);
+  if (pass.significant) {
+    return t("verdict_significant", {
+      direction: pass.mean_diff, diff: p1(pass.mean_diff),
+      low: p1(pass.ci_low), high: p1(pass.ci_high),
+    });
+  }
+  if (score.significant) {
+    return t("verdict_score_significant", {
+      direction: score.mean_diff, diff: signed(score.mean_diff, 3),
+      low: signed(score.ci_low, 3), high: signed(score.ci_high, 3),
+    });
+  }
+  if (!pass.variance_observed) {
+    return t("verdict_no_spread", { n: c.n_paired, diff: p1(pass.mean_diff) });
+  }
+  return t("verdict_noise", {
+    n: c.n_paired, diff: p1(pass.mean_diff),
+    low: p1(pass.ci_low), high: p1(pass.ci_high), mde: pct(pass.mde),
+  });
+}
+
+function signedPct(x, digits) {
+  const n = Number(x || 0) * 100;
+  return (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toFixed(digits == null ? 1 : digits) + "%";
 }
 
 function renderComparison(slug, entry, doc) {
   const c = doc.comparison || {};
-  document.getElementById("crumb").innerHTML = `<a href="#/">All runs</a> ›`;
+  document.getElementById("crumb").innerHTML = `<a href="#/">${t("all_runs")}</a> ›`;
   document.getElementById("title").textContent = c.name || slug;
   document.getElementById("subtitle").textContent =
-    `${esc(c.label_a)} → ${esc(c.label_b)} · ${plural(c.n_paired || 0, "paired case")}`;
+    t("paired_cases", { a: c.label_a, b: c.label_b, n: c.n_paired || 0 });
 
   const flips = (list, cls) => (list || []).map((f) =>
     `<span class="badge ${cls}">${esc(f.case_id)} ${num(f.score_a)}→${num(f.score_b)}</span>`).join(" ");
@@ -286,7 +683,7 @@ function renderComparison(slug, entry, doc) {
       <td class="num mono">${Number(m.mean_a || 0).toFixed(digits)}</td>
       <td class="num mono">${Number(m.mean_b || 0).toFixed(digits)}</td>
       <td class="num">${m.multi_trial_cases
-        ? `<span class="badge error">${m.multi_trial_cases} sampled</span>` : "—"}</td>
+        ? `<span class="badge error">${t("sampled", { n: m.multi_trial_cases })}</span>` : "—"}</td>
       <td class="num">${interval(m.stats, digits)}</td>
     </tr>`;
   }).join("");
@@ -295,44 +692,44 @@ function renderComparison(slug, entry, doc) {
     `<li><code>${esc(s.on || s.metric)}</code> — ${esc(s.reason)}</li>`).join("");
 
   view.innerHTML = `
-    ${(c.regraded || []).length ? `<div class="note warn"><strong>Not attributable to the agent.</strong>
-      ${plural(c.regraded.length, "case")} were graded under a different contract in B than in A:
-      ${c.regraded.map((id) => `<code>${esc(id)}</code>`).join(", ")}.</div>` : ""}
-    <div class="note info">${esc(c.verdict || "")}</div>
+    ${(c.regraded || []).length ? `<div class="note warn">${t("not_attributable", {
+        n: c.regraded.length,
+        ids: c.regraded.map((id) => `<code>${esc(id)}</code>`).join(", "),
+      })}</div>` : ""}
+    <div class="note info">${esc(verdictText(c))}</div>
 
     <div class="summary">
       <div class="summary-card"><div class="value">${pct(c.pass_rate_a)}</div>
-        <div class="label">${esc(c.label_a)} pass rate</div></div>
+        <div class="label">${t("card_pass_rate", { label: c.label_a })}</div></div>
       <div class="summary-card"><div class="value">${pct(c.pass_rate_b)}</div>
-        <div class="label">${esc(c.label_b)} pass rate</div></div>
+        <div class="label">${t("card_pass_rate", { label: c.label_b })}</div></div>
       <div class="summary-card passed"><div class="value">${(c.improved || []).length}</div>
-        <div class="label">fixed by B</div></div>
+        <div class="label">${t("card_fixed_by_b")}</div></div>
       <div class="summary-card failed"><div class="value">${(c.regressed || []).length}</div>
-        <div class="label">broken by B</div></div>
+        <div class="label">${t("card_broken_by_b")}</div></div>
       <div class="summary-card"><div class="value">${c.both_pass || 0}/${c.both_fail || 0}</div>
-        <div class="label">both pass / both fail</div></div>
+        <div class="label">${t("card_both")}</div></div>
     </div>
 
     ${(c.improved || []).length || (c.regressed || []).length ? `<div class="card" style="padding:16px 20px">
       <div class="kv">${flips(c.improved, "passed")} ${flips(c.regressed, "failed")}</div></div>` : ""}
 
     ${scoped ? `<div class="card" style="margin-top:20px"><div class="scroll"><table>
-      <thead><tr><th>Grader</th><th class="num">A</th><th class="num">B</th>
-        <th class="num">Pass Rate A → B</th><th class="num">Difference (B − A)</th></tr></thead>
+      <thead><tr><th>${t("th_grader")}</th><th class="num">A</th><th class="num">B</th>
+        <th class="num">${t("th_pass_rate_ab")}</th>
+        <th class="num">${t("th_difference")}</th></tr></thead>
       <tbody>${scoped}</tbody></table></div>
-      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">Gate scores are excluded
-      from the case score by design, so correctness only shows up here — per grader.</div></div>` : ""}
+      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">${t("gate_note")}</div></div>` : ""}
 
     ${metrics ? `<div class="card" style="margin-top:20px"><div class="scroll"><table>
-      <thead><tr><th>Process metric</th><th class="num">A</th><th class="num">B</th>
-        <th class="num">Trials</th><th class="num">Difference (B − A)</th></tr></thead>
+      <thead><tr><th>${t("th_process_metric")}</th><th class="num">A</th><th class="num">B</th>
+        <th class="num">${t("th_trials")}</th>
+        <th class="num">${t("th_difference")}</th></tr></thead>
       <tbody>${metrics}</tbody></table></div>
-      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">No pass/fail on a metric,
-      and on most of these a <strong>negative</strong> difference is the better run.
-      <strong>Sampled</strong> marks cases where this metric came from one trial rather than the
-      mean over them.</div></div>` : ""}
+      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">${t("metrics_note",
+        { sampled: t("sampled_word") })}</div></div>` : ""}
 
-    ${skipped ? `<div class="note warn" style="margin-top:20px">Not compared:<ul>${skipped}</ul></div>` : ""}`;
+    ${skipped ? `<div class="note warn" style="margin-top:20px">${t("not_compared")}<ul>${skipped}</ul></div>` : ""}`;
 }
 
 // ---------- run view ----------
@@ -359,17 +756,18 @@ function scatter(cases) {
     svg += `<text x="${sx(v)}" y="${sy(0) + 20}" text-anchor="middle" font-size="11" fill="#666">${v.toFixed(1)}</text>`
       + `<text x="${padL - 10}" y="${sy(v) + 4}" text-anchor="end" font-size="11" fill="#666">${v.toFixed(1)}</text>`;
   });
-  svg += `<text x="${padL + pw / 2}" y="${h - 10}" text-anchor="middle" font-size="13" font-weight="bold">Outcome Score</text>`
+  svg += `<text x="${padL + pw / 2}" y="${h - 10}" text-anchor="middle" font-size="13" font-weight="bold">${esc(t("axis_outcome"))}</text>`
     + `<text x="15" y="${padT + ph / 2}" text-anchor="middle" font-size="13" font-weight="bold"
-        transform="rotate(-90, 15, ${padT + ph / 2})">Transcript Score</text>`;
+        transform="rotate(-90, 15, ${padT + ph / 2})">${esc(t("axis_transcript"))}</text>`;
 
   cases.forEach((c) => {
     const color = c.passed ? "#10b981" : "#ef4444";
     svg += `<circle cx="${sx(c.outcome_score || 0).toFixed(1)}" cy="${sy(c.transcript_score || 0).toFixed(1)}"
-      r="6" fill="${color}" opacity="0.8" stroke="white" stroke-width="1.5"><title>${esc(c.case_id)}: outcome=${num(c.outcome_score)}, transcript=${num(c.transcript_score)}</title></circle>`;
+      r="6" fill="${color}" opacity="0.8" stroke="white" stroke-width="1.5"><title>${esc(t("scatter_point",
+        { id: c.case_id, outcome: num(c.outcome_score), transcript: num(c.transcript_score) }))}</title></circle>`;
   });
 
-  return `<div class="card"><h2>Outcome vs Transcript</h2><div class="body" style="text-align:center">
+  return `<div class="card"><h2>${t("scatter_title")}</h2><div class="body" style="text-align:center">
     <svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div>`;
 }
 
@@ -424,7 +822,9 @@ function trendPanel(entry, run) {
     const when = String(p.generated || "").slice(0, 10);
     svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(p.pass_rate).toFixed(1)}" r="${i === series.length - 1 ? 5 : 4}"
       fill="${color}" stroke="white" stroke-width="1.5">
-      <title>${esc(when)}: ${pct(p.pass_rate)} (${p.passed_cases || 0}/${p.evaluated_cases || 0})${same ? "" : " — graded under a different contract"}</title></circle>`;
+      <title>${esc(t("trend_point", { when, rate: pct(p.pass_rate),
+        passed: p.passed_cases || 0, total: p.evaluated_cases || 0 })
+        + (same ? "" : t("other_contract")))}</title></circle>`;
     if (i === 0 || i === series.length - 1) {
       svg += `<text x="${x(i)}" y="${h - 12}" text-anchor="${i ? "end" : "start"}"
         font-size="11" fill="#888">${esc(when)}</text>`;
@@ -432,12 +832,11 @@ function trendPanel(entry, run) {
   });
 
   const note = stale
-    ? `<div class="note warn" style="margin:0 0 14px">${stale} earlier build(s) were graded under a
-       different contract, so the line breaks there. Scores are only comparable within one contract —
-       use <code>compass compare</code> for a proper before/after.</div>`
+    ? `<div class="note warn" style="margin:0 0 14px">${t("trend_stale",
+        { n: stale, cmd: "compass compare" })}</div>`
     : "";
 
-  return `<div class="card"><h2>Pass rate over ${plural(series.length, "build")}</h2>
+  return `<div class="card"><h2>${t("trend_title", { n: series.length })}</h2>
     <div class="body">${note}
     <div class="scroll"><svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div></div>`;
 }
@@ -453,20 +852,21 @@ function categoryTable(rows) {
       <td class="num">${pct(r.pass_rate)}</td>
       <td class="num">${num(r.average_score)}</td>
     </tr>`).join("");
-  return `<div class="card"><h2>Category Breakdown</h2><div class="scroll"><table>
-    <thead><tr><th>Category</th><th class="num">Total</th><th class="num">Passed</th>
-      <th class="num">Failed</th><th class="num">Errors</th><th class="num">Pass Rate</th>
-      <th class="num">Avg Score</th></tr></thead>
+  return `<div class="card"><h2>${t("category_title")}</h2><div class="scroll"><table>
+    <thead><tr><th>${t("th_category")}</th><th class="num">${t("th_total")}</th>
+      <th class="num">${t("th_passed")}</th><th class="num">${t("card_failed")}</th>
+      <th class="num">${t("th_errors")}</th><th class="num">${t("th_pass_rate")}</th>
+      <th class="num">${t("th_avg_score")}</th></tr></thead>
     <tbody>${body}</tbody></table></div></div>`;
 }
 
 function graderTable(caseRow) {
   const graders = caseRow.evaluator_results || [];
-  if (!graders.length) return "<p style='color:#888'>No graders ran.</p>";
+  if (!graders.length) return `<p style='color:#888'>${t("no_graders")}</p>`;
   const body = graders.map((g) => {
     const status = g.skipped ? "skipped" : g.passed ? "passed" : "failed";
-    const label = g.skipped ? "skipped" : g.passed ? "pass" : "fail";
-    const score = g.score == null ? "<span style='color:#999'>unscored</span>" : num(g.score);
+    const label = t(g.skipped ? "result_skipped" : g.passed ? "result_pass" : "result_fail");
+    const score = g.score == null ? `<span style='color:#999'>${t("unscored")}</span>` : num(g.score);
     const metrics = Object.entries(g.metrics || {})
       .map(([k, v]) => `<span class="badge tag">${esc(k)}=${esc(v)}</span>`).join("");
     const extra = [tags(g.tags), tags(g.failure_tags), metrics].filter(Boolean).join(" ");
@@ -482,36 +882,39 @@ function graderTable(caseRow) {
     </tr>`;
   }).join("");
   return `<div class="scroll"><table>
-    <thead><tr><th>Grader</th><th>Scope</th><th>Type</th><th class="num">Score</th>
-      <th class="num">Weight</th><th>Result</th><th>Observed</th></tr></thead>
+    <thead><tr><th>${t("th_grader")}</th><th>${t("th_scope")}</th><th>${t("th_type")}</th>
+      <th class="num">${t("th_score")}</th><th class="num">${t("th_weight")}</th>
+      <th>${t("th_result")}</th><th>${t("th_observed")}</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }
 
 function caseDetail(caseRow, slug, traces) {
   const meta = [];
   if (caseRow.total_trials > 1) {
-    meta.push(`Trials: ${caseRow.passed_trials || 0}/${caseRow.total_trials}`);
-    meta.push(`Best: ${num(caseRow.best_score)}`);
+    meta.push(t("meta_trials", { passed: caseRow.passed_trials || 0, total: caseRow.total_trials }));
+    meta.push(t("meta_best", { score: num(caseRow.best_score) }));
   }
-  if (caseRow.error_trials) meta.push(`Harness errors: ${caseRow.error_trials}`);
-  meta.push(`Duration: ${duration(caseRow.duration_ms)}`);
-  meta.push(`Outcome: ${num(caseRow.outcome_score)}`);
-  meta.push(`Transcript: ${num(caseRow.transcript_score)}`);
-  if (caseRow.grader_fingerprint) meta.push(`Contract: ${caseRow.grader_fingerprint.slice(0, 12)}`);
+  if (caseRow.error_trials) meta.push(t("meta_harness_errors", { n: caseRow.error_trials }));
+  meta.push(t("meta_duration", { value: duration(caseRow.duration_ms) }));
+  meta.push(t("meta_outcome", { score: num(caseRow.outcome_score) }));
+  meta.push(t("meta_transcript", { score: num(caseRow.transcript_score) }));
+  if (caseRow.grader_fingerprint) {
+    meta.push(t("meta_contract", { hash: caseRow.grader_fingerprint.slice(0, 12) }));
+  }
 
   const own = (traces || []).filter((p) => p.split("/").pop().split(".")[0] === caseRow.case_id);
   const links = own.length
-    ? `<h3>Trace</h3>` + own.map((p) =>
+    ? `<h3>${t("h_trace")}</h3>` + own.map((p) =>
         `<div><a href="runs/${esc(slug)}/traces/${esc(p)}" target="_blank" class="mono">${esc(p)}</a></div>`).join("")
     : "";
 
   const trialMetrics = caseRow.trial_metrics && Object.keys(caseRow.trial_metrics).length
-    ? `<h3>Trial metrics</h3><pre>${esc(JSON.stringify(caseRow.trial_metrics, null, 2))}</pre>` : "";
+    ? `<h3>${t("h_trial_metrics")}</h3><pre>${esc(JSON.stringify(caseRow.trial_metrics, null, 2))}</pre>` : "";
 
   return `<tr class="detail"><td colspan="7"><div class="body">
     <div class="kv">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
-    ${caseRow.error ? `<h3>Error</h3><pre>${esc(caseRow.error)}</pre>` : ""}
-    <h3>Graders</h3>${graderTable(caseRow)}
+    ${caseRow.error ? `<h3>${t("h_error")}</h3><pre>${esc(caseRow.error)}</pre>` : ""}
+    <h3>${t("h_graders")}</h3>${graderTable(caseRow)}
     ${trialMetrics}${links}
   </div></td></tr>`;
 }
@@ -519,13 +922,15 @@ function caseDetail(caseRow, slug, traces) {
 function renderRun(slug, entry, doc) {
   const cases = (doc.scenarios || []).flatMap((s) => s.cases || []);
   const run = doc.run || {};
-  document.getElementById("crumb").innerHTML = `<a href="#/">← All runs</a>`;
+  document.getElementById("crumb").innerHTML = `<a href="#/">← ${t("all_runs")}</a>`;
   document.getElementById("title").textContent = (entry && entry.name) || run.name || slug;
-  document.getElementById("subtitle").textContent =
-    `${plural(run.scenarios || 0, "scenario")} · ${plural(run.total_cases || 0, "case")} · ${duration(run.duration_ms)} · ${doc.generated || ""}`;
+  document.getElementById("subtitle").textContent = t("run_subtitle", {
+    scenarios: run.scenarios || 0, cases: run.total_cases || 0,
+    duration: duration(run.duration_ms), when: doc.generated || "",
+  });
 
   const rateLabel = run.error_cases
-    ? `Pass Rate (${run.evaluated_cases} evaluated)` : "Pass Rate";
+    ? t("pass_rate_evaluated", { n: run.evaluated_cases }) : t("th_pass_rate");
 
   const categories = [...new Set(cases.map((c) => c.category).filter(Boolean))].sort();
   const allTags = [...new Set(cases.flatMap((c) => (c.observed_tags || []).concat(c.tags || [])))].sort();
@@ -533,35 +938,38 @@ function renderRun(slug, entry, doc) {
 
   view.innerHTML = `${schemaNote(doc)}
     <div class="summary">
-      <div class="summary-card"><div class="value">${run.scenarios || 0}</div><div class="label">Scenarios</div></div>
-      <div class="summary-card passed"><div class="value">${run.passed_cases || 0}</div><div class="label">Passed</div></div>
-      <div class="summary-card failed"><div class="value">${run.failed_cases || 0}</div><div class="label">Failed</div></div>
-      <div class="summary-card error"><div class="value">${run.error_cases || 0}</div><div class="label">Errors</div></div>
+      <div class="summary-card"><div class="value">${run.scenarios || 0}</div><div class="label">${t("card_scenarios")}</div></div>
+      <div class="summary-card passed"><div class="value">${run.passed_cases || 0}</div><div class="label">${t("th_passed")}</div></div>
+      <div class="summary-card failed"><div class="value">${run.failed_cases || 0}</div><div class="label">${t("card_failed")}</div></div>
+      <div class="summary-card error"><div class="value">${run.error_cases || 0}</div><div class="label">${t("th_errors")}</div></div>
       <div class="summary-card"><div class="value">${pct(run.pass_rate)}</div><div class="label">${esc(rateLabel)}</div></div>
-      <div class="summary-card"><div class="value">${num(run.average_score)}</div><div class="label">Avg Score</div></div>
+      <div class="summary-card"><div class="value">${num(run.average_score)}</div><div class="label">${t("th_avg_score")}</div></div>
     </div>
-    ${doc.details_redacted ? `<div class="note info">Grader details were left out of this build.
-      Rebuild with <code>--include-details</code> to publish them.</div>` : ""}
+    ${doc.details_redacted
+      ? `<div class="note info">${t("details_redacted", { flag: "--include-details" })}</div>` : ""}
     ${trendPanel(entry, run)}
     ${showScatter ? scatter(cases) : ""}
     ${categoryTable(doc.categories)}
     <div class="card">
-      <h2>Cases</h2>
+      <h2>${t("cases_title")}</h2>
       <div class="filters">
-        <input id="f-text" type="search" placeholder="Filter by case id or scenario…">
+        <input id="f-text" type="search" placeholder="${esc(t("filter_placeholder"))}">
         <select id="f-status">
-          <option value="">All statuses</option><option value="passed">Passed</option>
-          <option value="failed">Failed</option><option value="error">Errors</option>
+          <option value="">${t("all_statuses")}</option>
+          <option value="passed">${t("status_passed")}</option>
+          <option value="failed">${t("status_failed")}</option>
+          <option value="error">${t("th_errors")}</option>
         </select>
-        ${categories.length ? `<select id="f-category"><option value="">All categories</option>
+        ${categories.length ? `<select id="f-category"><option value="">${t("all_categories")}</option>
           ${categories.map((c) => `<option>${esc(c)}</option>`).join("")}</select>` : ""}
-        ${allTags.length ? `<select id="f-tag"><option value="">All tags</option>
-          ${allTags.map((t) => `<option>${esc(t)}</option>`).join("")}</select>` : ""}
+        ${allTags.length ? `<select id="f-tag"><option value="">${t("all_tags")}</option>
+          ${allTags.map((tag) => `<option>${esc(tag)}</option>`).join("")}</select>` : ""}
         <span class="count" id="f-count"></span>
       </div>
       <div class="scroll"><table>
-        <thead><tr><th>Case</th><th>Scenario</th><th>Status</th><th class="num">Score</th>
-          <th class="num">Trials</th><th class="num">Duration</th><th>Tags</th></tr></thead>
+        <thead><tr><th>${t("th_case")}</th><th>${t("th_scenario")}</th><th>${t("th_status")}</th>
+          <th class="num">${t("th_score")}</th><th class="num">${t("th_trials")}</th>
+          <th class="num">${t("th_duration")}</th><th>${t("th_tags")}</th></tr></thead>
         <tbody id="case-body"></tbody>
       </table></div>
     </div>`;
@@ -589,9 +997,10 @@ function renderRun(slug, entry, doc) {
 
   function draw() {
     const shown = cases.filter(matches);
-    document.getElementById("f-count").textContent = `${shown.length} of ${cases.length}`;
+    document.getElementById("f-count").textContent =
+      t("shown_of", { shown: shown.length, total: cases.length });
     if (!shown.length) {
-      body.innerHTML = `<tr><td colspan="7" class="empty">Nothing matches these filters.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="7" class="empty">${t("no_matches")}</td></tr>`;
       return;
     }
     body.innerHTML = shown.map((c) => {
@@ -601,7 +1010,7 @@ function renderRun(slug, entry, doc) {
       const row = `<tr class="clickable" data-key="${esc(key)}">
         <td class="mono"><strong>${esc(c.case_id)}</strong></td>
         <td style="color:#666">${esc(c.scenario) || "—"}</td>
-        <td><span class="badge ${status}">${status}</span></td>
+        <td><span class="badge ${status}">${t("status_" + status)}</span></td>
         <td class="num">${bar(score)} ${num(score)}</td>
         <td class="num">${c.total_trials > 1 ? `${c.passed_trials || 0}/${c.total_trials}` : "—"}</td>
         <td class="num">${duration(c.duration_ms)}</td>
@@ -633,24 +1042,24 @@ async function route() {
   try {
     if (!state.index) state.index = await loadJSON("index.json");
   } catch (err) {
-    view.innerHTML = `<div class="note warn">Could not read <code>index.json</code>: ${esc(err.message)}.
-      A browser will not fetch from <code>file://</code> — serve the directory over HTTP
-      (<code>compass site serve</code>) or open the published URL.</div>`;
+    view.innerHTML = `<div class="note warn">${t("index_unreadable",
+      { error: esc(err.message), cmd: "compass site serve" })}</div>`;
     return;
   }
 
   const comparing = /^#\/compare\/([^/]+)/.exec(location.hash);
   if (comparing) {
     const slug = decodeURIComponent(comparing[1]);
-    view.innerHTML = `<div class="empty">Loading ${esc(slug)}…</div>`;
+    view.innerHTML = `<div class="empty">${esc(t("loading_slug", { slug }))}</div>`;
     try {
       if (!state.comparisons[slug]) {
         state.comparisons[slug] =
           await loadJSON(`comparisons/${encodeURIComponent(slug)}/comparison.json`);
       }
     } catch (err) {
-      view.innerHTML = `<div class="note warn">No such comparison: <code>${esc(slug)}</code>
-        (${esc(err.message)}). <a href="#/">Back to all runs</a></div>`;
+      view.innerHTML = `<div class="note warn">${t("no_such_comparison",
+        { slug: esc(slug), error: esc(err.message) })}
+        <a href="#/">${t("back_to_runs")}</a></div>`;
       return;
     }
     renderComparison(
@@ -669,12 +1078,13 @@ async function route() {
 
   const slug = decodeURIComponent(match[1]);
   const entry = (state.index.runs || []).find((e) => e.slug === slug);
-  view.innerHTML = `<div class="empty">Loading ${esc(slug)}…</div>`;
+  view.innerHTML = `<div class="empty">${esc(t("loading_slug", { slug }))}</div>`;
   try {
     if (!state.docs[slug]) state.docs[slug] = await loadJSON(`runs/${encodeURIComponent(slug)}/run.json`);
   } catch (err) {
-    view.innerHTML = `<div class="note warn">No such run: <code>${esc(slug)}</code> (${esc(err.message)}).
-      <a href="#/">Back to all runs</a></div>`;
+    view.innerHTML = `<div class="note warn">${t("no_such_run",
+      { slug: esc(slug), error: esc(err.message) })}
+      <a href="#/">${t("back_to_runs")}</a></div>`;
     return;
   }
   renderRun(slug, entry, state.docs[slug]);
@@ -694,7 +1104,7 @@ function liveBadge() {
   const sub = document.getElementById("subtitle");
   if (sub && !sub.querySelector(".live")) {
     sub.insertAdjacentHTML("beforeend",
-      ' <span class="live" title="re-reading from disk">● live</span>');
+      ` <span class="live" title="${esc(t("live_title"))}">● ${esc(t("live"))}</span>`);
   }
 }
 
@@ -719,6 +1129,7 @@ async function refresh(slug) {
 }
 
 window.addEventListener("hashchange", route);
+applyLang();
 route();
 </script>
 </body>
