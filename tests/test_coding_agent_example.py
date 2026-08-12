@@ -277,18 +277,20 @@ class TestSuiteShape:
             assert any("{{GRADERS}}" in s for s in scripts), case["id"]
             assert any("pytest tests/" in s for s in scripts), case["id"]
 
-    def test_the_allowlist_covers_the_interpreter_agents_actually_call(self):
-        """`Bash(python:*)` does not match `python3`, and agents reach for
-        `python3`. In the first 10-case run that gap denied a tool call in 16
-        of 20 runs, and a denial does not fail loudly — it truncates. One
-        Sonnet run ended with "I need your approval to run the test suite" and
-        was scored 0 for surfacing no assumptions, which measured the allowlist
-        rather than the model."""
+    def test_bash_is_not_behind_a_prefix_allowlist(self):
+        """A prefix allowlist cannot work for a coding agent, and failing at it
+        is expensive: two paid runs went 16/20 then 23/60 runs with denials,
+        and 29 of the 48 remaining denials were for programs already allowed —
+        heredocs, `&&` chains and `VAR=x cmd` cannot be prefix-matched. A denial
+        truncates the run silently, so it reads as a bad agent rather than a bad
+        allowlist. `state_delta` is the integrity gate here, not this list."""
         allowed = _suite()["agent"]["config"]["allowed_tools"]
-        for interpreter in ("python:*", "python3:*"):
-            assert f"Bash({interpreter})" in allowed, (
-                f"Bash({interpreter}) missing — runs will truncate silently"
-            )
+        assert "Bash" in allowed, "Bash must be unrestricted; see the suite comment"
+        narrowed = [t for t in allowed if t.startswith("Bash(")]
+        assert not narrowed, (
+            f"prefix-scoped Bash entries are back: {narrowed} — they deny the "
+            "compound commands agents actually write"
+        )
 
     def test_no_case_has_two_graders_under_the_same_key(self):
         """`label or name` has to be unique within a case, or the grader is

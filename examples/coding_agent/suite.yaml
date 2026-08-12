@@ -22,27 +22,36 @@ agent:
   config:
     repo: "{{REPO}}"           # ← 你的项目；run.py 会填
     permission_mode: acceptEdits
-    # `Bash(python:*)` alone is a trap: agents overwhelmingly reach for
-    # `python3`, and `python:*` does not match it. In the first 10-case run
-    # that one gap produced permission denials in **16 of 20 runs** — and it
-    # does not fail loudly, it just truncates. Sonnet ended one case with
-    # "I need your approval to run the test suite", which the judge then
-    # correctly scored 0 for surfacing no assumptions. That 0 was about the
-    # allowlist, not about Sonnet.
+    # Bash is unrestricted, and that is a measured decision rather than a lazy
+    # one. Two paid runs were spent learning that a prefix allowlist cannot
+    # work for a coding agent:
     #
-    # `cat` is here because agents write scratch repro scripts with heredocs.
-    # Whatever you allow, read the run's `permission_denials` afterwards: a
-    # blocked tool call is a truncated run wearing the costume of a bad one.
-    allowed_tools:
-      - "Read"
-      - "Grep"
-      - "Glob"
-      - "Edit"
-      - "Write"
-      - "Bash(python:*)"
-      - "Bash(python3:*)"
-      - "Bash(cat:*)"
-      - "Bash(find:*)"
+    #   run 1  `Bash(python:*)` only        -> denials in 16 of 20 runs
+    #   run 2  + python3, cat, find         -> denials in 23 of 60 runs
+    #
+    # Adding prefixes barely helped, because **29 of the 48 remaining denials
+    # were programs already on the list**. Agents do not write `python3 x.py`;
+    # they write `python3 << 'EOF' … EOF`, `cd d && python3 -c "…"`,
+    # `PYTHONPATH=. python3 …`, `git add -A && git commit -m "$(cat <<'EOF' …`.
+    # A command with a heredoc, a newline or `&&` in it cannot be prefix-matched
+    # at all, so it is denied whatever the list says. The list was denying the
+    # very shapes it was meant to allow.
+    #
+    # And a denial does not fail loudly — it **truncates**. Sonnet ended one
+    # case with "I need your approval to run the test suite" and was scored 0
+    # for surfacing no assumptions. That 0 measured the allowlist.
+    #
+    # What actually protects the evaluation is not this list:
+    #   · every trial runs in a throwaway `git worktree`, and the source repo
+    #     is only ever read (see docs/integrations.md)
+    #   · `state_delta` is the integrity gate — it is what catches an agent
+    #     editing `tests/`, and it reads what the tools actually did
+    #   · `tool_usage` still forbids WebFetch/WebSearch
+    #
+    # If you are evaluating a model you do not trust, put the whole run in a
+    # container. Do not reach for the allowlist: it will cost you runs and buy
+    # you nothing.
+    allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
     max_turns: 40
     timeout: 900
     # 原始 stream-json 落盘。一次真实运行很贵，而 importer 只映射它认识的事件
