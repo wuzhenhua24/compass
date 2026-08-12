@@ -222,7 +222,14 @@ def test(
 
             # One file per model as well: `compass compare` pairs by case_id,
             # so it needs the runs separated to measure any two of them.
-            if board is not None:
+            #
+            # Written whenever `-m` was given, including for a *single* model —
+            # not only when there is a leaderboard to build. A cross-stack A/B
+            # is two separate invocations of one model each (different adapters
+            # cannot share a scenario), and both write the same
+            # `results.json`: the second silently overwrote the first, leaving
+            # nothing to compare and no sign that anything was lost.
+            if models and ranked:
                 base = Path(output_path)
                 for label, result in ranked:
                     per_model = base.with_name(
@@ -1310,7 +1317,7 @@ def trace(trace_file: str, steps: bool, as_json: bool) -> None:
 @click.argument("source", type=click.Path(exists=True))
 @click.option(
     "--format", "-f", "fmt",
-    type=click.Choice(["auto", "pi", "otlp", "claude"]), default="auto",
+    type=click.Choice(["auto", "pi", "otlp", "claude", "codex"]), default="auto",
     help="Trace format (default: auto-detect)",
 )
 @click.option(
@@ -1321,8 +1328,20 @@ def trace(trace_file: str, steps: bool, as_json: bool) -> None:
     "--output-format", type=click.Choice(["json", "jsonl"]), default="json",
     help="Saved transcript format",
 )
+@click.option(
+    "--model", "-m", default=None,
+    help="Model that produced the trace (codex streams do not record it; "
+         "without it there is no cost to compute)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Print reconstructed transcript(s) as JSON")
-def import_(source: str, fmt: str, output: str | None, output_format: str, as_json: bool) -> None:
+def import_(
+    source: str,
+    fmt: str,
+    output: str | None,
+    output_format: str,
+    model: str | None,
+    as_json: bool,
+) -> None:
     """Import an external agent trace into Compass transcript(s).
 
     SOURCE is an offline trace file (or a directory of pi sessions):
@@ -1333,20 +1352,26 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
       otlp    an OTLP / OpenInference trace JSON (LangChain / LlamaIndex / CrewAI …
               exported via Arize Phoenix); a single file may hold many traces
       claude  a Claude Code `--output-format stream-json` file
+      codex   a Codex CLI `codex exec --json` event stream
 
     Format is auto-detected by default. The OpenAI Agents SDK integration is
     live/streaming (used programmatically via ``compass.integrations``); the
     Claude Agent SDK can be imported from its stream-json output.
 
+    A codex stream records no model id and no cost — pass ``--model`` to name the
+    model (which is also what makes cost computable from the pricing table).
+
     Examples:
         compass import session.jsonl                  # auto-detect + summarize
         compass import phoenix_export.json -o out/    # one saved file per trace
         compass import run.stream.jsonl -f claude -o t.json
+        compass import codex.stream.jsonl --model gpt-5.4-mini
     """
     import json as json_mod
 
     from compass.integrations import (
         import_claude_stream_json,
+        import_codex_stream_json,
         import_otlp_file,
         import_pi_session,
         import_pi_sessions,
@@ -1357,7 +1382,7 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
     if detected is None:
         console.print(
             "[red]Could not auto-detect trace format.[/red] "
-            "Pass [bold]--format pi|otlp|claude[/bold]."
+            "Pass [bold]--format pi|otlp|claude|codex[/bold]."
         )
         sys.exit(1)
 
@@ -1368,6 +1393,8 @@ def import_(source: str, fmt: str, output: str | None, output_format: str, as_js
             )
         elif detected == "claude":
             transcripts = [import_claude_stream_json(src)]
+        elif detected == "codex":
+            transcripts = [import_codex_stream_json(src, model=model)]
         else:  # otlp
             transcripts = import_otlp_file(src)
     except Exception as e:
@@ -1410,9 +1437,12 @@ def _detect_trace_format(path: Path) -> str | None:
     Discriminate by each format's first-line invariant:
       - pi:     a ``{"type": "session", ...}`` session header
       - claude: a stream-json line whose ``type`` is a Claude Code message type
+      - codex:  an event whose ``type`` is namespaced ``thread.``/``turn.``/``item.``
       - otlp:   anything else that is JSON (OTLP / OpenInference)
     """
     import json as json_mod
+
+    from compass.integrations import looks_like_codex_stream
 
     if path.is_dir():
         return "pi"  # import_pi_sessions globs the directory for sessions
@@ -1436,6 +1466,8 @@ def _detect_trace_format(path: Path) -> str | None:
             return "pi"
         if obj.get("type") in _CLAUDE_WIRE_TYPES:
             return "claude"
+        if looks_like_codex_stream(obj):
+            return "codex"
     if first_line[:1] in ("{", "["):
         return "otlp"
     return None

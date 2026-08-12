@@ -533,7 +533,7 @@ graders:
 
 **对 Agent 刚改完的那棵树跑隐藏测试 —— `{workspace}` 占位符：**
 
-编辑真实仓库的 Agent 每个 trial 都在一个新目录里工作（`claude_code` 用 git worktree），路径没法写死在 YAML 里。会产出工作区的 adapter 把它记在 `CodeArtifact.metadata["workspace"]`，`workdir` 里的 `{workspace}` 在评分时解析到它：
+编辑真实仓库的 Agent 每个 trial 都在一个新目录里工作（`claude_code` / `pi` / `codex` 都用 git worktree），路径没法写死在 YAML 里。会产出工作区的 adapter 把它记在 `CodeArtifact.metadata["workspace"]`，`workdir` 里的 `{workspace}` 在评分时解析到它：
 
 ```yaml
 graders:
@@ -626,7 +626,7 @@ graders:
 
 匹配器是 `{kind, op, target}`，`kind`/`op` 精确匹配、`target` 是 glob，缺省的键匹配任意值——所以 `{kind: file, target: "tests/*"}` 的意思是"对 tests/ 下任何文件的任何操作"。
 
-**谁来填这个槽位。** 捕获 delta 是数据面的活（见 [core-design.md](core-design.md) 的边界纪律）。目前两个导入器会自动填文件编辑：`compass.integrations.claude_agent`（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`）和 `compass.integrations.pi_sessions`（pi 的 `write`/`edit`）——因此 `claude_code` / `pi` 两个 adapter 和 `compass import` 三条路都开箱可用。要点见 [integrations.md](integrations.md)：只记**成功**的编辑、target **相对 session cwd**（worktree 路径每次都不同，绝对路径没法写 glob）且**归一化**（`./x.py` 和 `x.py` 记成同一个 target）、**Bash 造成的变更不记**。
+**谁来填这个槽位。** 捕获 delta 是数据面的活（见 [core-design.md](core-design.md) 的边界纪律）。目前三个导入器会自动填文件编辑：`compass.integrations.claude_agent`（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`）、`compass.integrations.pi_sessions`（pi 的 `write`/`edit`）和 `compass.integrations.codex_exec`（codex 的 `apply_patch`，`add`/`update`/`delete` 直接来自事件本身）——因此 `claude_code` / `pi` / `codex` 三个 adapter 和 `compass import` 都开箱可用。要点见 [integrations.md](integrations.md)：只记**成功**的编辑、target **相对 session cwd**（worktree 路径每次都不同，绝对路径没法写 glob）且**归一化**（`./x.py` 和 `x.py` 记成同一个 target）、**Bash 造成的变更不记**。
 
 最后一条意味着 `state_delta` 会**漏报**。所以：空的 delta 读作"没记录"而不是"没变更"，`readonly: true` 不能当安全边界用；要守 shell 侧的破坏性操作，写一个看 `Bash` 命令的领域 grader（`examples/ops_qa` 里的 `no_write_ops` 就是这个形状）。`require` 规则同时也是**捕获检查**——预期的变更没被记录下来一样会失败。
 

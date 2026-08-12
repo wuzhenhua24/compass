@@ -1,6 +1,6 @@
-# 跨栈对比 · A 侧：Claude Code + haiku
+# 跨栈对比 · C 侧：Codex CLI + gpt-5.4-mini
 #
-# 和 crossstack.pi.yaml / crossstack.codex.yaml 是**同一份判分契约**——同样三条
+# 和 crossstack.claude.yaml / crossstack.pi.yaml 是**同一份判分契约**——同样三条
 # 用例、同样的隐藏验收测试、同样的 grader 与阈值，逐字相同。三个文件之间只有
 # `agent:` 那一段不同。
 #
@@ -12,37 +12,67 @@
 # `tests/test_coding_agent_example.py::TestCrossStackSuitesShareOneContract`
 # 钉住了这条不变量——三份文件哪天飘了，测试先红。
 #
-#   uv run python examples/coding_agent/run.py --suite crossstack.claude.yaml \
-#       -m haiku --trials 3 --out ./crossstack-run
+#   uv run python examples/coding_agent/run.py --suite crossstack.codex.yaml \
+#       -m gpt-5.4-mini --trials 3 --out ./crossstack-run
 #   uv run python examples/coding_agent/run.py --suite crossstack.pi.yaml \
 #       -m google/gemini-2.5-flash --trials 3 --out ./crossstack-run
 #
-#   compass compare ./crossstack-run/results.haiku.json \
+#   compass compare ./crossstack-run/results.gpt-5.4-mini.json \
 #                   ./crossstack-run/results.google-gemini-2.5-flash.json \
 #                   --on correctness
 #
-# 每次跑用**同一个 --out**：仓库基线因此是同一份，per-model 的结果文件名不冲突。
+# 三次跑用**同一个 --out**：仓库基线因此是同一份，per-model 的结果文件名不冲突。
 #
 # ── 这次对比测的是「栈」，不是「模型」 ────────────────────────────────
-# Claude Code、pi、Codex 的系统提示词、内置工具集、上下文策略都不一样。所以结论
-# 只能读作"这套 CLI 配这个模型，在这批需求上表现如何"，不能读作"haiku 比
-# gemini-2.5-flash 强/弱"。要比模型，请在**同一个 CLI**上换 -m。
+# Codex、Claude Code、pi 的系统提示词、内置工具集、上下文策略都不一样。所以结论
+# 只能读作"这套 CLI 配这个模型，在这批需求上表现如何"，不能读作"gpt-5.4-mini
+# 比 gemini-2.5-flash 强/弱"。要比模型，请在**同一个 CLI**上换 -m。
+# ──────────────────────────────────────────────────────────────────────
+#
+# ── 读 codex 这一侧的数字之前，先知道三件事 ──────────────────────────
+# 1. **codex 不报钱。** 它只报 token，一次 ChatGPT 订阅下的运行根本不按 token
+#    计费。cost 是 Compass 用价目表**算**出来的，没有登记价格就是 $0.00——那个
+#    `cost_budget` 会绿，但它什么都没量到（transcript 的
+#    `cost_unpriced_model` 字段会点明这件事）。要让那一列有意义，跑之前先给个
+#    价：
+#        echo '{"gpt-5.4-mini": {"input": 0.25, "output": 2.0, "cached": 0.025}}' \
+#            > /tmp/pricing.json     # ← 换成 OpenAI 当前的实际费率
+#        COMPASS_PRICING_FILE=/tmp/pricing.json uv run python ... run.py ...
+# 2. **codex exec 只有一个 turn。** codex 把整轮的 usage 汇总成一条，所以
+#    `turn_count` 配 `count_filter: "llm"` 在这一侧永远读到 1。跨栈可比的效率
+#    数字是**工具调用总数**，不是轮次。
+# 3. **工具名不一样。** codex 是 shell / apply_patch / update_plan /
+#    web_search，不是 Claude 的 Bash / Edit，也不是 pi 的 bash / edit。按工具名
+#    比的维度（`forbidden_tools`）只在各自那一侧有效。
 # ──────────────────────────────────────────────────────────────────────
 
-name: "跨栈对比 · Claude Code"
+name: "跨栈对比 · Codex"
 description: "同一批需求与判分契约，比不同 CLI + 模型的组合"
 
 agent:
-  adapter: claude_code
+  adapter: codex
   config:
     repo: "{{REPO}}"           # run.py 填
-    model: "haiku"             # -m 覆盖这个键
-    permission_mode: acceptEdits
-    # Bash 不设前缀白名单——理由见 suite.yaml 里那段实测记录：白名单挡不住带
-    # heredoc / && / 换行的命令，只会把本该允许的形状拒掉，而拒绝不是响亮的
-    # 失败，是**截断**。保护评测的是一次性 worktree + state_delta 这道 gate。
-    allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
-    max_turns: 40
+    model: "gpt-5.4-mini"      # -m 覆盖这个键
+    # 要改文件就至少得 workspace-write：read-only 下 apply_patch 会被沙箱挡掉，
+    # 那时的空 diff 是被拒绝，不是 agent 判断不用改。
+    sandbox: "workspace-write"
+    # reasoning_effort 显式写死而不是用 codex 的默认值：这次对比要可复现。它同时
+    # 也是**另一条独立的轴**，别和模型轴混在一次跑里：
+    #   compass test crossstack.codex.yaml --model-key reasoning_effort -m low -m high
+    reasoning_effort: "medium"
+    # 要有 reasoning 步骤才能读它的思路（none 时 trace 里一条都不会有）。
+    reasoning_summary: "concise"
+    # 关掉联网：A 侧的 allowed_tools 里没有 WebSearch/WebFetch，B 侧 pi 的内置
+    # 工具里也没有联网工具——三侧都不上网，这一项才不是变量。
+    web_search: false
+    # 机器上那份 ~/.codex/config.toml 和 .rules 不该影响"哪个栈更好"的结论——
+    # 关掉它们，这份结果换台机器才还成立。仓库自带的 AGENTS.md 保持开启：那是
+    # 被测项目的一部分，三侧都该读到。
+    ignore_user_config: true
+    ignore_rules: true
+    # 没有 max_turns —— codex 没有对应的 flag，写上去只是个不起作用的键。
+    # 轮次靠下面的 turn_count 诊断（见上面第 2 点），跑飞的运行靠 timeout 兜底。
     timeout: 900
     save_stream_to: "{{STREAMS}}"
 

@@ -1,12 +1,12 @@
 """Shared plumbing for adapters that drive a coding-agent CLI over a real repo.
 
-``claude_code`` and ``pi`` are the same evaluation shape with two different
-executables: put an agent CLI in a throwaway checkout of a git repo, hand it a
-task, and come back with **the diff it produced** (for OUTCOME graders) and
-**the step-by-step trace of how it got there** (for TRANSCRIPT graders). Only
-three things actually differ between them — the command line, the parser for
-the CLI's machine-readable output, and what the run is called in an error
-message — so everything else lives here:
+``claude_code``, ``pi`` and ``codex`` are the same evaluation shape with three
+different executables: put an agent CLI in a throwaway checkout of a git repo,
+hand it a task, and come back with **the diff it produced** (for OUTCOME
+graders) and **the step-by-step trace of how it got there** (for TRANSCRIPT
+graders). Only three things actually differ between them — the command line, the
+parser for the CLI's machine-readable output, and what the run is called in an
+error message — so everything else lives here:
 
 - **workspace isolation** (git worktree / copy / none) and teardown
 - **setup commands**, recorded as tool calls so a failed ``uv sync`` is visible
@@ -17,8 +17,10 @@ message — so everything else lives here:
 
 A subclass supplies :meth:`~CliAgentAdapter._build_argv` and
 :meth:`~CliAgentAdapter._new_reconstructor`, plus the two labels used in error
-messages. See :mod:`compass.adapters.claude_code` and
-:mod:`compass.adapters.pi`.
+messages; :meth:`~CliAgentAdapter._run_error` is there for a CLI that reports a
+dead run *in-band* rather than by falling silent. See
+:mod:`compass.adapters.claude_code`, :mod:`compass.adapters.pi` and
+:mod:`compass.adapters.codex`.
 
 **No sandbox, on purpose.** :class:`~compass.sandbox.local.LocalSandbox` is a
 scrubbed temp dir; an agent CLI needs real network, real credentials, a real
@@ -190,13 +192,36 @@ class CliAgentAdapter(Adapter):
         """The full command line, starting with ``self.cli_path``."""
         raise NotImplementedError
 
-    def _new_reconstructor(self, task_id: str) -> StreamReconstructor:
-        """A parser for this CLI's machine-readable output."""
+    def _new_reconstructor(
+        self, task_id: str, workspace: Path
+    ) -> StreamReconstructor:
+        """A parser for this CLI's machine-readable output.
+
+        ``workspace`` is the directory the CLI ran in. Some CLIs report the paths
+        they edited absolute and never echo their own cwd (codex is one), so the
+        only way to turn those into portable, globbable targets is to be told.
+        """
         raise NotImplementedError
 
     def _run_metadata(self) -> dict[str, Any]:
         """Extra keys for the run's metadata (the CLI's own axes)."""
         return {}
+
+    def _run_error(self, run: _CliRun) -> str | None:
+        """Why this run should be reported as an adapter error, or None.
+
+        A CLI that never produced a parseable event did not run — an empty diff
+        from *that* is a harness failure, not an agent that declined to edit
+        anything, and the two must not score the same. Subclasses extend this
+        with the failures their own CLI reports in-band (see
+        :class:`~compass.adapters.codex.CodexAdapter`).
+        """
+        if not run.events_seen:
+            return (
+                f"{self.cli_label} CLI produced no {self.stream_label} events "
+                f"(exit {run.exit_code}): {(run.stderr or '')[-500:] or 'no stderr'}"
+            )
+        return None
 
     # ------------------------------------------------------------------
     # Adapter contract
@@ -346,17 +371,10 @@ class CliAgentAdapter(Adapter):
                 )
             )
 
-        # A CLI that never produced a parseable event did not run — an empty
-        # diff from *that* is a harness failure, not an agent that declined to
-        # edit anything, and the two must not score the same.
-        if not run.events_seen:
+        run_error = self._run_error(run)
+        if run_error:
             return AgentOutput(
-                artifacts=artifacts,
-                metadata=metadata,
-                error=(
-                    f"{self.cli_label} CLI produced no {self.stream_label} events "
-                    f"(exit {run.exit_code}): {(run.stderr or '')[-500:] or 'no stderr'}"
-                ),
+                artifacts=artifacts, metadata=metadata, error=run_error
             )
 
         return AgentOutput(artifacts=artifacts, metadata=metadata)
@@ -473,7 +491,7 @@ class CliAgentAdapter(Adapter):
     ) -> _CliRun:
         """Run the CLI, reconstructing the transcript from stdout as it streams."""
         task_id = self._task_id(input)
-        reconstructor = self._new_reconstructor(task_id)
+        reconstructor = self._new_reconstructor(task_id, workspace)
         raw_lines: list[str] = []
         events_seen = 0
         dropped_lines = 0
@@ -483,6 +501,12 @@ class CliAgentAdapter(Adapter):
                 *argv,
                 cwd=str(workspace),
                 env=self._cli_env(),
+                # The prompt goes on the command line; nothing here ever wants
+                # the parent's stdin. Inheriting it lets a CLI that reads stdin
+                # when it is not a TTY (codex says "Reading additional input
+                # from stdin...") block on a pipe nobody is going to close —
+                # a hang with no output, in a subprocess, under a timeout.
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_STDOUT_LINE_LIMIT,

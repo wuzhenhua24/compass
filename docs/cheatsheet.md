@@ -21,7 +21,7 @@ tags: []                          # 所有 case 的默认标签
 leak_markers: []                  # 答案泄漏标记，与 case 级合并
 
 agent:                            # 必填
-  adapter: image                  # 内置：image / coding / environment / claude_code / pi；其余用 @register_adapter
+  adapter: image                  # 内置：image / coding / environment / claude_code / pi / codex；其余用 @register_adapter
   endpoint: ""                    # 便捷字段，会并入 config
   workflow: ""                    # 同上
   config: {}                      # 传给 adapter；`compass test -m` 覆盖这里的 model 键
@@ -166,16 +166,18 @@ graders:
     config: {criteria: ["构图是否合理"]}
 ```
 
-**在真实仓库上比编程 Agent**（`claude_code` / `pi`：一次性 worktree + diff + 完整轨迹）
+**在真实仓库上比编程 Agent**（`claude_code` / `pi` / `codex`：一次性 worktree + diff + 完整轨迹）
 
 ```yaml
 agent:
-  adapter: pi                    # 或 claude_code
+  adapter: pi                    # 或 claude_code / codex
   config:
     repo: "./fixtures/svc"
     model: "google/gemini-3.6-flash"   # pi 是 provider 无关的：模型就是 -m 那条轴
     save_stream_to: "./streams"        # 存原始事件流，之后 compass import 免费重放
 ```
+
+三个 CLI 同一份判分契约 = **跨栈**对比（`examples/coding_agent/crossstack.*.yaml`，从 `defaults:` 到末尾逐字相同）。codex 侧三个坑：**它不报美元**（不登记费率 `cost_budget` 就在 $0.00 上空过——用 `COMPASS_PRICING_FILE`）、`turn_count` 配 `count_filter: "llm"` **永远读 1**（`codex exec` 只有一轮，可比的是工具调用总数）、工具名是 `shell` / `apply_patch` / `update_plan`（按名字比的维度跨栈不可比）。
 
 ```bash
 compass test s.yaml -m google/gemini-2.5-flash -m google/gemini-3.6-flash
@@ -266,7 +268,7 @@ compass site build results.json -o site/     # 发布静态站（细节默认脱
 compass site compare a.json b.json -o site/   # 把配对比较也发布进站点（逐 grader + 过程指标）
 compass site serve results.json              # 本地实时看：每请求现算，跑到一半也能看
 compass trace traces/case.json --steps       # 看轨迹
-compass import session.jsonl                 # 导入 pi / OTLP / Claude / OpenAI Agents 轨迹
+compass import session.jsonl                 # 导入 pi / codex / OTLP / Claude 轨迹（codex 流要 --model 才有成本）
 compass list                                 # 已注册的 grader 和 adapter
 compass docs <topic>                         # 本文档体系
 ```
@@ -284,6 +286,6 @@ compass docs <topic>                         # 本文档体系
 | 改了 grader 后 `compare` 报 `regraded` 警告 | 两侧判分契约指纹不同，差异不能归因于 agent |
 | `expect: fail` 的 case「通过」了 | 负向测试：agent 被拦截或 grader 判否即为通过 |
 | sandbox 里跑带凭证的 agent，认证总是失败 | 密钥过滤器拦了 `ANTHROPIC_API_KEY`（前缀+子串双命中），三条注入路径都拦；用 `sandbox_config.env_allow` 显式放行，订阅制凭证还要 `preserve_home: true` |
-| `claude_code` / `pi` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
-| `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有编辑类工具会记 delta（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`，pi 的 `write`/`edit`），Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
+| `claude_code` / `pi` / `codex` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
+| `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有编辑类工具会记 delta（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`，pi 的 `write`/`edit`，codex 的 `apply_patch`），Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
 | `state_delta` 的 `target` glob 一条都匹配不上 | 用相对 session cwd 的路径（`src/*`），不是绝对路径——worktree 每次都是新的临时目录 |

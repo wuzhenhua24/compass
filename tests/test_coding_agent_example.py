@@ -1011,17 +1011,25 @@ class TestIncrementalCaseScoresConventions:
 
 
 class TestCrossStackSuitesShareOneContract:
-    """The two crossstack suites exist to make an A/B across *stacks* legible.
+    """The crossstack suites exist to make an A/B across *stacks* legible.
 
     That only works while their grading contract is identical: `compass compare`
     stamps each case with a `grader_fingerprint` and warns that a diff is "not
-    attributable to the agent" when the two sides disagree. The fingerprint
+    attributable to the agent" when two sides disagree. The fingerprint
     deliberately excludes the agent config and the prompt, so an adapter swap
     keeps it — but an edited threshold on one side silently destroys the
     comparison. These pin the invariant, because nothing else would notice.
     """
 
     from compass.core.regrade import grader_fingerprint as _fingerprint
+
+    # stack name -> (suite file, expected adapter). Adding a fourth CLI adapter
+    # means adding a row here, and the tests below then hold it to the contract.
+    STACKS = {
+        "claude": ("crossstack.claude.yaml", "claude_code"),
+        "pi": ("crossstack.pi.yaml", "pi"),
+        "codex": ("crossstack.codex.yaml", "codex"),
+    }
 
     def _load(self, name, tmp_path):
         raw = (_EXAMPLE / name).read_text(encoding="utf-8")
@@ -1033,41 +1041,65 @@ class TestCrossStackSuitesShareOneContract:
             raw = raw.replace(placeholder, value)
         return Scenario(**yaml.safe_load(raw))
 
-    def _pair(self, tmp_path):
-        return (
-            self._load("crossstack.claude.yaml", tmp_path),
-            self._load("crossstack.pi.yaml", tmp_path),
-        )
+    def _suites(self, tmp_path):
+        return {
+            stack: self._load(name, tmp_path)
+            for stack, (name, _) in self.STACKS.items()
+        }
 
     def test_the_grading_contract_is_identical_case_for_case(self, tmp_path):
-        claude, pi = self._pair(tmp_path)
+        suites = self._suites(tmp_path)
+        reference = suites["claude"]
 
-        assert [c.id for c in claude.cases] == [c.id for c in pi.cases]
-        for a, b in zip(claude.cases, pi.cases, strict=True):
-            assert type(self)._fingerprint(claude, a) == type(self)._fingerprint(pi, b), (
-                f"{a.id}: the two crossstack suites no longer grade alike — "
-                "compare would report the diff as unattributable"
-            )
+        for stack, scenario in suites.items():
+            assert [c.id for c in scenario.cases] == [c.id for c in reference.cases]
+            for a, b in zip(reference.cases, scenario.cases, strict=True):
+                fingerprint = type(self)._fingerprint
+                assert fingerprint(reference, a) == fingerprint(scenario, b), (
+                    f"{a.id}: the {stack} crossstack suite no longer grades like "
+                    "the others — compare would report the diff as unattributable"
+                )
 
     def test_the_prompts_are_identical(self, tmp_path):
         """Same requirement, or the agents were not asked the same question."""
-        claude, pi = self._pair(tmp_path)
-        for a, b in zip(claude.cases, pi.cases, strict=True):
-            assert a.input == b.input
+        suites = self._suites(tmp_path)
+        reference = suites["claude"]
+        for scenario in suites.values():
+            for a, b in zip(reference.cases, scenario.cases, strict=True):
+                assert a.input == b.input
 
     def test_only_the_stack_differs(self, tmp_path):
-        claude, pi = self._pair(tmp_path)
-        assert claude.agent.adapter == "claude_code"
-        assert pi.agent.adapter == "pi"
+        suites = self._suites(tmp_path)
+        for stack, (_, adapter) in self.STACKS.items():
+            assert suites[stack].agent.adapter == adapter
 
-    def test_both_sides_grade_against_the_hidden_tests(self, tmp_path):
-        """The one signal the agent cannot reach has to be present on both."""
-        for scenario in self._pair(tmp_path):
+    def test_every_side_grades_against_the_hidden_tests(self, tmp_path):
+        """The one signal the agent cannot reach has to be present on all sides."""
+        for scenario in self._suites(tmp_path).values():
             for case in scenario.cases:
                 labels = {
                     g.label for g in scenario.get_graders_for_case(case) if g.label
                 }
                 assert {"correctness", "regression"} <= labels
+
+    def test_the_shared_block_is_byte_for_byte_identical(self, tmp_path):
+        """The fingerprint check above tolerates reformatting; this does not.
+
+        Everything from ``defaults:`` to EOF is the contract, comments included —
+        those comments are how the next person learns *why* a threshold is what
+        it is, and a suite whose explanation has drifted is how the thresholds
+        drift next.
+        """
+        tails = {
+            stack: (_EXAMPLE / name).read_text(encoding="utf-8").split(
+                "\ndefaults:\n  trials: 1\n", 1
+            )[1]
+            for stack, (name, _) in self.STACKS.items()
+        }
+        assert len(set(tails.values())) == 1, (
+            "the crossstack suites' shared block has drifted: "
+            f"{sorted(tails)} no longer agree from `defaults:` down"
+        )
 
 
 class TestRunPyResolvesTheSuite:

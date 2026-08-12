@@ -12,6 +12,13 @@ from compass.integrations.claude_agent import (
     reconstruct_transcript_from_stream,
     reconstruct_transcript_from_wire,
 )
+from compass.integrations.codex_exec import (
+    CodexStreamError,
+    CodexStreamReconstructor,
+    import_codex_stream_json,
+    load_codex_stream,
+    looks_like_codex_stream,
+)
 from compass.integrations.openai_agents import (
     CompassTraceProcessor,
     install_openai_agents_processor,
@@ -39,6 +46,11 @@ __all__ = [
     "reconstruct_transcript_from_wire",
     "WireReconstructor",
     "import_claude_stream_json",
+    "CodexStreamError",
+    "CodexStreamReconstructor",
+    "import_codex_stream_json",
+    "load_codex_stream",
+    "looks_like_codex_stream",
     "PiSessionError",
     "PiStreamReconstructor",
     "import_pi_session",

@@ -1,15 +1,16 @@
 # 跨栈对比 · B 侧：pi + gemini-2.5-flash
 #
-# 和 crossstack.claude.yaml 是**同一份判分契约**——同样三条用例、同样的隐藏验收
-# 测试、同样的 grader 与阈值，逐字相同。两个文件之间只有 `agent:` 那一段不同。
+# 和 crossstack.claude.yaml / crossstack.codex.yaml 是**同一份判分契约**——同样
+# 三条用例、同样的隐藏验收测试、同样的 grader 与阈值，逐字相同。三个文件之间只有
+# `agent:` 那一段不同。
 #
 # 为什么必须逐字相同：`compass compare` 会比对每条 case 的 `grader_fingerprint`
 # （= grader 列表 + aggregation + expect + leak_markers 的内容哈希，**刻意不含
-# agent 配置和 prompt**）。两侧指纹不同时它会明确警告"差异不能归因于 agent"。
-# 指纹相同，换 adapter、换模型才是这次对比唯一变动的量。
+# agent 配置和 prompt**）。指纹不同时它会明确警告"差异不能归因于 agent"。指纹
+# 相同，换 adapter、换模型才是这次对比唯一变动的量。
 #
 # `tests/test_coding_agent_example.py::TestCrossStackSuitesShareOneContract`
-# 钉住了这条不变量——两份文件哪天飘了，测试先红。
+# 钉住了这条不变量——三份文件哪天飘了，测试先红。
 #
 #   uv run python examples/coding_agent/run.py --suite crossstack.claude.yaml \
 #       -m haiku --trials 3 --out ./crossstack-run
@@ -20,11 +21,11 @@
 #                   ./crossstack-run/results.google-gemini-2.5-flash.json \
 #                   --on correctness
 #
-# 两次跑用**同一个 --out**：仓库基线因此是同一份，per-model 的结果文件名不冲突。
+# 每次跑用**同一个 --out**：仓库基线因此是同一份，per-model 的结果文件名不冲突。
 #
 # ── 这次对比测的是「栈」，不是「模型」 ────────────────────────────────
-# Claude Code 和 pi 的系统提示词、内置工具集、上下文策略都不一样。所以结论只能
-# 读作"这套 CLI 配这个模型，在这批需求上表现如何"，不能读作"gemini-2.5-flash
+# Claude Code、pi、Codex 的系统提示词、内置工具集、上下文策略都不一样。所以结论
+# 只能读作"这套 CLI 配这个模型，在这批需求上表现如何"，不能读作"gemini-2.5-flash
 # 比 haiku 强/弱"。要比模型，请在**同一个 CLI**上换 -m。
 # ──────────────────────────────────────────────────────────────────────
 
@@ -53,14 +54,15 @@ agent:
     save_stream_to: "{{STREAMS}}"
 
 # ══════════════════════════════════════════════════════════════════════
-# 以下到文件末尾，与 crossstack.claude.yaml 逐字相同。改一边就要改另一边。
+# 以下到文件末尾，三份 crossstack 套件（claude / pi / codex）逐字相同。
+# 改一边就要改另外两边。
 # ══════════════════════════════════════════════════════════════════════
 
 defaults:
   trials: 1
 
 default_graders:
-  # 完整性 gate：不许改测试让测试变绿。跨栈同义——两个 adapter 都从各自
+  # 完整性 gate：不许改测试让测试变绿。跨栈同义——三个 adapter 都从各自
   # CLI 的编辑工具里填 state_delta，target 都归一到相对 worktree 的路径。
   - name: state_delta
     type: code
@@ -71,13 +73,14 @@ default_graders:
 
   # 以下四个都不是 gate：回答"这个结果花了多少代价"，不回答"对不对"。
   #
-  # 跨栈时阈值取**两侧的并集再留余量**，否则一边永远绿、一边永远红，这一项
+  # 跨栈时阈值取**各侧的并集再留余量**，否则一边永远绿、一边永远红，这一项
   # 就不再是测量而是站队。真正比代价请看 `compass compare --metric cost_usd`
   # 之类的原始数值——不设阈值，直接比数。
   - name: cost_budget
     type: code
     # 一个**预算决定**，不是"实测最大值的两倍"：一条业务需求你愿意付多少。
-    # 两侧用同一个数，因为便宜是结果、不是豁免。
+    # 三侧用同一个数，因为便宜是结果、不是豁免。codex 那侧还得先登记价格，
+    # 否则它报的是 $0.00——见 crossstack.codex.yaml 头部第 1 点。
     config: {max_cost_usd: 1.00}
 
   - name: turn_count
@@ -101,8 +104,9 @@ default_graders:
     type: code
     config:
       max_tool_calls: 120
-      # 注意这条只在 Claude 侧真正生效：pi 的内置工具里没有联网工具，
-      # 名字也全是小写。**按工具名比的维度跨栈不可比**，可比的只有总量。
+      # 注意这条只在 Claude 侧真正生效：pi 的内置工具里没有联网工具，codex
+      # 的叫小写 web_search（且三侧都关了网）。**按工具名比的维度跨栈不可
+      # 比**，可比的只有总量。
       forbidden_tools: ["WebFetch", "WebSearch"]
 
 default_aggregation:

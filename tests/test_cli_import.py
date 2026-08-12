@@ -1,4 +1,4 @@
-"""Tests for the ``compass import`` CLI subcommand (pi + otlp file importers)."""
+"""Tests for the ``compass import`` CLI subcommand (pi/claude/codex/otlp files)."""
 
 from __future__ import annotations
 
@@ -76,6 +76,28 @@ def _claude_stream_json() -> str:
     return "\n".join(json.dumps(e) for e in events) + "\n"
 
 
+def _codex_stream_json() -> str:
+    events = [
+        {"type": "thread.started", "thread_id": "cx-1"},
+        {"type": "turn.started"},
+        {"type": "item.started",
+         "item": {"id": "item_0", "type": "command_execution",
+                  "command": "/bin/zsh -lc 'echo 4'", "aggregated_output": "",
+                  "exit_code": None, "status": "in_progress"}},
+        {"type": "item.completed",
+         "item": {"id": "item_0", "type": "command_execution",
+                  "command": "/bin/zsh -lc 'echo 4'", "aggregated_output": "4\n",
+                  "exit_code": 0, "status": "completed"}},
+        {"type": "item.completed",
+         "item": {"id": "item_1", "type": "agent_message", "text": "It is 4."}},
+        {"type": "turn.completed",
+         "usage": {"input_tokens": 110, "cached_input_tokens": 0,
+                   "cache_write_input_tokens": 0, "output_tokens": 11,
+                   "reasoning_output_tokens": 0}},
+    ]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
 def _otlp_two_traces() -> str:
     spans = []
     for tr in ("trA", "trB"):
@@ -117,6 +139,13 @@ def claude_file(tmp_path):
     return p
 
 
+@pytest.fixture
+def codex_file(tmp_path):
+    p = tmp_path / "codex.stream.jsonl"
+    p.write_text(_codex_stream_json(), encoding="utf-8")
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Format detection
 # ---------------------------------------------------------------------------
@@ -131,6 +160,10 @@ class TestDetect:
 
     def test_detect_claude(self, claude_file):
         assert _detect_trace_format(claude_file) == "claude"
+
+    def test_detect_codex(self, codex_file):
+        """codex namespaces its event types (thread./turn./item.); nothing else does."""
+        assert _detect_trace_format(codex_file) == "codex"
 
     def test_detect_directory_is_pi(self, tmp_path):
         assert _detect_trace_format(tmp_path) == "pi"
@@ -172,6 +205,27 @@ class TestImportCommand:
         assert "format: claude" in result.output
         assert "cc-1" in result.output
         assert "It is 4." in result.output
+
+    def test_auto_import_codex_stream_json(self, codex_file):
+        result = CliRunner().invoke(cli, ["import", str(codex_file)])
+        assert result.exit_code == 0
+        assert "format: codex" in result.output
+        assert "cx-1" in result.output
+        assert "It is 4." in result.output
+
+    def test_codex_save_and_reload_with_a_named_model(self, codex_file, tmp_path):
+        """The stream records no model, so `--model` is the only way cost and the
+        model column can be filled in at all."""
+        out = tmp_path / "t.json"
+        result = CliRunner().invoke(
+            cli, ["import", str(codex_file), "--model", "gpt-4o", "-o", str(out)]
+        )
+        assert result.exit_code == 0
+        loaded = Transcript.load(out)
+        assert loaded.trial_id == "cx-1"
+        assert any(tc.tool_name == "shell" for tc in loaded.tool_calls)
+        assert loaded.environment.model_version == "gpt-4o"
+        assert loaded.sum_cost().total_usd > 0
 
     def test_claude_save_and_reload(self, claude_file, tmp_path):
         out = tmp_path / "t.json"

@@ -10,6 +10,10 @@
     uv run python examples/coding_agent/run.py --suite pi.yaml \\
         -m google/gemini-2.5-flash -m google/gemini-3.6-flash --trials 3
 
+    # one stack against another, under one grading contract (same --out both times)
+    uv run python examples/coding_agent/run.py --suite crossstack.codex.yaml \\
+        -m gpt-5.4-mini --trials 3 --out ./crossstack-run
+
     # your own project instead of the bundled one
     uv run python examples/coding_agent/run.py --repo ~/work/my-service -m sonnet
 
@@ -129,7 +133,8 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--suite", type=Path, default=Path("suite.yaml"),
-        help="which suite to resolve: suite.yaml (claude_code) or pi.yaml (pi)",
+        help="which suite to resolve: suite.yaml (claude_code), pi.yaml (pi), "
+             "or one of the crossstack.*.yaml sides (claude / pi / codex)",
     )
     parser.add_argument(
         "--out", type=Path, default=_DEFAULT_OUT,

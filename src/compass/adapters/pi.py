@@ -43,6 +43,7 @@ adapter passes ``--no-session``. Set ``session_dir`` to opt back in when you wan
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from compass.adapters.cli_agent import CliAgentAdapter, StreamReconstructor
@@ -165,7 +166,10 @@ class PiAdapter(CliAgentAdapter):
         argv.append(prompt)
         return argv
 
-    def _new_reconstructor(self, task_id: str) -> StreamReconstructor:
+    def _new_reconstructor(
+        self, task_id: str, workspace: Path
+    ) -> StreamReconstructor:
+        # pi's session header carries its own cwd, so the workspace is unused.
         return PiStreamReconstructor(task_id=task_id)
 
     def _run_metadata(self) -> dict[str, Any]:

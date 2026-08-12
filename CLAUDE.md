@@ -17,7 +17,7 @@ checkout, `uv sync` only puts it in `.venv`.
 # Install dependencies
 uv sync
 
-# Run all tests (1935 as of now; keep them green)
+# Run all tests (1984 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file
@@ -58,7 +58,7 @@ uv run compass site build results.json -o site/  # Publish a static site
 uv run compass site compare a.json b.json -o site/  # Publish a paired comparison
 uv run compass site serve results.json       # Live view, recomputed per request
 uv run compass trace results/case.json       # View transcript
-uv run compass import session.jsonl          # Import trace (pi/OTLP/Claude/OpenAI)
+uv run compass import session.jsonl          # Import trace (pi/codex/OTLP/Claude/OpenAI)
 uv run compass docs [topic]                  # Read Compass's own docs
 uv run compass list                          # List registered graders/adapters
 ```
@@ -71,8 +71,8 @@ uv run compass list                          # List registered graders/adapters
 1. Interface Layer      → CLI (compass.cli.main), Python SDK
 2. Test Orchestration   → Scenario Engine, Trial Manager, Parallel Executor
 3. Core Engine          → Grader System (3-tier), Transcript Collector, Report Gen
-4. Agent Adapter Layer  → image, coding, environment, claude_code, pi adapters (registry-based;
-                          adapters/cli_agent.py is the shared base of the last two, and
+4. Agent Adapter Layer  → image, coding, environment, claude_code, pi, codex adapters (registry-based;
+                          adapters/cli_agent.py is the shared base of the last three, and
                           adapters/llm.py provides LLM mixins/pricing; neither is a registered adapter)
 ```
 
@@ -124,7 +124,7 @@ src/compass/
 │   │   ├── data/         # SQL, data correctness, query quality
 │   │   └── image/        # image_assertions, technical_quality
 │   └── model/            # LLM-based graders (semantic, vlm, rubric, safety)
-├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi)
+├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi, codex)
 └── report/               # Console and HTML reporting, analyzer
 ```
 

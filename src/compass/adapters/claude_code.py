@@ -48,6 +48,7 @@ in this config::
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from compass.adapters.cli_agent import (
@@ -138,5 +139,8 @@ class ClaudeCodeAdapter(CliAgentAdapter):
         argv += [str(a) for a in self.extra_args]
         return argv
 
-    def _new_reconstructor(self, task_id: str) -> StreamReconstructor:
+    def _new_reconstructor(
+        self, task_id: str, workspace: Path
+    ) -> StreamReconstructor:
+        # Claude Code reports its own cwd in the init event; workspace is unused.
         return WireReconstructor(task_id=task_id)

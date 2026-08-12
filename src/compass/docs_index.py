@@ -69,7 +69,7 @@ TOPICS: tuple[Topic, ...] = (
     Topic(
         "integrations",
         "docs/integrations.md",
-        "轨迹导入（pi / OTLP / Claude / OpenAI Agents）、Adapter 接入",
+        "轨迹导入（pi / codex / OTLP / Claude / OpenAI Agents）、Adapter 接入",
     ),
     Topic(
         "roadmap",

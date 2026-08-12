@@ -329,6 +329,75 @@ class TestVariantNamesAreNotRichMarkup:
         assert "S [[weird]]" in (result.output or "")
 
 
+class TestPerModelResultFiles:
+    """`compass compare` pairs two result *files*, so `-m` has to leave them.
+
+    Regression: the per-model files were only written alongside a leaderboard,
+    i.e. when one invocation ran two or more variants. A cross-stack A/B cannot
+    do that — two adapters cannot share a scenario — so it is two invocations of
+    one model each, and both wrote the same `results.json`. The second silently
+    overwrote the first, leaving nothing to compare and no sign of the loss.
+    """
+
+    def _run(self, model: str, out: str):
+        from click.testing import CliRunner
+
+        from compass.cli.main import cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            from pathlib import Path
+
+            Path("s.yaml").write_text(
+                "name: S\n"
+                "agent:\n"
+                "  adapter: image\n"
+                "  config: {model: default}\n"
+                "cases:\n"
+                "  - id: c1\n"
+                "    input: {prompt: x}\n",
+                encoding="utf-8",
+            )
+            result = runner.invoke(
+                cli, ["test", "s.yaml", "-m", model, "-r", "json", "-o", out]
+            )
+            return result, sorted(p.name for p in Path().glob("*.json"))
+
+    def test_a_single_model_run_still_writes_its_own_file(self):
+        _, files = self._run("gpt-5.4-mini", "results.json")
+
+        assert "results.gpt-5.4-mini.json" in files
+        assert "results.json" in files      # the combined report is unchanged
+
+    def test_two_stacks_into_one_out_dir_do_not_collide(self):
+        """The documented cross-stack workflow: same --out, different models."""
+        _, first = self._run("gpt-5.4-mini", "results.json")
+        _, second = self._run("google/gemini-2.5-flash", "results.json")
+
+        assert "results.gpt-5.4-mini.json" in first
+        assert "results.google-gemini-2.5-flash.json" in second
+
+    def test_a_run_without_the_model_axis_writes_only_the_report(self):
+        """No `-m` means no axis to name a file after."""
+        from click.testing import CliRunner
+
+        from compass.cli.main import cli
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            from pathlib import Path
+
+            Path("s.yaml").write_text(
+                "name: S\n"
+                "agent: {adapter: image}\n"
+                "cases:\n"
+                "  - id: c1\n    input: {prompt: x}\n",
+                encoding="utf-8",
+            )
+            runner.invoke(cli, ["test", "s.yaml", "-r", "json", "-o", "results.json"])
+            assert sorted(p.name for p in Path().glob("*.json")) == ["results.json"]
+
+
 class TestListCommandDoesNotShadowBuiltins:
     """Regression: a CLI command named `list` shadowed the builtin.
 

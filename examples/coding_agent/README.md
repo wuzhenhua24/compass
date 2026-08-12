@@ -143,12 +143,60 @@ gemini-2.5-flash  fix_rounding   deltas: ['pricing.py']
 `pi.yaml`，成本这一项就永远是绿的，等于没测——所以 `pi.yaml` 里那段阈值注释
 写清了每个数字是从哪次运行的哪个观测值来的。
 
+## 再换一个 CLI：`crossstack.*.yaml`（比的是栈，不是模型）
+
+`suite.yaml` 和 `pi.yaml` 各自换模型，回答的是"这个栈里哪个模型更好"。三份
+`crossstack.*.yaml` 回答另一个问题：**同一批需求、同一份判分契约，哪个栈更好**。
+
+```bash
+# A 侧：Claude Code + haiku
+uv run python examples/coding_agent/run.py --suite crossstack.claude.yaml \
+    -m haiku --trials 3 --out ./crossstack-run
+# C 侧：Codex + gpt-5.4-mini（同一个 --out：仓库基线是同一份）
+uv run python examples/coding_agent/run.py --suite crossstack.codex.yaml \
+    -m gpt-5.4-mini --trials 3 --out ./crossstack-run
+
+compass compare ./crossstack-run/results.haiku.json \
+                ./crossstack-run/results.gpt-5.4-mini.json --on correctness
+```
+
+三份文件**从 `defaults:` 到末尾逐字相同**，只有 `agent:` 那段不同——因为
+`compass compare` 比的是每条 case 的 `grader_fingerprint`（刻意不含 agent 配置和
+prompt），两侧指纹一致，换 adapter 才是这次对比唯一变动的量。哪天飘了，
+`TestCrossStackSuitesShareOneContract` 先红。
+
+**结论只能读成"这套 CLI 配这个模型"。** 三个 CLI 的系统提示词、内置工具集、上下文
+策略都不一样，跨栈的数字不能拿来给模型排名——要比模型，在**同一个 CLI** 上换 `-m`。
+
+codex 那侧还有三件事要先知道（`crossstack.codex.yaml` 头部展开了）：**codex 不报
+美元**，不登记费率 `cost_budget` 就在 $0.00 上空过；`turn_count` 配
+`count_filter: "llm"` **永远读 1**（`codex exec` 只有一轮，可比的是工具调用总数）；
+工具名是 `shell` / `apply_patch` / `update_plan`，按名字比的维度跨栈不可比。
+
+真跑了一次（两条 case × 每侧 1 trial，**冒烟，不是结论**）：
+
+| | 隐藏验收测试 | 仓库回归 | `state_delta` | 成本 | 工具调用 |
+|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **2/2 过** | 全绿 | **2/2 都改了 `tests/`** | $0.0088 / $0.0126 | 9 / 13 |
+| pi + gemini-2.5-flash | 1/2 过 | 全绿 | 干净 | $0.0080 / $0.0021 | 7 / 5 |
+
+结果侧看 codex 赢，但它每条都顺手改了仓库自带的测试，两条 case 都被 `state_delta`
+判 failed。和 pi 那次 gemini-3.6-flash 是同一个故事，换个栈又发生一遍：**区分度在
+过程侧**。
+
+`compass compare --on correctness` 紧接着把"赢"按住不放：diff −50%、95% CI
+[−148%, +48%]、`within noise band — detectable at n=2: ~140%`。两条 case 什么都证明
+不了，工具就这么说。
+
 ## 文件
 
 ```
 examples/coding_agent/
 ├── suite.yaml          # 完整用例套件（claude_code）—— 拷走这个
 ├── pi.yaml             # 同一批用例，换 pi 驱动 —— 比不同 provider 的模型
+├── crossstack.claude.yaml  # 跨栈对比 A 侧（claude_code）┐ 判分契约逐字相同，
+├── crossstack.pi.yaml      # 跨栈对比 B 侧（pi）        ├ 只有 agent: 那段不同
+├── crossstack.codex.yaml   # 跨栈对比 C 侧（codex）     ┘
 ├── check.py            # 用例红绿自检 ← 先跑这个
 ├── run.py              # 填占位符 → 起真实对比运行
 ├── solutions/          # 每条用例的参考实现（只给 check.py 用，agent 永远看不到）

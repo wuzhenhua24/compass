@@ -150,6 +150,43 @@ transcript = import_claude_stream_json("run.stream.jsonl")   # 复用同一套�
 - **其余不认识的事件类型计数、不丢弃**：映射不了的（`stream_event` 局部增量、以后 CLI 新增的类型）按类型名计数写进 `transcript.metadata["unhandled_events"]`，干净运行则没有这个键。只记数量不留 payload——形状按定义就是未知的，而一条流可能带上千个增量。它回答的是唯一要紧的那个问题：**这次运行有没有发生轨迹解释不了的事？** CLI 以后加了什么，不会被这个 importer 悄悄吞掉。
 - **零依赖**：鸭子类型读属性，不 import `claude_agent_sdk`。
 
+**第五个集成：Codex CLI 事件流**（`compass.integrations.codex_exec`）
+
+`codex exec --json` 每行吐一个 JSON 对象，而且是一套**很小的事件词表**（不是 provider 形状的消息堆）：`thread.started` / `turn.started` / `turn.completed` / `turn.failed` / `item.started` / `item.updated` / `item.completed`，item 的类型只有 `agent_message` / `reasoning` / `command_execution` / `file_change` / `mcp_tool_call` / `web_search` / `todo_list` / `error` 这几种。
+
+```python
+from compass.integrations import import_codex_stream_json
+
+t = import_codex_stream_json("codex.stream.jsonl", model="gpt-5.4-mini")
+```
+
+同一套映射也在线上跑：`CodexStreamReconstructor` 边流边喂，下面的 Codex Adapter 就靠它——Compass 驱动的运行和用户手工存下的流，评起来没有区别。
+
+**映射关系**
+
+| codex 事件 | → Compass |
+|---|---|
+| `thread.started` | `trial_id` / `metadata["thread_id"]` |
+| `turn.completed` | 一个 `llm.generation` `ToolCall`（整轮 `TokenUsage`；成本用价格表补算），output 是这一轮的收尾发言 |
+| `turn.failed` | 同一个调用但 `status="error"`，外加 `metadata["turn_failures"]` |
+| `command_execution` item | 一个 `shell` `ToolCall`（`exit_code != 0` 读作 `status="error"`，和 Claude 侧失败的 `Bash` 同义）|
+| `file_change` item | 一个 `apply_patch` `ToolCall` + 每个改动路径一条 `StateChange` |
+| `mcp_tool_call` item | 一个 `<server>.<tool>` `ToolCall` |
+| `web_search` / `todo_list` item | 一个 `web_search` / `update_plan` `ToolCall` |
+| `reasoning` item | 一条 reasoning step |
+| `agent_message` item | 一条 reasoning step；一轮里**最后**那条同时是该轮 output 与全局 final answer（codex 是边干边说，一次运行有好几条）|
+| `error` item / 顶层 `error` 事件 | `metadata["errors"]` + 一条 reasoning step |
+
+**这个流缺三样东西**，每一样都在 transcript 里留成明确的空缺，而不是一个看起来合理的数：
+
+- **没有时间戳。** 整套词表里没有任何时间字段，所以时长只能由"看着流到达的人"来量。线上量的正是真事（`item.started` → `item.completed` 是真实墙钟跨度）；离线重放量到的只会是重放本身，所以导入器**一个时长都不记**，并在 `metadata["timings"]` 里说明。
+- **没有模型名。** `codex exec` 从不回吐自己用的是哪个模型，所以 adapter 把它请求的 `model` 传进来；`compass import` 得靠 `--model` 补——没有模型就没有成本，因为没东西可定价。
+- **没有美元成本。** codex 只报 token，一次 ChatGPT 订阅下的运行根本不按 token 计费。所以成本是 `calculate_cost` **算**出来的，要求价格表里有这个模型：没有就是 `cost=None` + `metadata["cost_unpriced_model"]`，以及一个在 $0.00 上通过、什么都没量到的 `cost_budget`。读那一列之前先登记费率（`register_pricing()` 或 `COMPASS_PRICING_FILE`）。
+
+**一轮一个 `llm.generation`，不是一次模型往返一个。** codex 把整轮的 usage 汇总上报、从不披露轮内的单次请求，而 `codex exec` 天然只有一轮（一条 prompt、一次完成）。所以 codex 轨迹里恰好有一条 `llm.generation`、扛着整次运行的 token 账单。这很诚实，但意味着 `turn_count` 配 `count_filter: "llm"` 在 codex 轨迹上永远读到 1：**跨栈可比的效率数字是工具调用总数**。
+
+token 换算也要小心：codex 的 `input_tokens` 是**含缓存的整个 prompt 账单**（`cached_input_tokens` 是它的子集），而 Compass 的 `input_tokens` 按 provider 原义指"未缓存输入"、缓存单独报——所以新鲜输入 = `input_tokens − cached − cache_write`，`total_tokens` = `input_tokens + output_tokens`。`reasoning_output_tokens` 是 `output_tokens` 的**子集**（思考占了多少），进 metadata，不加到任何地方。
+
 **State delta：记录它改了什么，而不是它说它改了什么**
 
 Compass 定义了 `StateChange` 槽位但把**捕获**留给数据面——结果是槽位一直没人填，`state_delta` grader 在 Claude 轨迹上空过（`readonly: true` 永远通过）。现在 importer 填它：文件编辑类工具的目标路径就在工具入参里，所以这是**精确值，不是推断**。
@@ -174,20 +211,23 @@ graders:
 
 因为漏报是设计的一部分：空的 delta 读作"没记录"，不是"没变更"。
 
-至此，四个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
+Codex 的 `file_change` item 自带路径和 `add`/`update`/`delete` 标签，所以它那份 delta 同样是精确值；三条边界一字不差地照搬（只记**完成**的改动、target 相对运行 cwd、shell 里 `rm` 掉的文件不记）。多一条 codex 特有的：路径**先归一化再相对化**，否则 `/wt/repo/../repo/app.py` 会按字面相对成 `../repo/app.py`——一个指向 workspace 之外的 target，而那次改动根本没离开 workspace。相对化还会比对 resolve 后的形式：workspace 来自 `tempfile`、被改路径来自 codex 自己的进程，macOS 上这俩差一个软链（`/var/folders/…` vs `/private/var/folders/…`），不 resolve 的话每个 target 都保持绝对、每条 glob 静默失配。
+
+至此，五个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）+ CLI 事件流（Codex）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
 
 **命令行统一入口：`compass import`**
 
-三个**文件型**导入器（pi、OTLP/OpenInference、Claude stream-json）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
+四个**文件型**导入器（pi、OTLP/OpenInference、Claude stream-json、Codex `exec --json`）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
 
 ```bash
 compass import session.jsonl                    # 自动识别 + 摘要
 compass import phoenix_export.json -o out/      # 多 trace：每条存一个文件
 compass import run.stream.jsonl -f claude -o t.json   # Claude stream-json + 存单文件
 compass import phoenix_export.json --json       # 打印重建后的 transcript JSON
+compass import codex.stream.jsonl --model gpt-5.4-mini   # codex 流不带模型名，补上才有成本
 ```
 
-格式自动识别（各用其首行不变量）：pi 首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；其余 JSON 按 OTLP/OpenInference 处理。pi 的两种形态（session 树 / `--mode json` 事件流）首行相同，再看后续行有没有 `id` 区分——所以 adapter 存下的原始流也能直接 `compass import`。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
+格式自动识别（各用其首行不变量）：pi 首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；codex 的事件类型带命名空间前缀（`thread.` / `turn.` / `item.`），别的格式都不用这种写法；其余 JSON 按 OTLP/OpenInference 处理。pi 的两种形态（session 树 / `--mode json` 事件流）首行相同，再看后续行有没有 `id` 区分——所以 adapter 存下的原始流也能直接 `compass import`。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
 
 **流式重建：`WireReconstructor`**
 
@@ -330,7 +370,7 @@ compass test coding.yaml --model-key thinking -m low -m high      # thinking 是
 
 轨迹来自 `--mode json`，边流边过 `PiStreamReconstructor`（见上文）。只映射 `message_end`——一条消息以 start 帧 + 一串 delta + end 帧的形式流出来，只有 end 帧内容完整且带这一轮的 `usage`，映射其它帧会把每一轮都数两遍。
 
-**共用的那半在 `CliAgentAdapter` 上**（`compass.adapters.cli_agent`）：worktree 隔离、setup 命令、流式起进程、轨迹并入、diff 捕获，`claude_code` 和 `pi` 是同一份。子类只提供三样东西：命令行、流解析器、错误信息里 CLI 叫什么名字。
+**共用的那半在 `CliAgentAdapter` 上**（`compass.adapters.cli_agent`）：worktree 隔离、setup 命令、流式起进程、轨迹并入、diff 捕获，`claude_code` / `pi` / `codex` 是同一份。子类只提供命令行、流解析器、错误信息里 CLI 叫什么名字，以及（可选）这个 CLI 会**在流里**报告的失败——`codex` 用后者把 `turn.failed` 变成响亮的 adapter error。
 
 ```yaml
 agent:
@@ -364,6 +404,74 @@ uv run python examples/coding_agent/run.py --suite pi.yaml \
 ```
 
 三条 case 各跑一次（冒烟，不是结论）的结果值得一看：**gemini-3.6-flash 的隐藏验收测试 3/3 全过，比 gemini-2.5-flash 还多一条**——但它三次**每次都顺手改了 `tests/` 底下的测试**，而且贵了近 100 倍（$0.20–0.36 vs $0.002–0.004，28 轮 vs 4 轮）。只有 pass/fail 的评测会把它排第一；`state_delta` 从 pi 的 `edit` 调用里读出的实据把它拦了下来。这就是过程侧不是锦上添花的那个论点，只不过这次是真跑出来的。
+
+## Codex Adapter（第三个 CLI，跨栈对比才成立）
+
+`codex` adapter 和 `claude_code` / `pi` 是同一件事换了个可执行文件：把 agent 放进一次性 checkout、给一条需求、收回 **diff** 和**完整轨迹**。有了第三个 CLI，有意思的问题就不只是"哪个模型"，而是**哪个栈**——同一批需求、同一份判分契约，Codex + gpt-5.4-mini 对上 pi + gemini-2.5-flash：
+
+```bash
+uv run python examples/coding_agent/run.py --suite crossstack.codex.yaml \
+    -m gpt-5.4-mini --trials 3 --out ./crossstack-run
+uv run python examples/coding_agent/run.py --suite crossstack.pi.yaml \
+    -m google/gemini-2.5-flash --trials 3 --out ./crossstack-run
+
+compass compare ./crossstack-run/results.gpt-5.4-mini.json \
+                ./crossstack-run/results.google-gemini-2.5-flash.json --on correctness
+```
+
+轨迹来自 `codex exec --json`，边流边过 `CodexStreamReconstructor`（见上文）。
+
+```yaml
+agent:
+  adapter: codex
+  config:
+    repo: "./fixtures/billing-service"
+    model: "gpt-5.4-mini"        # -m 覆盖这个键
+    reasoning_effort: "medium"   # low|medium|high|xhigh —— 另一条独立的轴
+    sandbox: "workspace-write"   # read-only 下 apply_patch 会被沙箱挡掉
+    reasoning_summary: "concise" # none 时 trace 里一条 reasoning 都不会有
+    web_search: false            # -c tools.web_search
+    ignore_user_config: true     # 这台机器的 config.toml 不该影响结论
+    ignore_rules: true           # .rules 同理；仓库的 AGENTS.md 仍然读
+    timeout: 900
+    save_stream_to: "./streams"
+```
+
+### 四个只有 codex 才有的决定
+
+**session 默认关掉。** codex 平时把每次运行存在 `~/.codex/sessions/`，而每个 trial 一个新 worktree ⇒ 每个 trial 一份垃圾 rollout。所以 adapter 传 `--ephemeral`；想让 `codex resume` 能打开某次运行，配 `ephemeral: false` 换回来。
+
+**没有 `max_turns`，也没有 `append_system_prompt`——因为 codex 没有这两个 flag。** 轮次预算写上去只是个不起作用的键（用 `timeout` 兜底、用 `turn_count` / `loop_detection` 诊断）；追加系统提示词 codex 根本不提供，`system_prompt` 走 `-c model_instructions_file` 是**替换**语义、也是最接近的等价物。所以配了 `append_system_prompt` 会**响亮地报错**而不是被接受后静默忽略——一个被接受又不生效的键，钱照花，评的却是另一个 agent。（内联的 `system_prompt` 会写进一个临时文件，不写进 workspace：agent 没创建的文件出现在 `git diff` 里，会算成它干的活，把 `diff_size` 和改动文件列表一起搞脏。）
+
+**`turn.failed` 视为 adapter error。** codex 把"这次运行死了"报在**流里**：坏模型名、限流、流断掉，都是一串看起来健康的事件之后来一条 `turn.failed`。共用的那道"一个事件都没有"的检查会放它过去——事件有、轨迹有步骤、紧随其后的空 diff 会被评成"agent 想过了，决定不改"。它不是那回事，也不该那么记分，所以 `codex` 覆写了 `_run_error`。
+
+**子进程 stdin 关成 `DEVNULL`（这条改在共用基类上，三个 CLI adapter 都受益）。** codex 在 stdin 不是 TTY 时会去读它（"Reading additional input from stdin..."）。继承父进程的 stdin 意味着它可能卡在一个没人会关的管道上——没有输出、在子进程里、还套着 timeout。prompt 本来就走命令行，这里没人需要 stdin。
+
+### 读 codex 的数字之前
+
+三件事，都在上面 Integrations 那节展开过，这里只列结论：**codex 不报钱**（不登记费率就是 $0.00，`cost_budget` 会在什么都没量到的情况下变绿）、**`turn_count` 配 `count_filter: "llm"` 永远读 1**（可比的是工具调用总数）、**工具名是 `shell` / `apply_patch` / `update_plan` / `web_search`**（按工具名比的 grader 维度只在各自那一侧有效）。
+
+### 一次真实运行
+
+[`examples/coding_agent/crossstack.codex.yaml`](../examples/coding_agent/crossstack.codex.yaml) 是配好的可跑模板，和 `crossstack.claude.yaml` / `crossstack.pi.yaml` **从 `defaults:` 到文件末尾逐字相同**（`compass compare` 会比 `grader_fingerprint`，两侧不同就明确警告"差异不能归因于 agent"；`tests/test_coding_agent_example.py::TestCrossStackSuitesShareOneContract` 钉住这条不变量）。
+
+真跑了一次 A/B——两条 case × 每侧 1 trial，**是冒烟不是结论**（n=2 的排名是噪声，下判断请上 `--trials 3` 以上）：
+
+| | 隐藏验收测试 | 仓库回归 | `state_delta` | 成本 | 工具调用 |
+|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **2/2 过** | 全绿 | **2/2 都改了 `tests/`** | $0.0088 / $0.0126 | 9 / 13 |
+| pi + gemini-2.5-flash | 1/2 过 | 全绿 | 干净 | $0.0080 / $0.0021 | 7 / 5 |
+
+结果侧看 codex 赢（正确性 2/2），但它**每一条都顺手改了仓库自带的测试**，两条 case 因此都被 `state_delta` 这道 gate 判 failed。和 pi 那次 gemini-3.6-flash 是同一个故事，换了个栈又发生一遍：只有 pass/fail 的评测会把这次运行记成满分。
+
+`compass compare` 接着把"赢"这件事按住不放：
+
+```
+Pass rate (correctness)   A 100.0%   B 50.0%   Diff -50.0%   95% CI [-148.0%, +48.0%]
+Verdict: within noise band — detectable at n=2: ~140.0%
+```
+
+两条 case 什么都证明不了，工具直接这么说——这正是它该说的话。成本那条（`--metric cost_usd`：$0.0107 vs $0.00506）同样落在噪声带里。
 
 ## Environment Adapter（环境即代码）
 
