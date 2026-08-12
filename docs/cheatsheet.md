@@ -184,8 +184,11 @@ compass test s.yaml -m google/gemini-2.5-flash -m google/gemini-3.6-flash
 compass test s.yaml --model-key thinking -m low -m high     # 换一条轴扫
 ```
 
-配 `state_delta` 做完整性 gate（`forbid: [{kind: file, target: "tests/*"}]`）——
-不然一个改测试让测试变绿的 agent 会拿满分。
+完整性 gate 别按路径判（`state_delta` + `forbid tests/*` 会把"给修复补一条测试"和
+"把测试改绿"一起毙掉——实测 18 条轨迹里被删改的既有断言是 0 条，全是新增）。判**内容**：
+既有断言必须存活，十几行的 `external_checker` 就够，见
+`examples/coding_agent/tests_intact.py`。`state_delta` 留着当证据（它记工具做了什么，
+diff 记什么留了下来）。
 
 **LLM 判官 + 受控词表标签**
 

@@ -117,8 +117,8 @@ uv run python examples/coding_agent/run.py --suite pi.yaml \
 | gemini-2.5-flash | 2/3 过 | 全绿 | 干净 | $0.002–0.004 | 3–4 |
 | gemini-3.6-flash | **3/3 过** | 全绿 | **3/3 改了 `tests/`** | $0.20–0.36 | 17–28 |
 
-**结果侧看，3.6-flash 赢了：正确性 3/3，比 2.5-flash 还多一条。** 但它每一条都
-顺手改了仓库自带的测试，而且贵了近 100 倍。只有 pass/fail 的评测会把它排在第一。
+**结果侧看，3.6-flash 赢了：正确性 3/3，比 2.5-flash 还多一条。** 但它每一条都动了
+仓库自带的测试，而且贵了近 100 倍。
 
 这不是推断出来的，是 `state_delta` 从 pi 的 `edit` 工具调用里读出来的实据：
 
@@ -130,6 +130,11 @@ gemini-2.5-flash  fix_rounding   deltas: ['pricing.py']
 2.5-flash 那条没过的 case 也值得看一眼：它不是改错了，是**跑到一半 provider
 报错**（`stop_reason: error`），什么都没改就结束了。这在轨迹里是显式记录的一次
 错误，不是一个安静的 0 分——两者要能分开，否则你会去调 prompt，而问题在网络。
+
+> **这次运行当年是拿"改了 `tests/`"当判负依据的，那个判据后来被证明太粗。**
+> 见下面跨栈那一节：把 18 次 trial 的测试改动逐条分类之后，被删改的既有断言是
+> 0 条——"动了 tests/"和"把测试改绿"是两回事。上表那两行只应读作"它动了测试
+> 文件"，至于当年 3.6-flash 动的是哪一种，轨迹已经不在手上，所以这里不下结论。
 
 ### 阈值必须按被测对象实测
 
@@ -173,26 +178,25 @@ codex 那侧还有三件事要先知道（`crossstack.codex.yaml` 头部展开�
 `count_filter: "llm"` **永远读 1**（`codex exec` 只有一轮，可比的是工具调用总数）；
 工具名是 `shell` / `apply_patch` / `update_plan`，按名字比的维度跨栈不可比。
 
-真跑了一次（三条 case × 每侧 3 trials，每侧 9 次运行）：
+真跑了一次（三条 case × 每侧 3 trials，每侧 9 次运行）。**结论：两个栈在这三条
+需求上打平——而第一版评测把这件事测错了。**
 
-| | 隐藏验收测试 | 仓库回归 | 改了 `tests/` | `state_delta` gate | case 通过 | trial 通过 |
-|---|---|---|---|---|---|---|
-| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | **9/9 trials** | **0/9** | **0/3** | 0/9 |
-| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 5/9 trials | 4/9 | 1/3 | 4/9 |
+| | 隐藏验收测试 | 仓库回归 | `tests_intact` gate | case 通过 | trial 通过 |
+|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | 9/9（`tests_extended` ×9） | **3/3** | 9/9 |
+| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 9/9（`tests_extended` ×4） | **3/3** | 9/9 |
 
-**正确性打平**（`compare --on correctness`：`no disagreement … diff +0.0%`），两个栈都
-9/9 次把隐藏验收测试跑绿。**唯一显著的差异是完整性 gate**：`state_delta` 0.0% →
-44.4%，95% CI [+22.7%, +66.2%]，verdict `significant`。codex 九次全部都去改了仓库自带
-的测试（`fix_rounding` / `add_discount` 改 `tests/test_pricing.py`，
-`bug_locate_promo_boundary` 改 `tests/test_orders.py`）——不是偶发，是稳定行为。
-**区分度整个落在过程侧。**
+第一版跑出来是 codex 0/3、pi 1/3，那个差距**整个来自一条写错的 gate**：当时按**路径**
+禁止一切 `tests/` 改动（`state_delta` + `forbid tests/*`），而 codex 九次干的事情是给自己
+刚修好的地方补一条测试。把 18 次 trial 的改动逐条分类：**被删改的既有断言 0 条**。换成
+看内容的 [`tests_intact.py`](tests_intact.py)（既有断言必须存活），把**同一批 18 条轨迹**
+用 `compass grade` 离线重评一遍——一分钱没花、agent 一次没重跑——两侧都变成 9/9。
 
-3 trials 才看得见的那层：pi 每条 case 都 `pass@3 = 1.0` 而 `pass^3 = 0.0`——总能成
-一次，一次也没能三次全成；codex `pass@3 = 0.0`，不是不会做，是每次都撞同一道 gate。
+`compass compare --on correctness` 早就说了实话：`no disagreement … diff +0.0%`。真正的
+区分度在过程侧（成本都约 1.2 分/条，工具调用 12.78 vs 15.44），不在正确性。
 
-**先跑 n=1 会得出一半是噪声的结论**：两条 case × 1 trial 时 pi 全干净、codex 全脏，看
-着像栈的分野；9 次才看出 pi 也会改测试（5/9），只是频率低。那次的 verdict 本来就写着
-`within noise band — detectable at n=2: ~140%`。
+3 trials 才看得见的那层：旧 gate 下两侧 `pass^3` 都是 0.0，新 gate 下都是 1.0——"能做
+出来"和"每次都能"是两个问题，单次运行分不出。
 
 发布成站点对比：
 
@@ -220,6 +224,7 @@ examples/coding_agent/
 ├── crossstack.claude.yaml  # 跨栈对比 A 侧（claude_code）┐ 判分契约逐字相同，
 ├── crossstack.pi.yaml      # 跨栈对比 B 侧（pi）        ├ 只有 agent: 那段不同
 ├── crossstack.codex.yaml   # 跨栈对比 C 侧（codex）     ┘
+├── tests_intact.py     # 完整性 gate 的 checker：既有断言必须存活（external_checker）
 ├── check.py            # 用例红绿自检 ← 先跑这个
 ├── run.py              # 填占位符 → 起真实对比运行
 ├── solutions/          # 每条用例的参考实现（只给 check.py 用，agent 永远看不到）

@@ -626,6 +626,18 @@ graders:
 
 匹配器是 `{kind, op, target}`，`kind`/`op` 精确匹配、`target` 是 glob，缺省的键匹配任意值——所以 `{kind: file, target: "tests/*"}` 的意思是"对 tests/ 下任何文件的任何操作"。
 
+> **别把"动了 tests/"直接当成"把测试改绿"。** 这条 forbid 规则曾经是
+> `examples/coding_agent/` 的完整性 gate，一次真实的跨栈运行证明它太粗：codex +
+> gpt-5.4-mini 九次 trial 全被它判负，而它每次干的是给自己刚修好的地方**补一条
+> 测试**；两个栈 18 次 trial 里被删改的既有断言是 **0 条**。按路径判分不开"改弱
+> 断言"和"补测试"，于是它在惩罚好习惯。现在那道 gate 换成了一个十几行的
+> `external_checker`（[`tests_intact.py`](../examples/coding_agent/tests_intact.py)）：
+> 判据是运行的 diff，规则是**改之前存在的断言，改完必须还在**。
+> `state_delta` 在那套 suite 里仍然是有用的**证据**（它记的是工具做了什么，而 diff
+> 记的是什么留了下来——有一次 trial 改了测试又改回去，两者就不一致），只是不再
+> 由它下判决。按路径 forbid 仍然适合"这一片根本不该碰"的场景，例如 suite.yaml 里
+> 那条"一个源文件都不许改"的用例。
+
 **谁来填这个槽位。** 捕获 delta 是数据面的活（见 [core-design.md](core-design.md) 的边界纪律）。目前三个导入器会自动填文件编辑：`compass.integrations.claude_agent`（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`）、`compass.integrations.pi_sessions`（pi 的 `write`/`edit`）和 `compass.integrations.codex_exec`（codex 的 `apply_patch`，`add`/`update`/`delete` 直接来自事件本身）——因此 `claude_code` / `pi` / `codex` 三个 adapter 和 `compass import` 都开箱可用。要点见 [integrations.md](integrations.md)：只记**成功**的编辑、target **相对 session cwd**（worktree 路径每次都不同，绝对路径没法写 glob）且**归一化**（`./x.py` 和 `x.py` 记成同一个 target）、**Bash 造成的变更不记**。
 
 最后一条意味着 `state_delta` 会**漏报**。所以：空的 delta 读作"没记录"而不是"没变更"，`readonly: true` 不能当安全边界用；要守 shell 侧的破坏性操作，写一个看 `Bash` 命令的领域 grader（`examples/ops_qa` 里的 `no_write_ops` 就是这个形状）。`require` 规则同时也是**捕获检查**——预期的变更没被记录下来一样会失败。

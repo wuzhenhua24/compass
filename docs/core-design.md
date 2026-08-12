@@ -784,7 +784,9 @@ graders:
 
 **第一个内置捕获：Claude 轨迹的文件编辑**。上面这条纪律有个副作用——槽位定义好了却没人填，`state_delta` grader 在 Claude 轨迹上就是**空过**（`readonly: true` 永远通过）。`compass.integrations.claude_agent` 现在填它：成功的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` → `StateChange(kind="file", …)`，路径从工具入参里直接读，是**精确值不是推断**。三条边界写在 [docs/integrations.md](integrations.md)：只记成功的调用、target 相对 session cwd（否则 worktree 的随机路径没法写 glob）、**Bash 造成的变更不记**（可靠解析 shell 不是这层该假装能做的事，错的 delta 比缺的 delta 更糟）。
 
-这让"改了不该改的东西"变成确定性检查。典型的抓获场景：agent 改不动实现，转头把测试改成通过——`integration_test` 一片绿，`state_delta` 的 `forbid: [{kind: file, target: "tests/*"}]` 把它抓出来。**过程评估在这里不是锦上添花，是唯一发现得了的路径。**
+这让"改了不该改的东西"变成确定性检查。典型的抓获场景：agent 改不动实现，转头把测试改成通过——`integration_test` 一片绿，而过程侧看得见它是怎么"过"的。**过程评估在这里不是锦上添花，是唯一发现得了的路径。**
+
+> 但要注意判据的粒度：`forbid: [{kind: file, target: "tests/*"}]` 判的是**路径**，它分不开"把断言改弱"和"给修复补一条测试"。实测里后者远比前者常见（一次跨栈运行 18 条轨迹，被删改的既有断言 0 条，全是新增），所以 `examples/coding_agent/` 的完整性 gate 已经换成判**内容**的版本（既有断言必须存活，见 [graders.md](graders.md)）。`state_delta` 在那里仍然是记录"工具做了什么"的证据——**它和 diff 回答的不是同一个问题**：有一次 trial 编辑了测试又改回去，工具侧有记录、diff 里什么都没留下。
 
 **审计溯源：run_id / config_hash / grader_version**（ToolCall Protocol v1.4）
 

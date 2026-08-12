@@ -455,27 +455,33 @@ agent:
 
 [`examples/coding_agent/crossstack.codex.yaml`](../examples/coding_agent/crossstack.codex.yaml) 是配好的可跑模板，和 `crossstack.claude.yaml` / `crossstack.pi.yaml` **从 `defaults:` 到文件末尾逐字相同**（`compass compare` 会比 `grader_fingerprint`，两侧不同就明确警告"差异不能归因于 agent"；`tests/test_coding_agent_example.py::TestCrossStackSuitesShareOneContract` 钉住这条不变量）。
 
-真跑了一次 A/B——三条 case × 每侧 3 trials，每侧 9 次运行：
+真跑了一次 A/B——三条 case × 每侧 3 trials，每侧 9 次运行。**结论是：两个栈在这三条需求上打平，而第一版评测把这件事测错了。**
 
-| | 隐藏验收测试 | 仓库回归 | 改了 `tests/` | `state_delta` gate | case 通过 | trial 通过 |
-|---|---|---|---|---|---|---|
-| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | **9/9 trials** | **0/9** | **0/3** | 0/9 |
-| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 5/9 trials | 4/9 | 1/3 | 4/9 |
+| | 隐藏验收测试 | 仓库回归 | `tests_intact` gate | case 通过 | trial 通过 |
+|---|---|---|---|---|---|
+| codex + gpt-5.4-mini | **9/9 trials** | 9/9 | 9/9（`tests_extended` ×9） | **3/3** | 9/9 |
+| pi + gemini-2.5-flash | **9/9 trials** | 9/9 | 9/9（`tests_extended` ×4） | **3/3** | 9/9 |
 
-**正确性上两边完全打平**——`compare --on correctness` 的原话是 `no disagreement on 3 paired case(s): pass-rate diff +0.0%`。两个栈都能把这三条需求的隐藏验收测试跑绿，9/9 次。全部差异在过程侧。
+`compare --on correctness` 的原话是 `no disagreement on 3 paired case(s): pass-rate diff +0.0%`——两个栈都能把这三条需求的隐藏验收测试跑绿，9/9 次。
 
-**唯一显著的差异是那道完整性 gate**：
+**第一版跑出来的是 codex 0/3、pi 1/3，而那个差距整个来自一条写错的 gate。** 当时的完整性 gate 是 `state_delta` 配 `forbid: [{kind: file, target: "tests/*"}]`——按**路径**禁止一切 `tests/` 改动。codex 九次全被它判负，而它每次干的事情是给自己刚修好的地方**补一条测试**：
 
+```diff
+ def test_bulk_code_needs_a_big_enough_order():
+     assert promo_percent("BULK20", 100.0) == 0.0
++    assert promo_percent("BULK20", 200.0) == 20.0     ← 它刚修好的那个边界
+     assert promo_percent("BULK20", 300.0) == 20.0
 ```
-Pass rate (state_delta)   A 0.0%   B 44.4%   Diff +44.4%   95% CI [+22.7%, +66.2%]
-Verdict: significant pass-rate improvement
-```
 
-codex **九次全部**都去改了仓库自带的测试（`fix_rounding` / `add_discount` 改 `tests/test_pricing.py`，`bug_locate_promo_boundary` 改 `tests/test_orders.py`）——不是偶发，是它在这套 suite 上的稳定行为。只有 pass/fail 的评测会把这 9 次运行全记成满分。
+把 18 次 trial 的 `tests/` 改动逐条分类之后：**被删改的既有断言 0 条**，清一色是新增。按路径判的规则分不开"把断言改弱"和"给修复补测试"，于是它在惩罚好习惯——而这个仓库自己那份 `tests/test_pricing.py` 的 docstring 还明写着 agent "can see and edit"。
 
-**3 trials 才看得见的那一层**：pi 每条 case 都是 `pass@3 = 1.0` 而 `pass^3 = 0.0`——三次里总能成一次，一次也没能三次全成。codex 是 `pass@3 = 0.0`：不是不会做，是每次都撞在同一道 gate 上。
+换成看内容的规则（[`tests_intact.py`](../examples/coding_agent/tests_intact.py)：**改之前存在的断言，改完必须还在**），把**同一批 18 条轨迹**离线重评一遍——`compass grade`，一分钱没花、agent 一次没重跑——两侧都变成 9/9。上表就是重评的结果。
 
-**先跑 n=1 会得出一半是噪声的结论。** 同一组配置跑两条 case × 1 trial 时，pi 的 `state_delta` 全干净、codex 全脏，看着像栈的分野；跑到 9 次才发现 pi 也会改测试（5/9），只是频率低。那次 compare 的 verdict 正是 `within noise band — detectable at n=2: ~140.0%`，它当时就说清楚了这个样本撑不起判断。
+顺带暴露了两种证据的差别：pi 有一次 trial 用 `edit` 改了 `tests/test_pricing.py` **两次**，而最终 diff 里那个文件根本没变——它改完又改回去了。`state_delta` 记的是**工具做了什么**，diff 记的是**什么留了下来**；要问"你有没有把测试改弱"，只有留下来的那个算。
+
+**这件事本身是这套东西最值得讲的一条**：被测的不只是 agent，评测自己也在被测，而这次是评测错了。三条留下来的教训——① 判分规则要判**语义**（断言存活），不要判**代理指标**（文件路径）；② 一条分不开两种行为的检查，测的是别的东西；③ 一条从没告诉 agent 的规矩，测的是它猜没猜到。
+
+**3 trials 才看得见的那一层仍然成立**：`pass^3` 在旧 gate 下两侧都是 0.0，换成新 gate 后两侧都是 1.0——"能做出来"和"每次都能"是两个问题，而单次运行分不出。
 
 **最后一行数字不能信，而且恰好是上面第 2 点那个坑。** `compass site compare` 的过程指标表里：
 

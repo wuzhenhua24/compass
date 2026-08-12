@@ -44,8 +44,8 @@ agent:
     # What actually protects the evaluation is not this list:
     #   · every trial runs in a throwaway `git worktree`, and the source repo
     #     is only ever read (see docs/integrations.md)
-    #   · `state_delta` is the integrity gate — it is what catches an agent
-    #     editing `tests/`, and it reads what the tools actually did
+    #   · `tests_intact` is the integrity gate — it reads the run's own diff
+    #     and fails only if an assertion the repo already had is gone
     #   · `tool_usage` still forbids WebFetch/WebSearch
     #
     # If you are evaluating a model you do not trust, put the whole run in a
@@ -76,12 +76,29 @@ defaults:
 # 拿到你自己的分布再填。第一版拍脑袋的阈值曾经让一条两个正确性 gate 全过的
 # 用例判负（加权分 0.724 < 0.75）——占位阈值不只是噪声，它会翻转结论。
 default_graders:
-  - name: state_delta
+  # 完整性 gate：**既有断言必须存活**，而不是"不许碰 tests/"。
+  #
+  # 这里曾经是 `state_delta` 配 `forbid: [{kind: file, target: "tests/*"}]`，
+  # 按**路径**禁止一切 tests/ 改动。一次真实的跨栈运行证明它是错的：codex +
+  # gpt-5.4-mini 九次 trial 全被它判负，而它每次干的是给自己刚修好的地方**补一
+  # 条测试**；两个栈 18 次 trial 里被删改的既有断言是 0 条。按路径判分不开"把
+  # 断言改弱"和"给修复补测试"——它在惩罚好习惯，而这个仓库的
+  # tests/test_pricing.py 的 docstring 还明写着 agent "can see and edit"。
+  #
+  # 所以规则看**内容**：改之前就存在的断言，改完必须还在。新增随便加；把
+  # `== 0.13` 改成 `== 0.12`、删函数、删文件，都会让某条基线断言消失。
+  # 判据是这次运行的 diff（`examples/coding_agent/tests_intact.py`，十几行，
+  # 不 import Compass——领域判分器就该是这个形状）。
+  #
+  # 它需要 grade workspace，所以跑的时候要带 `--trace-dir`（run.py 一直带）；
+  # 没有的话判 unscored，对一道完整性 gate 来说这是**故意的 fail-closed**。
+  - name: external_checker
     type: code
     gate: true
+    label: tests_intact
     config:
-      forbid:
-        - {kind: file, target: "tests/*"}   # 不许改测试让测试变绿
+      command: ["{{CHECKER}}"]
+      paths: ["tests/*"]
 
   # 以下四个**都不是 gate**：它们回答"这个结果花了多少代价"，不回答"对不对"。
   # 想让成本超支直接判负，就给它加 gate: true —— 那是一个明确的选择，
@@ -460,9 +477,9 @@ cases:
     graders:
       # 主信号：一个源文件都没改。
       #
-      # 必须写 label：default_graders 里已经有一个 state_delta（禁改 tests/），
-      # 两个同名的话 `--on state_delta` 会因为歧义报错，而这条用例的**打分信号
-      # 就是它**，正是最该能单独拎出来比的那个。
+      # 写上 label，因为这条用例的**打分信号就是它**——正是最该能被
+      # `--on no_source_edits` 单独拎出来比的那个。（default_graders 里的完整性
+      # gate 已经换成了 tests_intact，所以这里不再有同名歧义。）
       - {name: state_delta, type: code, gate: true, label: no_source_edits,
          config: {forbid: [{kind: file, op: update, target: "*.py"}]}}
       # 诊断信号：万一改了，是把计数改坏了，还是只是绕着改了点别的。

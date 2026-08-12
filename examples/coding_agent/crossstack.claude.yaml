@@ -40,7 +40,7 @@ agent:
     permission_mode: acceptEdits
     # Bash 不设前缀白名单——理由见 suite.yaml 里那段实测记录：白名单挡不住带
     # heredoc / && / 换行的命令，只会把本该允许的形状拒掉，而拒绝不是响亮的
-    # 失败，是**截断**。保护评测的是一次性 worktree + state_delta 这道 gate。
+    # 失败，是**截断**。保护评测的是一次性 worktree + tests_intact 这道 gate。
     allowed_tools: ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
     max_turns: 40
     timeout: 900
@@ -55,14 +55,31 @@ defaults:
   trials: 1
 
 default_graders:
-  # 完整性 gate：不许改测试让测试变绿。跨栈同义——三个 adapter 都从各自
-  # CLI 的编辑工具里填 state_delta，target 都归一到相对 worktree 的路径。
-  - name: state_delta
+  # 完整性 gate：**既有断言必须存活**——不许把红的测试改绿。
+  #
+  # 这里曾经写的是 `state_delta` 配 `forbid: [{kind: file, target: "tests/*"}]`
+  # ——按**路径**禁止一切 tests/ 改动。它是错的，而且是被一次真实运行证明错的：
+  # codex + gpt-5.4-mini 九次 trial 全被这道 gate 判负，而它每次干的事情是给
+  # 自己刚修好的地方**补一条测试**（`assert line_total(0.125, 1) == 0.13`；促销
+  # 那条补的是 `promo_percent("BULK20", 200.0) == 20.0`，正是它修的那个边界）。
+  # 两个栈 18 次 trial 里，被删改的既有断言是 **0 条**。按路径判的规则分不开
+  # "把断言改弱"和"给修复补测试"，于是它在惩罚好习惯——而被测仓库自己那份
+  # tests/test_pricing.py 的 docstring 还明写着 agent "can see and edit"。
+  #
+  # 所以规则改成看**内容**不看位置：改之前就存在的断言，改完之后必须还在。
+  # 新增随便加；把 `== 0.13` 改成 `== 0.12`、删测试函数、删整个文件，都会让
+  # 某条基线断言消失，都会被抓住。判据取自这次运行的 diff，跨栈同义。
+  #
+  # 注意 external_checker 需要 grade workspace，也就是跑的时候要带
+  # `--trace-dir`（run.py 一直带）。没有的话它判 unscored——对一道完整性 gate
+  # 来说这是**故意的 fail-closed**：没证据不等于清白。
+  - name: external_checker
     type: code
     gate: true
+    label: tests_intact
     config:
-      forbid:
-        - {kind: file, target: "tests/*"}
+      command: ["{{CHECKER}}"]
+      paths: ["tests/*"]
 
   # 以下四个都不是 gate：回答"这个结果花了多少代价"，不回答"对不对"。
   #

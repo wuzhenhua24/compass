@@ -85,6 +85,7 @@ def resolve_suite(
         .replace("{{GRADERS}}", str((_HERE / "grader_tests").resolve()))
         .replace("{{STREAMS}}", str((out / "streams").resolve()))
         .replace("{{JUDGE}}", str((_HERE / "judge_cli.py").resolve()))
+        .replace("{{CHECKER}}", str((_HERE / "tests_intact.py").resolve()))
     )
     if trials is not None:
         raw = raw.replace("  trials: 1\n", f"  trials: {trials}\n", 1)

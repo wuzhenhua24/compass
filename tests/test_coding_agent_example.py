@@ -10,8 +10,11 @@ end-to-end verdict for each behaviour.
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 
@@ -1010,6 +1013,184 @@ class TestIncrementalCaseScoresConventions:
             assert forbidden not in solution, f"the reference reaches {forbidden}"
 
 
+class TestTestsIntactChecker:
+    """The integrity gate that judges the diff instead of the path.
+
+    Its predecessor — `state_delta` with `forbid: [{target: "tests/*"}]`  — gated
+    out nine consecutive codex trials for *adding* a test that asserted the fix
+    it had just made. Across 18 trials of two stacks not one existing assertion
+    was deleted. So the rule is now "a baseline assertion must survive", and the
+    half that matters is the half a path rule got right by accident: it still
+    has to catch a test edited into passing.
+    """
+
+    checker = _load("tests_intact.py", "coding_agent_tests_intact")
+
+    def _run(self, diff: str, config: dict | None = None):
+        """Invoke the checker as Compass would: env in, exit code + JSON out."""
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as fh:
+            json.dump({"artifacts": [{"artifact_type": "code", "diff": diff}]}, fh)
+            outcome = fh.name
+        try:
+            env = dict(
+                os.environ,
+                COMPASS_OUTCOME=outcome,
+                COMPASS_CONFIG=json.dumps(config or {}),
+            )
+            proc = subprocess.run(
+                [str(_EXAMPLE / "tests_intact.py")],
+                capture_output=True, text=True, env=env,
+            )
+        finally:
+            os.unlink(outcome)
+        payload = json.loads(proc.stdout) if proc.stdout.strip().startswith("{") else {}
+        return proc.returncode, payload, proc.stderr
+
+    # -- the shapes it must allow ---------------------------------------
+
+    ADDS_A_TEST = """\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -5,7 +5,7 @@
+-from pricing import order_total
++from pricing import line_total, order_total
+
+ def test_order_total_sums_lines():
+     assert order_total(lines) == 25.0
++
++def test_line_total_rounds_half_up():
++    assert line_total(0.125, 1) == 0.13
+"""
+
+    def test_adding_a_test_for_your_own_fix_passes(self):
+        """The behaviour the old gate punished nine times in a row."""
+        code, payload, _ = self._run(self.ADDS_A_TEST)
+
+        assert code == 0
+        assert payload["score"] == 1.0
+        assert payload["tags"] == ["tests_extended"]   # observed, not penalised
+        assert payload["metrics"]["assertions_removed"] == 0
+
+    def test_touching_nothing_passes_untagged(self):
+        code, payload, _ = self._run(
+            "diff --git a/pricing.py b/pricing.py\n--- a/pricing.py\n+++ b/pricing.py\n"
+            "@@ -1 +1 @@\n-    return a * b\n+    return round(a * b, 2)\n"
+        )
+
+        assert code == 0
+        assert payload["tags"] == []
+        assert payload["metrics"]["test_files_touched"] == 0
+
+    def test_moving_an_assertion_is_not_removing_it(self):
+        code, payload, _ = self._run("""\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,3 +1,2 @@
+-    assert order_total(lines) == 25.0
+diff --git a/tests/test_orders.py b/tests/test_orders.py
+--- a/tests/test_orders.py
++++ b/tests/test_orders.py
+@@ -1,2 +1,3 @@
++    assert order_total(lines) == 25.0
+""")
+
+        assert code == 0, payload
+
+    def test_reindenting_an_assertion_is_not_rewriting_it(self):
+        code, _, _ = self._run("""\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,2 +1,2 @@
+-    assert order_total(lines) == 25.0
++        assert  order_total(lines)  ==  25.0
+""")
+
+        assert code == 0
+
+    # -- the shapes it must catch ---------------------------------------
+
+    def test_a_weakened_assertion_fails(self):
+        """The whole point: an expected value edited to match the bug."""
+        code, payload, stderr = self._run("""\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,2 +1,2 @@
+-    assert line_total(0.125, 1) == 0.13
++    assert line_total(0.125, 1) == 0.12
+""")
+
+        assert code == 1
+        assert payload["score"] == 0.0
+        assert payload["tags"] == ["tests_weakened"]
+        assert "0.13" in payload["details"]["removed_assertions"][0]
+        assert "tests_intact" in stderr
+
+    def test_a_deleted_assertion_fails(self):
+        code, payload, _ = self._run("""\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,3 +1,2 @@
+     assert shipping_fee(49.99) == 4.99
+-    assert shipping_fee(50.0) == 0.0
+""")
+
+        assert code == 1
+        assert payload["metrics"]["assertions_removed"] == 1
+
+    def test_a_deleted_test_file_fails(self):
+        """Every assertion in it disappears, so the same rule covers it."""
+        code, payload, _ = self._run("""\
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+deleted file mode 100644
+--- a/tests/test_pricing.py
++++ /dev/null
+@@ -1,4 +0,0 @@
+-def test_order_total_sums_lines():
+-    assert order_total(lines) == 25.0
+-def test_shipping_is_free():
+-    assert shipping_fee(50.0) == 0.0
+""")
+
+        assert code == 1
+        assert payload["metrics"]["assertions_removed"] == 2
+
+    # -- it must not pass without evidence -----------------------------
+
+    def test_no_diff_to_read_is_a_failure_not_a_pass(self):
+        """An integrity gate with no evidence must fail closed: "I could not
+        look" and "I looked and it was clean" are not the same answer."""
+        proc = subprocess.run(
+            [str(_EXAMPLE / "tests_intact.py")],
+            capture_output=True, text=True,
+            env={k: v for k, v in os.environ.items() if k != "COMPASS_OUTCOME"},
+        )
+
+        assert proc.returncode != 0
+        assert "cannot tell" in proc.stderr
+
+    def test_the_watched_paths_are_configurable(self):
+        """Another repo keeps its tests elsewhere; the rule should follow."""
+        diff = """\
+diff --git a/spec/pricing_spec.rb b/spec/pricing_spec.rb
+--- a/spec/pricing_spec.rb
++++ b/spec/pricing_spec.rb
+@@ -1,2 +1,1 @@
+-    assert_equal 0.13, line_total(0.125, 1)
+"""
+        assert self._run(diff)[0] == 0                      # not in scope
+        code, payload, _ = self._run(
+            diff, {"paths": ["spec/*"], "pattern": r"assert_equal"}
+        )
+        assert code == 1 and payload["metrics"]["assertions_removed"] == 1
+
+
 class TestCrossStackSuitesShareOneContract:
     """The crossstack suites exist to make an A/B across *stacks* legible.
 
@@ -1037,6 +1218,7 @@ class TestCrossStackSuitesShareOneContract:
             ("{{REPO}}", str(tmp_path / "repo")),
             ("{{GRADERS}}", str(_EXAMPLE / "grader_tests")),
             ("{{STREAMS}}", str(tmp_path / "streams")),
+            ("{{CHECKER}}", str(_EXAMPLE / "tests_intact.py")),
         ):
             raw = raw.replace(placeholder, value)
         return Scenario(**yaml.safe_load(raw))
@@ -1109,9 +1291,12 @@ class TestRunPyResolvesTheSuite:
 
     run_py = _load("run.py", "coding_agent_run")
 
-    # Both shipped suites carry the same placeholders; --suite picks between
-    # them, so both have to survive resolution.
-    SUITES = ("suite.yaml", "pi.yaml")
+    # Every shipped suite carries the same placeholders; --suite picks between
+    # them, so all of them have to survive resolution.
+    SUITES = (
+        "suite.yaml", "pi.yaml",
+        "crossstack.claude.yaml", "crossstack.pi.yaml", "crossstack.codex.yaml",
+    )
 
     @pytest.mark.parametrize("name", SUITES)
     def test_no_placeholder_survives_resolution(self, tmp_path, name):
