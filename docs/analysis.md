@@ -538,6 +538,39 @@ compass compare a.json b.json --on correctness
 
 选择器先匹配 `label`，匹配不上再退回 `name`——所以没写 label 的套件也能用（只要那个名字在 case 内唯一）。
 
+#### `--metric <name>`：比一个数，不是比分数
+
+轮次、成本、工具调用次数这些不是"分数"——它们没有 pass/fail，而且**多数是越小越好**。
+所以 `--metric` 走的是另一条输出路径：只报配对差值和区间，**不报 pass rate、不报翻转**。
+把它们塞进分数报告的形状里，只会请人误读。
+
+```bash
+compass compare a.json b.json --metric turns
+compass compare a.json b.json --metric cost_usd
+compass compare a.json b.json --metric calls_grep --missing-as-zero
+```
+
+内置过程 grader 现在会往 `EvaluatorResult.metrics`（核心拥有的那个通道，不是
+grader 自己的 `details`）里写：
+
+| grader | 指标 |
+|---|---|
+| `turn_count` | `turns` |
+| `cost_budget` | `cost_usd`、`total_tokens`、`cached_tokens`、`budgeted_tokens` |
+| `tool_usage` | `tool_calls`、`distinct_tools`、`calls_<tool>` |
+| `loop_detection` | `loop_issues`、`has_critical_loop`（布尔，按比率聚合） |
+
+三个坑：
+
+- **名字是小写的**（`normalize_tag`）：`calls_grep`，不是 `calls_Grep`。
+- **`calls_<tool>` 只在该工具被用过时才存在。** 所以"从没用过 Grep"会表现为
+  "没测过"而被踢出统计——而那恰恰可能正是你要的结论。`--missing-as-zero` 把这些
+  case 读成实测 0。**别对 `cost_usd` 用它**：成本缺失意味着 grader 没跑，
+  那不是一次"零成本的运行"。两种读法都对，只是对不同的指标，所以要显式选。
+- **多 trial 时它比的是一次尝试，不是均值。** 一个 case 的 grader 结果来自
+  单次 trial（`total_trials: 3` 的 case 也只带一份），所以 `--metric`（和 `--on`）
+  在多 trial 运行上是**抽了一次**。命令行会就此告警。
+
 #### `label:`：一个 case 跑同一个 grader 两次时
 
 `name` 是注册表的键，区分不了两个实例。一条 case 同时跑隐藏验收测试和仓库自带套件时，两个都叫 `integration_test`，下游就分不开了。

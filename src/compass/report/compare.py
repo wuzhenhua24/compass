@@ -105,6 +105,39 @@ def select_grader_score(
     return float(match["score"]), bool(match.get("passed"))
 
 
+def select_metric(item: dict[str, Any], metric: str) -> float | None:
+    """The value of *metric* for one case, or None if it was not measured.
+
+    Metrics live in ``EvaluatorResult.metrics`` — the core-owned channel, as
+    opposed to ``details``, which is the grader's own payload and may hold
+    anything. Booleans are read as 1.0/0.0 so a flag compares as a rate.
+
+    A metric emitted by two graders in the same case is an error rather than a
+    guess, for the same reason an ambiguous ``on`` is: silently picking one
+    produces a comparison that looks fine and answers a question nobody asked.
+    """
+    graders = item.get("evaluator_results") or item.get("grade_results") or []
+    found: list[tuple[str, float]] = []
+    for g in graders:
+        if g.get("skipped"):
+            continue
+        value = (g.get("metrics") or {}).get(metric)
+        if isinstance(value, bool):
+            found.append((g.get("label") or g.get("name") or "?", float(value)))
+        elif isinstance(value, (int, float)):
+            found.append((g.get("label") or g.get("name") or "?", float(value)))
+
+    if not found:
+        return None
+    if len({v for _, v in found}) > 1:
+        raise AmbiguousGraderError(
+            f"{item.get('case_id') or item.get('task_id')!r}: metric {metric!r} was "
+            f"emitted with different values by "
+            f"{', '.join(sorted(n for n, _ in found))}. Rename one of them."
+        )
+    return found[0][1]
+
+
 def _extract_case_records(
     item: dict[str, Any], on: str | None = None
 ) -> CaseRecord | None:
@@ -464,6 +497,162 @@ def compare_results(
     )
     report.score_stats = paired_stats([b.score - a.score for a, b in pairs])
     return report
+
+
+@dataclass
+class MetricComparison:
+    """Paired comparison of one numeric metric across two runs.
+
+    Deliberately not a ``ComparisonReport``. A metric has no pass/fail, so
+    there are no flips to list and no pass rate to report, and for most process
+    metrics — turns, cost, tool calls — *lower* is better, which inverts what a
+    positive difference means. Reusing the score report's shape would invite
+    every one of those misreadings.
+    """
+
+    metric: str
+    label_a: str
+    label_b: str
+    n_paired: int
+    mean_a: float
+    mean_b: float
+    stats: PairedStats
+    unmeasured_a: list[str] = field(default_factory=list)
+    unmeasured_b: list[str] = field(default_factory=list)
+    only_in_a: list[str] = field(default_factory=list)
+    only_in_b: list[str] = field(default_factory=list)
+    #: Paired cases that ran more than one trial. A case's grader results are
+    #: one trial's, not an average over them, so on a multi-trial run this
+    #: comparison silently samples one attempt per case — which is a different
+    #: and noisier measurement than the mean the reader will assume.
+    multi_trial_cases: int = 0
+
+    @property
+    def verdict(self) -> str:
+        if self.n_paired == 0:
+            return f"no case measured {self.metric!r} in both runs"
+        if not self.stats.variance_observed:
+            return (
+                f"{self.metric}: every paired case moved identically "
+                f"({self.stats.mean_diff:+.4g}) — with zero spread the "
+                f"resolution cannot be estimated from this sample"
+            )
+        if self.stats.significant:
+            direction = "higher" if self.stats.mean_diff > 0 else "lower"
+            return (
+                f"{self.metric}: B is significantly {direction} — "
+                f"{self.stats.mean_diff:+.4g} "
+                f"(95% CI [{self.stats.ci_low:+.4g}, {self.stats.ci_high:+.4g}])"
+            )
+        return (
+            f"{self.metric}: within noise band — {self.stats.mean_diff:+.4g} "
+            f"(95% CI [{self.stats.ci_low:+.4g}, {self.stats.ci_high:+.4g}]); "
+            f"detectable at n={self.n_paired}: ~{self.stats.mde:.4g}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "metric": self.metric,
+            "label_a": self.label_a,
+            "label_b": self.label_b,
+            "n_paired": self.n_paired,
+            "mean_a": self.mean_a,
+            "mean_b": self.mean_b,
+            "stats": self.stats.to_dict(),
+            "unmeasured_a": self.unmeasured_a,
+            "unmeasured_b": self.unmeasured_b,
+            "only_in_a": self.only_in_a,
+            "only_in_b": self.only_in_b,
+            "multi_trial_cases": self.multi_trial_cases,
+            "verdict": self.verdict,
+        }
+
+
+def _load_metric(
+    path: str | Path, metric: str, missing_as_zero: bool = False
+) -> tuple[dict[str, float], list[str], set[str]]:
+    """``(values, unmeasured, multi_trial)`` for one metric.
+
+    *missing_as_zero* resolves a genuine ambiguity the caller has to settle,
+    because both readings are right for different metrics. ``tool_usage``
+    emits ``calls_<tool>`` only for tools that were actually called, so an
+    absent ``calls_grep`` means "never grepped" — a measured zero. But an
+    absent ``cost_usd`` means the cost grader never ran, which is not a run
+    that cost nothing. Defaulting either way silently invents evidence, so the
+    flag is explicit and off by default.
+    """
+    from compass.report.analyzer import iter_case_dicts
+
+    path = Path(path)
+    json_files = [path] if path.is_file() else sorted(path.glob("**/*.json"))
+
+    values: dict[str, float] = {}
+    unmeasured: list[str] = []
+    multi_trial: set[str] = set()
+    for jf in json_files:
+        try:
+            with open(jf, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Skipping %s: %s", jf, e)
+            continue
+        for item in iter_case_dicts(data):
+            case_id = item.get("case_id") or item.get("task_id")
+            if not case_id:
+                continue
+            value = select_metric(item, metric)
+            if value is None and missing_as_zero and _measured_anything(item):
+                value = 0.0
+            if value is None:
+                unmeasured.append(str(case_id))
+            else:
+                values[str(case_id)] = value
+                if (item.get("total_trials") or 1) > 1:
+                    multi_trial.add(str(case_id))
+    return values, sorted(set(unmeasured) - values.keys()), multi_trial
+
+
+def _measured_anything(item: dict[str, Any]) -> bool:
+    """Whether any grader on this case emitted metrics at all.
+
+    The guard on ``missing_as_zero``: a case where nothing was measured must
+    stay unmeasured, or a run that never graded would read as a run of zeros.
+    """
+    graders = item.get("evaluator_results") or item.get("grade_results") or []
+    return any(g.get("metrics") for g in graders if not g.get("skipped"))
+
+
+def compare_metric(
+    path_a: str | Path,
+    path_b: str | Path,
+    metric: str,
+    missing_as_zero: bool = False,
+) -> MetricComparison:
+    """Pair two runs by case_id and compare one metric.
+
+    Raises:
+        AmbiguousGraderError: two graders emitted *metric* with different
+            values in the same case.
+    """
+    a, unmeasured_a, multi_a = _load_metric(path_a, metric, missing_as_zero)
+    b, unmeasured_b, multi_b = _load_metric(path_b, metric, missing_as_zero)
+    paired = sorted(a.keys() & b.keys())
+    diffs = [b[c] - a[c] for c in paired]
+
+    return MetricComparison(
+        metric=metric,
+        label_a=str(path_a),
+        label_b=str(path_b),
+        n_paired=len(paired),
+        mean_a=sum(a[c] for c in paired) / len(paired) if paired else 0.0,
+        mean_b=sum(b[c] for c in paired) / len(paired) if paired else 0.0,
+        stats=paired_stats(diffs),
+        unmeasured_a=unmeasured_a,
+        unmeasured_b=unmeasured_b,
+        only_in_a=sorted(a.keys() - b.keys()),
+        only_in_b=sorted(b.keys() - a.keys()),
+        multi_trial_cases=len((multi_a | multi_b) & set(paired)),
+    )
 
 
 def compare_paths(

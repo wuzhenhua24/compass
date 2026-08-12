@@ -12,6 +12,7 @@ from compass.cli.main import cli
 from compass.report.compare import (
     AmbiguousGraderError,
     CaseRecord,
+    compare_metric,
     compare_paths,
     compare_results,
     load_case_records,
@@ -379,6 +380,109 @@ class TestCompareOnGrader:
         scoped = compare_paths(a, b, on="correctness")
         assert scoped.pass_stats.variance_observed is True
         assert scoped.pass_stats.mde > 0
+
+
+# ---------------------------------------------------------------------------
+# Comparing a metric (--metric)
+# ---------------------------------------------------------------------------
+
+
+class TestCompareMetric:
+    @staticmethod
+    def _write(tmp_path, name, cases):
+        p = tmp_path / name
+        p.write_text(json.dumps({"case_results": cases}), encoding="utf-8")
+        return p
+
+    @staticmethod
+    def _case(cid, **metrics):
+        return case_dict(cid, True, evaluator_results=[
+            grader("turn_count", 1.0, True, metrics=metrics),
+        ])
+
+    def test_a_metric_comparison_is_a_paired_difference(self, tmp_path):
+        a = self._write(tmp_path, "a.json", [self._case(f"t{i}", turns=20 + i)
+                                             for i in range(4)])
+        b = self._write(tmp_path, "b.json", [self._case(f"t{i}", turns=12 + i)
+                                             for i in range(4)])
+        cmp = compare_metric(a, b, "turns")
+        assert cmp.n_paired == 4
+        assert cmp.mean_a == 21.5 and cmp.mean_b == 13.5
+        assert cmp.stats.mean_diff == pytest.approx(-8.0)
+        # No spread in the differences: every case moved by exactly -8.
+        assert cmp.stats.variance_observed is False
+        assert "cannot be estimated" in cmp.verdict
+
+    def test_a_metric_the_run_never_emitted_is_not_zero(self, tmp_path):
+        """The distinction the whole module turns on, in its most dangerous
+        form: an absent `cost_usd` means the cost grader did not run, and
+        reading that as a run that cost nothing invents evidence."""
+        a = self._write(tmp_path, "a.json", [self._case("t1", turns=10)])
+        b = self._write(tmp_path, "b.json", [self._case("t1", turns=10)])
+        cmp = compare_metric(a, b, "cost_usd")
+        assert cmp.n_paired == 0
+        assert cmp.unmeasured_a == ["t1"] and cmp.unmeasured_b == ["t1"]
+
+    def test_missing_as_zero_is_opt_in_because_both_readings_are_right(
+        self, tmp_path
+    ):
+        """`calls_grep` is absent when the tool was never used — a measured
+        zero. `cost_usd` is absent when nothing measured it. Same shape,
+        opposite meaning, so the caller says which."""
+        a = self._write(tmp_path, "a.json", [
+            self._case("t1", calls_grep=2.0), self._case("t2", turns=9),
+        ])
+        b = self._write(tmp_path, "b.json", [
+            self._case("t1", calls_grep=5.0), self._case("t2", calls_grep=4.0),
+        ])
+        assert compare_metric(a, b, "calls_grep").n_paired == 1
+
+        filled = compare_metric(a, b, "calls_grep", missing_as_zero=True)
+        assert filled.n_paired == 2
+        assert filled.mean_a == 1.0  # (2 + 0) / 2
+
+    def test_missing_as_zero_still_skips_a_case_nothing_measured(self, tmp_path):
+        """Otherwise a run that never graded reads as a run of zeros."""
+        a = self._write(tmp_path, "a.json", [
+            self._case("t1", calls_grep=2.0),
+            case_dict("t2", True, evaluator_results=[]),
+        ])
+        b = self._write(tmp_path, "b.json", [
+            self._case("t1", calls_grep=5.0),
+            case_dict("t2", True, evaluator_results=[]),
+        ])
+        cmp = compare_metric(a, b, "calls_grep", missing_as_zero=True)
+        assert cmp.n_paired == 1
+        assert cmp.unmeasured_a == ["t2"]
+
+    def test_a_boolean_metric_compares_as_a_rate(self, tmp_path):
+        a = self._write(tmp_path, "a.json",
+                        [self._case(f"t{i}", has_critical_loop=i < 3)
+                         for i in range(4)])
+        b = self._write(tmp_path, "b.json",
+                        [self._case(f"t{i}", has_critical_loop=False)
+                         for i in range(4)])
+        cmp = compare_metric(a, b, "has_critical_loop")
+        assert cmp.mean_a == 0.75 and cmp.mean_b == 0.0
+
+    def test_two_graders_disagreeing_on_one_metric_is_an_error(self, tmp_path):
+        case = case_dict("t1", True, evaluator_results=[
+            grader("tool_usage", 1.0, True, metrics={"tool_calls": 12.0}),
+            grader("loop_detection", 1.0, True, metrics={"tool_calls": 30.0}),
+        ])
+        a = self._write(tmp_path, "a.json", [case])
+        with pytest.raises(AmbiguousGraderError, match="different values"):
+            compare_metric(a, a, "tool_calls")
+
+    def test_the_same_value_from_two_graders_is_not_ambiguous(self, tmp_path):
+        """Only a disagreement is unresolvable. Two graders that counted the
+        same thing and agree are not a reason to refuse an answer."""
+        case = case_dict("t1", True, evaluator_results=[
+            grader("tool_usage", 1.0, True, metrics={"tool_calls": 12.0}),
+            grader("loop_detection", 1.0, True, metrics={"tool_calls": 12.0}),
+        ])
+        a = self._write(tmp_path, "a.json", [case])
+        assert compare_metric(a, a, "tool_calls").mean_a == 12.0
 
 
 # ---------------------------------------------------------------------------

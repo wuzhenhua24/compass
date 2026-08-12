@@ -828,6 +828,79 @@ def analyze(results_path: str, output: str | None) -> None:
         console.print(f"\n[green]Report saved to:[/green] {output_path}")
 
 
+def _render_metric_comparison(cmp: Any, output: str | None, as_json: bool) -> None:
+    """Render a metric comparison — no pass rate, no flips, on purpose."""
+    import json
+
+    if as_json:
+        console.print_json(json.dumps(cmp.to_dict(), ensure_ascii=False))
+        return
+
+    console.print(Panel(
+        f"[bold]Compass Metric Comparison[/bold]\n"
+        f"A (baseline):  {cmp.label_a}\n"
+        f"B (candidate): {cmp.label_b}\n"
+        f"metric:        {cmp.metric}\n"
+        f"{cmp.n_paired} paired case(s)",
+    ))
+
+    if cmp.n_paired == 0:
+        console.print(
+            f"[red]No case measured {cmp.metric!r} in both runs.[/red] "
+            "Metrics come from EvaluatorResult.metrics — check the name, and "
+            "that a grader emitting it ran on these cases."
+        )
+        sys.exit(1)
+
+    table = Table(title="Summary (paired cases only)")
+    for col in ("Metric", "A", "B", "Diff (B−A)", "95% CI"):
+        table.add_column(col, justify="right" if col != "Metric" else "left")
+    s = cmp.stats
+    table.add_row(
+        cmp.metric,
+        f"{cmp.mean_a:.4g}",
+        f"{cmp.mean_b:.4g}",
+        f"{s.mean_diff:+.4g}",
+        f"[{s.ci_low:+.4g}, {s.ci_high:+.4g}]",
+    )
+    console.print(table)
+    console.print(
+        "[dim]No pass rate or flips: a metric has no pass/fail. Mind the "
+        "direction — on turns, cost and tool calls, lower is better.[/dim]"
+    )
+
+    if cmp.multi_trial_cases:
+        console.print(
+            f"[yellow]⚠ {cmp.multi_trial_cases} of {cmp.n_paired} paired case(s) ran "
+            f"multiple trials, but a case carries one trial's grader results — this "
+            f"compares one attempt per case, not the average over them.[/yellow]"
+        )
+
+    for side, missing in (("A", cmp.unmeasured_a), ("B", cmp.unmeasured_b)):
+        if missing:
+            console.print(
+                f"[yellow]⚠ {len(missing)} case(s) in {side} never measured "
+                f"{cmp.metric!r} (dropped):[/yellow] {', '.join(missing[:10])}"
+                + (" …" if len(missing) > 10 else "")
+            )
+    for side, extra in (("A", cmp.only_in_a), ("B", cmp.only_in_b)):
+        if extra:
+            console.print(
+                f"[yellow]⚠ {len(extra)} case(s) only in {side} (dropped):[/yellow] "
+                f"{', '.join(extra[:10])}" + (" …" if len(extra) > 10 else "")
+            )
+
+    style = "green" if s.significant else "yellow"
+    console.print(Panel(f"[{style}]{cmp.verdict}[/{style}]", title="Verdict"))
+
+    if output:
+        Path(output).write_text(
+            json.dumps(cmp.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        console.print(f"\n[green]Comparison saved to:[/green] {output}")
+
+
+
 @cli.command()
 @click.argument("results_a", type=click.Path(exists=True))
 @click.argument("results_b", type=click.Path(exists=True))
@@ -839,8 +912,25 @@ def analyze(results_path: str, output: str | None) -> None:
     metavar="GRADER",
     help="Compare on one grader's score (label, else name) instead of overall_score",
 )
+@click.option(
+    "--metric",
+    "metric",
+    metavar="NAME",
+    help="Compare a numeric metric (turns, cost_usd, tool_calls, calls_<tool>, …)",
+)
+@click.option(
+    "--missing-as-zero",
+    is_flag=True,
+    help="With --metric: read an absent metric as 0 rather than unmeasured",
+)
 def compare(
-    results_a: str, results_b: str, output: str | None, as_json: bool, on: str | None
+    results_a: str,
+    results_b: str,
+    output: str | None,
+    as_json: bool,
+    on: str | None,
+    metric: str | None,
+    missing_as_zero: bool,
 ) -> None:
     """Paired comparison of two evaluation runs (A = baseline, B = candidate).
 
@@ -856,10 +946,42 @@ def compare(
     `overall_score` by design, so the default comparison is measuring process
     cost and the correctness signal never reaches it. Cases where that grader
     produced no measurement are reported and dropped, not scored as zero.
+
+    --metric compares one number instead of a score: turns, cost_usd,
+    tool_calls, calls_<tool>, loop_issues. There is no pass/fail on a metric,
+    so no pass rate and no flips are reported — just the paired difference and
+    its interval. Remember which direction is good: on most process metrics a
+    negative difference is the better run.
+
+    Metric names are lowercased, so it is `calls_grep`, not `calls_Grep`.
+    `calls_<tool>` only exists where the tool was used at all, so comparing it
+    drops every case that never touched that tool — which is the wrong reading
+    when "never used it" is the finding. `--missing-as-zero` switches those
+    cases to a measured 0. Do not reach for it on `cost_usd`: an absent cost
+    means the grader did not run, and that is not a run that cost nothing.
     """
     import json
 
-    from compass.report.compare import AmbiguousGraderError, compare_paths
+    from compass.report.compare import (
+        AmbiguousGraderError,
+        compare_metric,
+        compare_paths,
+    )
+
+    if metric and on:
+        console.print("[red]--on and --metric compare different things; pick one[/red]")
+        sys.exit(2)
+
+    if metric:
+        try:
+            _render_metric_comparison(
+                compare_metric(results_a, results_b, metric, missing_as_zero),
+                output, as_json,
+            )
+        except AmbiguousGraderError as e:
+            console.print(f"[red]Ambiguous --metric {metric!r}:[/red] {e}")
+            sys.exit(2)
+        return
 
     try:
         report = compare_paths(results_a, results_b, on=on)

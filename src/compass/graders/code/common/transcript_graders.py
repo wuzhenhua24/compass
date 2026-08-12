@@ -114,6 +114,25 @@ class ToolUsageGrader(CodeGrader):
                 "unique_tools": list(called_tools),
                 "failures": failures,
             },
+            # `details` is this grader's own payload; `metrics` is the
+            # core-owned channel the aggregate and `compass compare --metric`
+            # read. The same numbers appear in both on purpose — moving them
+            # would break every consumer of `details`, and duplicating a few
+            # scalars is cheaper than a migration.
+            #
+            # `calls_<tool>` is per-tool because that is where the behavioural
+            # differences actually show: two models with identical tool_calls
+            # totals can search and edit in completely different proportions.
+            metrics={
+                "tool_calls": float(len(tool_calls)),
+                "distinct_tools": float(len(called_tools)),
+                **{
+                    f"calls_{tool}": float(
+                        sum(1 for tc in tool_calls if tc.tool == tool)
+                    )
+                    for tool in called_tools
+                },
+            },
             failure_tags=failure_tags,
         )
 
@@ -234,6 +253,12 @@ class CostBudgetGrader(CodeGrader):
                 "cached_tokens": cached_tokens,
                 "budgeted_tokens": budgeted_tokens,
                 "max_tokens": self.max_tokens,
+            },
+            metrics={
+                "cost_usd": float(total_cost),
+                "total_tokens": float(total_tokens),
+                "cached_tokens": float(cached_tokens),
+                "budgeted_tokens": float(budgeted_tokens),
             },
             failure_tags=failure_tags,
             reasoning=(
@@ -573,6 +598,13 @@ class LoopDetectionGrader(CodeGrader):
                 "has_critical_issue": has_critical,
                 "has_high_severity_issue": has_high,
             },
+            # Booleans stay booleans: the aggregate reports them as rates, and
+            # "critical in 12% of runs" is the useful form. Flattening them to
+            # 0/1 would average into something that reads like a score.
+            metrics={
+                "loop_issues": float(len(issues)),
+                "has_critical_loop": has_critical,
+            },
             reasoning=self._build_reasoning(issues, len(tool_calls)),
         )
 
@@ -778,6 +810,7 @@ class TurnCountGrader(CodeGrader):
             passed=passed,
             score=round(score, 4),
             details=details,
+            metrics={"turns": float(turns)},
             reasoning=reasoning,
         )
 
