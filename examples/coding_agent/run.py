@@ -1,4 +1,4 @@
-"""Resolve ``suite.yaml`` into a runnable scenario and launch a live comparison.
+"""Resolve a suite into a runnable scenario and launch a live comparison.
 
     # first, a smoke run: one model, one case, one trial — proves the wiring
     uv run python examples/coding_agent/run.py -m haiku --case fix_rounding
@@ -6,10 +6,14 @@
     # then the real thing
     uv run python examples/coding_agent/run.py -m haiku -m sonnet --trials 3
 
+    # the same cases through pi, where the model is just a flag
+    uv run python examples/coding_agent/run.py --suite pi.yaml \\
+        -m google/gemini-2.5-flash -m google/gemini-3.6-flash --trials 3
+
     # your own project instead of the bundled one
     uv run python examples/coding_agent/run.py --repo ~/work/my-service -m sonnet
 
-``suite.yaml`` ships with ``{{REPO}}``, ``{{GRADERS}}`` and ``{{STREAMS}}``
+The suites ship with ``{{REPO}}``, ``{{GRADERS}}`` and ``{{STREAMS}}``
 placeholders because those are absolute paths that only exist on your machine.
 This fills them in, writes the resolved scenario where you can read it, and
 runs ``compass test``.
@@ -40,11 +44,22 @@ def bootstrap_repo(dest: Path) -> Path:
 
     Re-running reuses an existing checkout, so traces from earlier runs stay
     comparable against the same baseline.
+
+    ``__pycache__`` is left behind on purpose. It is gitignored in Compass's own
+    tree but sits on disk after anyone runs the project's tests, and copying it
+    in would commit stale bytecode to the baseline — after which every agent
+    that runs pytest "changes" 16 ``.pyc`` files, inflating ``diff_size`` and the
+    changed-file list with work it did not do.
     """
     repo = dest / "repo"
     if (repo / ".git").exists():
         return repo
-    shutil.copytree(_HERE / "project", repo, dirs_exist_ok=True)
+    shutil.copytree(
+        _HERE / "project",
+        repo,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     run = lambda *a: subprocess.run(  # noqa: E731
         ["git", *a], cwd=repo, check=True, capture_output=True, text=True
     )
@@ -56,8 +71,11 @@ def bootstrap_repo(dest: Path) -> Path:
     return repo
 
 
-def resolve_suite(repo: Path, out: Path, *, trials: int | None) -> Path:
-    raw = (_HERE / "suite.yaml").read_text(encoding="utf-8")
+def resolve_suite(
+    repo: Path, out: Path, *, trials: int | None, suite: Path | None = None
+) -> Path:
+    suite = suite or _HERE / "suite.yaml"
+    raw = suite.read_text(encoding="utf-8")
     raw = (
         raw.replace("{{REPO}}", str(repo.resolve()))
         .replace("{{GRADERS}}", str((_HERE / "grader_tests").resolve()))
@@ -66,7 +84,7 @@ def resolve_suite(repo: Path, out: Path, *, trials: int | None) -> Path:
     )
     if trials is not None:
         raw = raw.replace("  trials: 1\n", f"  trials: {trials}\n", 1)
-    resolved = out / "suite.resolved.yaml"
+    resolved = out / f"{suite.stem}.resolved.yaml"
     resolved.write_text(raw, encoding="utf-8")
     return resolved
 
@@ -110,6 +128,10 @@ def main(argv: list[str]) -> int:
         help="your own git repository instead of the bundled project/",
     )
     parser.add_argument(
+        "--suite", type=Path, default=Path("suite.yaml"),
+        help="which suite to resolve: suite.yaml (claude_code) or pi.yaml (pi)",
+    )
+    parser.add_argument(
         "--out", type=Path, default=_DEFAULT_OUT,
         help=f"where the repo, traces and results go (default: {_DEFAULT_OUT})",
     )
@@ -121,6 +143,11 @@ def main(argv: list[str]) -> int:
 
     if not args.models:
         parser.error("give at least one -m/--model (e.g. -m haiku -m sonnet)")
+
+    # A bare name means one of the bundled suites; a path means yours.
+    suite = args.suite if args.suite.parent != Path(".") else _HERE / args.suite.name
+    if not suite.is_file():
+        parser.error(f"no such suite: {suite}")
 
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -134,7 +161,8 @@ def main(argv: list[str]) -> int:
         repo = bootstrap_repo(out)
         print(f"repo      {repo}")
 
-    scenario = resolve_suite(repo, out, trials=args.trials)
+    scenario = resolve_suite(repo, out, trials=args.trials, suite=suite)
+    print(f"suite     {suite}")
     print(f"scenario  {scenario}")
 
     command = build_command(scenario, out, args.models, args.cases, passthrough)

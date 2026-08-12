@@ -56,9 +56,15 @@ def bootstrap_repo(dest: Path) -> Path:
     running ``git add``. It has to *become* a repo, though: ``claude_code``
     isolates each trial in a ``git worktree`` and computes the outcome diff
     against the base commit.
+
+    ``__pycache__`` is skipped: committing stale bytecode to the baseline makes
+    every agent that runs pytest "change" 16 ``.pyc`` files it never touched.
     """
     repo = dest / "storefront"
-    shutil.copytree(_HERE / "project", repo)
+    shutil.copytree(
+        _HERE / "project", repo,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     run = lambda *a: subprocess.run(  # noqa: E731
         ["git", *a], cwd=repo, check=True, capture_output=True
     )

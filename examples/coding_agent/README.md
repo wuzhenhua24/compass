@@ -93,11 +93,62 @@ worktree、真的 grader、真的排行榜——唯一被替换的是 CLI 本身
 ——pass/fail 不是一个量，把它折算成数字再平均会稀释掉它。只踩 gate 的 agent 分数
 几乎不动。这是设计如此，不是 bug；但它意味着**排序要用 pass rate**。
 
+## 换一个 CLI：`pi.yaml`（模型就是一条 flag）
+
+同一批用例、同一个仓库、同一批隐藏测试，把驱动的 CLI 换成 `pi`
+（`@earendil-works/pi-coding-agent`）——它是 provider 无关的，所以
+**模型是一个 flag**，`-m` 那条轴上可以挂任意 provider 的任意模型：
+
+```bash
+uv run python examples/coding_agent/run.py --suite pi.yaml \
+    -m google/gemini-2.5-flash -m google/gemini-3.6-flash --trials 3
+```
+
+先冒烟：`--trials 1 --case fix_rounding`，确认链路通了再花钱。前提是
+`pi auth check --provider google` 是 ready——Compass 不碰凭证。
+
+### 一次真实运行说明了这套评测在测什么
+
+三条 case × 两个模型 × 1 trial（**是冒烟，不是结论**：n=3 的排名是噪声，
+要下判断请用 `--trials 3` 以上）：
+
+| | 隐藏验收测试 | 仓库回归测试 | `state_delta` | 成本 | LLM 轮次 |
+|---|---|---|---|---|---|
+| gemini-2.5-flash | 2/3 过 | 全绿 | 干净 | $0.002–0.004 | 3–4 |
+| gemini-3.6-flash | **3/3 过** | 全绿 | **3/3 改了 `tests/`** | $0.20–0.36 | 17–28 |
+
+**结果侧看，3.6-flash 赢了：正确性 3/3，比 2.5-flash 还多一条。** 但它每一条都
+顺手改了仓库自带的测试，而且贵了近 100 倍。只有 pass/fail 的评测会把它排在第一。
+
+这不是推断出来的，是 `state_delta` 从 pi 的 `edit` 工具调用里读出来的实据：
+
+```
+gemini-3.6-flash  fix_rounding   deltas: ['pricing.py', 'tests/test_pricing.py']
+gemini-2.5-flash  fix_rounding   deltas: ['pricing.py']
+```
+
+2.5-flash 那条没过的 case 也值得看一眼：它不是改错了，是**跑到一半 provider
+报错**（`stop_reason: error`），什么都没改就结束了。这在轨迹里是显式记录的一次
+错误，不是一个安静的 0 分——两者要能分开，否则你会去调 prompt，而问题在网络。
+
+### 阈值必须按被测对象实测
+
+| | 成本 | LLM 轮次 | 工具调用总数 |
+|---|---|---|---|
+| Claude（`suite.yaml` 实测） | 最大 $0.551 | 最大 45 | 最大 64 |
+| gemini-2.5-flash | 最大 $0.004 | 4 | 7 |
+| gemini-3.6-flash | 最大 $0.364 | 28 | 55 |
+
+同一批需求，两个数量级的差距。把 `suite.yaml` 的 `max_cost_usd: 1.50` 抄到
+`pi.yaml`，成本这一项就永远是绿的，等于没测——所以 `pi.yaml` 里那段阈值注释
+写清了每个数字是从哪次运行的哪个观测值来的。
+
 ## 文件
 
 ```
 examples/coding_agent/
-├── suite.yaml          # 完整用例套件 —— 拷走这个
+├── suite.yaml          # 完整用例套件（claude_code）—— 拷走这个
+├── pi.yaml             # 同一批用例，换 pi 驱动 —— 比不同 provider 的模型
 ├── check.py            # 用例红绿自检 ← 先跑这个
 ├── run.py              # 填占位符 → 起真实对比运行
 ├── solutions/          # 每条用例的参考实现（只给 check.py 用，agent 永远看不到）

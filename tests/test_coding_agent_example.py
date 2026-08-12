@@ -18,6 +18,8 @@ from types import ModuleType
 import pytest
 import yaml
 
+from compass.core.scenario import Scenario
+
 _EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "coding_agent"
 
 
@@ -1008,6 +1010,66 @@ class TestIncrementalCaseScoresConventions:
             assert forbidden not in solution, f"the reference reaches {forbidden}"
 
 
+class TestCrossStackSuitesShareOneContract:
+    """The two crossstack suites exist to make an A/B across *stacks* legible.
+
+    That only works while their grading contract is identical: `compass compare`
+    stamps each case with a `grader_fingerprint` and warns that a diff is "not
+    attributable to the agent" when the two sides disagree. The fingerprint
+    deliberately excludes the agent config and the prompt, so an adapter swap
+    keeps it — but an edited threshold on one side silently destroys the
+    comparison. These pin the invariant, because nothing else would notice.
+    """
+
+    from compass.core.regrade import grader_fingerprint as _fingerprint
+
+    def _load(self, name, tmp_path):
+        raw = (_EXAMPLE / name).read_text(encoding="utf-8")
+        for placeholder, value in (
+            ("{{REPO}}", str(tmp_path / "repo")),
+            ("{{GRADERS}}", str(_EXAMPLE / "grader_tests")),
+            ("{{STREAMS}}", str(tmp_path / "streams")),
+        ):
+            raw = raw.replace(placeholder, value)
+        return Scenario(**yaml.safe_load(raw))
+
+    def _pair(self, tmp_path):
+        return (
+            self._load("crossstack.claude.yaml", tmp_path),
+            self._load("crossstack.pi.yaml", tmp_path),
+        )
+
+    def test_the_grading_contract_is_identical_case_for_case(self, tmp_path):
+        claude, pi = self._pair(tmp_path)
+
+        assert [c.id for c in claude.cases] == [c.id for c in pi.cases]
+        for a, b in zip(claude.cases, pi.cases, strict=True):
+            assert type(self)._fingerprint(claude, a) == type(self)._fingerprint(pi, b), (
+                f"{a.id}: the two crossstack suites no longer grade alike — "
+                "compare would report the diff as unattributable"
+            )
+
+    def test_the_prompts_are_identical(self, tmp_path):
+        """Same requirement, or the agents were not asked the same question."""
+        claude, pi = self._pair(tmp_path)
+        for a, b in zip(claude.cases, pi.cases, strict=True):
+            assert a.input == b.input
+
+    def test_only_the_stack_differs(self, tmp_path):
+        claude, pi = self._pair(tmp_path)
+        assert claude.agent.adapter == "claude_code"
+        assert pi.agent.adapter == "pi"
+
+    def test_both_sides_grade_against_the_hidden_tests(self, tmp_path):
+        """The one signal the agent cannot reach has to be present on both."""
+        for scenario in self._pair(tmp_path):
+            for case in scenario.cases:
+                labels = {
+                    g.label for g in scenario.get_graders_for_case(case) if g.label
+                }
+                assert {"correctness", "regression"} <= labels
+
+
 class TestRunPyResolvesTheSuite:
     """suite.yaml is not runnable as shipped — its paths only exist on the
     machine running it. An unfilled placeholder fails deep inside a grader,
@@ -1015,12 +1077,22 @@ class TestRunPyResolvesTheSuite:
 
     run_py = _load("run.py", "coding_agent_run")
 
-    def test_no_placeholder_survives_resolution(self, tmp_path):
-        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=None)
+    # Both shipped suites carry the same placeholders; --suite picks between
+    # them, so both have to survive resolution.
+    SUITES = ("suite.yaml", "pi.yaml")
+
+    @pytest.mark.parametrize("name", SUITES)
+    def test_no_placeholder_survives_resolution(self, tmp_path, name):
+        resolved = self.run_py.resolve_suite(
+            tmp_path / "repo", tmp_path, trials=None, suite=_EXAMPLE / name
+        )
         assert "{{" not in resolved.read_text(encoding="utf-8")
 
-    def test_every_placeholder_becomes_an_absolute_path(self, tmp_path):
-        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=None)
+    @pytest.mark.parametrize("name", SUITES)
+    def test_every_placeholder_becomes_an_absolute_path(self, tmp_path, name):
+        resolved = self.run_py.resolve_suite(
+            tmp_path / "repo", tmp_path, trials=None, suite=_EXAMPLE / name
+        )
         suite = yaml.safe_load(resolved.read_text(encoding="utf-8"))
         config = suite["agent"]["config"]
 
@@ -1033,9 +1105,24 @@ class TestRunPyResolvesTheSuite:
                 script = grader.get("config", {}).get("script", "")
                 assert "{{" not in script
 
-    def test_trials_override_lands(self, tmp_path):
-        resolved = self.run_py.resolve_suite(tmp_path / "repo", tmp_path, trials=5)
+    @pytest.mark.parametrize("name", SUITES)
+    def test_trials_override_lands(self, tmp_path, name):
+        resolved = self.run_py.resolve_suite(
+            tmp_path / "repo", tmp_path, trials=5, suite=_EXAMPLE / name
+        )
         assert yaml.safe_load(resolved.read_text())["defaults"]["trials"] == 5
+
+    def test_the_two_suites_resolve_to_different_files(self, tmp_path):
+        """One --out holding both runs must not have them overwrite each other."""
+        a = self.run_py.resolve_suite(
+            tmp_path / "repo", tmp_path, trials=None, suite=_EXAMPLE / "suite.yaml"
+        )
+        b = self.run_py.resolve_suite(
+            tmp_path / "repo", tmp_path, trials=None, suite=_EXAMPLE / "pi.yaml"
+        )
+        assert a != b
+        assert yaml.safe_load(a.read_text())["agent"]["adapter"] == "claude_code"
+        assert yaml.safe_load(b.read_text())["agent"]["adapter"] == "pi"
 
     def test_the_bundled_project_becomes_a_real_git_repo(self, tmp_path):
         import subprocess
@@ -1048,6 +1135,20 @@ class TestRunPyResolvesTheSuite:
             cwd=repo, capture_output=True, text=True, check=True,
         )
         assert status.stdout == ""
+
+    def test_no_bytecode_is_committed_to_the_baseline(self, tmp_path):
+        """__pycache__ is gitignored in Compass's tree but sits on disk after
+        anyone runs the project's tests. Committed to the baseline, every agent
+        that runs pytest "changes" 16 .pyc files it never touched — straight
+        into diff_size and the changed-file list."""
+        import subprocess
+
+        repo = self.run_py.bootstrap_repo(tmp_path)
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.split()
+
+        assert not [f for f in tracked if f.endswith(".pyc") or "__pycache__" in f]
 
     def test_bootstrap_is_idempotent(self, tmp_path):
         """Re-running must not re-baseline: traces from earlier runs are only

@@ -1,0 +1,170 @@
+# 编程 Agent 评测套件（pi）—— 同一批需求，比不同**模型**
+#
+# 和 suite.yaml 是同一套用例、同一个仓库、同一批隐藏验收测试，只换了驱动的
+# CLI：`pi` 是 provider 无关的，所以**模型就是一个 flag**，-m 那条轴上可以挂
+# 任意 provider 的任意模型。
+#
+#   uv run python examples/coding_agent/run.py --suite pi.yaml \
+#       -m google/gemini-2.5-flash -m google/gemini-3.6-flash --trials 3
+#
+#   # 跑完看差距是不是噪声（-m 会按模型各存一份 results）
+#   compass compare ./coding-eval-run/results.google_gemini-2.5-flash.json \
+#                   ./coding-eval-run/results.google_gemini-3.6-flash.json
+#
+# 先冒烟：`--trials 1 --case fix_rounding`，确认链路通了再花钱。
+#
+# 前提：`pi --list-models` 里有你要比的模型，且 `pi auth check --provider <p>`
+# 是 ready。Compass 不碰凭证——pi 用宿主环境里的 key 和 ~/.pi 下的登录态。
+
+name: "编程 Agent 评测套件（pi）"
+description: "同一批需求与 bug，比 pi 驱动的不同模型谁做得更对、更稳、更省"
+
+agent:
+  adapter: pi
+  config:
+    repo: "{{REPO}}"           # ← 你的项目；run.py 会填
+    model: "google/gemini-3.6-flash"   # -m 覆盖这个键；写在这里是给单模型跑用的
+    # thinking 是**另一条独立的轴**，别和模型轴混在一次跑里：
+    #   compass test pi.yaml --model-key thinking -m low -m high
+    thinking: "medium"
+
+    # 工具不设白名单——理由见 suite.yaml 里那段：前缀白名单挡不住带 heredoc /
+    # && / 换行的命令，只会把本该允许的形状拒掉，而拒绝不是响亮的失败，是**截断**。
+    # 真正保护评测的是一次性 worktree + state_delta 这道完整性 gate。
+
+    # 机器上装了什么扩展/技能，不该影响"哪个模型更强"的结论。关掉它们，
+    # 这份结果换台机器才还成立。仓库自带的 AGENTS.md 保持开启——那是被测
+    # 项目的一部分，两个模型都该读到。
+    no_extensions: true
+    no_skills: true
+
+    # 没有 max_turns —— pi 没有对应的 flag，写上去只是个不起作用的键。
+    # 轮次靠下面的 turn_count 诊断，跑飞的运行靠 timeout 兜底。
+    timeout: 900
+    # 原始事件流落盘。一次真实运行很贵，而 importer 只映射它认识的事件类型；
+    # 没映射的会计数进 transcript.metadata["unhandled_events"] 但不留 payload。
+    # 存下来就能用 `compass import` 免费重放这次运行，或改完 rubric 用
+    # `compass grade` 离线重评。
+    save_stream_to: "{{STREAMS}}"
+
+defaults:
+  # 先用 1 跑通链路。真要比模型时调到 3+，用 pass^k 看稳定性——
+  # 单次结果是噪声，两个模型各跑一次得到的排名同样是噪声。
+  trials: 1
+
+# ── 所有 case 共用的过程侧检查 ─────────────────────────────────────────
+# 阈值来自一次真实运行：下面三条 case × 两个模型 × 1 trial，n=6。实测分布：
+#
+#   模型                成本            LLM 轮次   工具调用总数   同一工具最多
+#   gemini-2.5-flash    $0.0020–0.0043   3–4        5–7           2 (bash)
+#   gemini-3.6-flash    $0.1976–0.3644   17–28      33–55         19 (bash)
+#
+# **同一个 prompt、同一个仓库，两个模型的过程指标差了两个数量级。** 这就是
+# "阈值必须按被测对象实测"最直白的证据——照抄 suite.yaml 里 Claude 的
+# max_cost_usd: 1.50，这两个模型的成本项永远是绿的，等于没测。
+# 换成你自己的项目后这一整段同样作废：先注释掉跑十来条，拿到分布再填。
+default_graders:
+  - name: state_delta
+    type: code
+    gate: true
+    config:
+      forbid:
+        - {kind: file, target: "tests/*"}   # 不许改测试让测试变绿
+
+  # 以下四个**都不是 gate**：它们回答"这个结果花了多少代价"，不回答"对不对"。
+  - name: cost_budget
+    type: code
+    # 这个数不是"实测最大值的两倍"，是一个**预算决定**：一处两行的舍入修复
+    # 值不值 $0.33。上面那张表里两档相差 70 倍，取任何"中间值"都只是在假装
+    # 客观——把它设成你真正愿意为一条需求付的钱。
+    config: {max_cost_usd: 0.10}
+
+  - name: turn_count
+    type: code
+    config:
+      max_turns: 60                         # 实测最大 30
+      # 默认 count_filter 是 "all"，数的是**所有工具调用**而不是轮次——
+      # 名字叫 turn 却在数别的东西，很容易把阈值定错一个量级。
+      count_filter: "llm"
+
+  - name: loop_detection
+    type: code
+    config:
+      # 编程 agent 反复跑同一个测试命令是正常工作，不是卡死。默认
+      # max_single_tool_calls 是 10，实测已经有一个模型跑了 19 次 bash——
+      # 用默认值会把"话多"报成"卡死"。
+      max_single_tool_calls: 30             # 实测最大 19
+      max_exact_repetitions: 6              # 实测最大 2（同一命令原地重试）
+      check_output_repetition: false
+      # 序列模式（A→B→A→B）留默认的 max_sequence_repeats: 3 —— 实测它在
+      # 那个模型上确实扣了分（0.90 / 0.93），扣得对：read→bash→read→bash
+      # 转了好几圈。它不是 gate，扣分只当诊断。
+
+  - name: tool_usage
+    type: code
+    config:
+      max_tool_calls: 120                   # 实测最大 59（含 llm.generation）
+
+default_aggregation:
+  # 正确性由 gate 判定，过程侧只做诊断。
+  pass_threshold: 0.6
+
+# 用例与 suite.yaml 保持一致，方便横着比"同一批需求下 Claude 与 pi 各自的表现"。
+# 每条 case 的正确性由两个 gate 决定：
+#   ① 隐藏验收测试通过（grader_tests/，agent 读不到也改不了）
+#   ② 项目自带的测试套件仍然全绿（回归守卫）
+cases:
+
+  # ── 改 bug · 明确 ────────────────────────────────────────────────────
+  - id: fix_rounding
+    description: "改 bug（明确）：金额舍入留下不足一分的尾数"
+    input:
+      prompt: |
+        pricing.py 的 line_total 用浮点乘法，会留下不足一分的尾数
+        （19.99 x 3 得到 59.969999999999999）。改成按分四舍五入返回。
+        注意 0.125 这种正好落在半分上的值应该进位到 0.13。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_fix_rounding.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 30}}
+
+  # ── 改 bug · 需要定位 ────────────────────────────────────────────────
+  # 症状报在 A（订单金额），根因在 B（promo 的边界判断）。
+  - id: bug_locate_promo_boundary
+    description: "改 bug（需定位）：促销码在阈值边界上不生效"
+    input:
+      prompt: |
+        客服反馈：一笔小计正好 200.00 的订单，用 BULK20 促销码没有打折，
+        但 200.01 的订单可以。BULK20 的规则是"满 200 减 20%"，所以
+        正好 200 应该算满足。
+
+        请修好它。注意规则表里其它促销码可能有同样的问题。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_bug_locate_promo_boundary.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 20}}
+
+  # ── 需求 · 增量 ──────────────────────────────────────────────────────
+  - id: add_discount
+    description: "需求（增量）：新增会员等级折扣"
+    input:
+      prompt: |
+        在 pricing.py 里新增 apply_discount(total, tier)：按会员等级打折后
+        返回订单金额。gold 减 15%、silver 减 10%、其它等级不打折；结果保留
+        两位小数（四舍五入，不要银行家舍入）；total 为负时抛 ValueError。
+    graders:
+      - {name: integration_test, type: code, gate: true, label: correctness,
+         config: {script: "python -m pytest {{GRADERS}}/test_add_discount.py -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: integration_test, type: code, gate: true, label: regression,
+         config: {script: "python -m pytest tests/ -q",
+                  workdir: "{workspace}", output_format: pytest, pass_threshold: 1.0}}
+      - {name: diff_size, type: code, config: {max_total_changes: 40}}
