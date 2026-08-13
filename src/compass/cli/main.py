@@ -199,6 +199,10 @@ def test(
         import json
 
         output_path = output or f"compass_report.{report}"
+        # `-o out/results.json` into a directory that does not exist yet used to
+        # traceback *after* every case had run — losing the whole (expensive)
+        # run to a missing mkdir.
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         if report == "html":
             reporter = HTMLReporter()
             reporter.generate(all_results, output_path)
