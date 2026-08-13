@@ -175,6 +175,20 @@ class TestHTMLSummary:
         assert ">Pass Rate<" in html
         assert "100.0%" in html
 
+    def test_the_header_names_the_skill_under_test(self):
+        """Same fact the site shows, on the same document — a local report and
+        a published one must not disagree about what produced the numbers."""
+        case = _make_case("ok", True, [], overall_score=1.0)
+        case.skills = [{"name": "report-writer", "digest": "9f2a1c0b7e5d4a63", "files": 3}]
+        html = HTMLReporter()._render([_make_eval_result("s1", [case])])
+
+        assert "report-writer@9f2a1c0b" in html
+
+    def test_no_skill_no_line(self):
+        html = HTMLReporter()._render([_make_eval_result("s1", [_make_case("ok", True, [])])])
+
+        assert "Skill:" not in html
+
     def test_case_ids_are_escaped(self):
         """Case ids come from user YAML and end up on a shareable page."""
         cases = [_make_case("<script>x</script>", True, [])]

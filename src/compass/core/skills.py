@@ -20,7 +20,9 @@ every run of a skill that worked fine. Hence one rule, in one place.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 
 def read_skill_name(skill_dir: Path) -> str:
@@ -64,3 +66,30 @@ def resolve_skill_name(reference: str) -> str:
     if path.is_dir():
         return read_skill_name(path) or path.name
     return ref
+
+
+def installed_skills(output_data: Any) -> list[dict[str, Any]]:
+    """The install records an adapter left on an agent's output.
+
+    ``CliAgentAdapter`` records what it installed in two places — the
+    transcript's metadata, where transcript-scope graders find it, and the
+    agent output's, which is what survives into a *result*. Only the second
+    reaches a results file: a trace is opt-in and separate, so without this the
+    numbers outlive the one fact that says which skill produced them.
+
+    Each record is ``{"name", "source", "path", "digest", "files"}``; ``digest``
+    is the hash of the installed tree, and it is the reason this is worth
+    carrying — six months on, a path has been reused and the content has not.
+
+    Reads defensively: an adapter that installs nothing, an imported trace, and
+    a hand-written results file all legitimately have nothing here.
+    """
+    if not isinstance(output_data, Mapping):
+        return []
+    metadata = output_data.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return []
+    entries = metadata.get("skills")
+    if not isinstance(entries, list):
+        return []
+    return [dict(e) for e in entries if isinstance(e, Mapping) and e.get("name")]

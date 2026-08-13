@@ -22,6 +22,7 @@ from compass.core.scenario import (
     ShortCircuitMode,
     TestCase,
 )
+from compass.core.skills import installed_skills
 from compass.core.sweep import expand_sweeps
 from compass.core.transcript import Outcome, Transcript, TranscriptRecorder
 from compass.core.trial import TaskResult, TrialManager, TrialResult
@@ -323,6 +324,7 @@ class Compass:
                 total_trials=1,
                 passed_trials=1 if passed else 0,
                 grader_fingerprint=fingerprint,
+                skills=installed_skills(output_data),
             )
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
@@ -804,6 +806,10 @@ class Compass:
                 ),
             ),
             grader_summary=self._summarize_graders(evaluated),
+            # Every trial of a case installs the same skills — the arm is fixed
+            # by the adapter config — so the detail trial's record describes
+            # them all.
+            skills=installed_skills(detail_trial.outcome),
         )
 
     @staticmethod

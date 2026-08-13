@@ -83,7 +83,10 @@ _ERROR = TestStatus.ERROR.value
 #: Summary fields carried from an entry into the history trail. ``contract``
 #: rides along on purpose: a trend line whose points were graded under
 #: different rules is not a trend, and the viewer has to be able to say where
-#: the break is rather than drawing straight through it.
+#: the break is rather than drawing straight through it. ``skills`` rides along
+#: for the opposite reason — the subject changing is what a trend line over a
+#: skill's versions is *for*, so the line stays whole and each point says which
+#: version it was.
 _SNAPSHOT_FIELDS = (
     "generated",
     "pass_rate",
@@ -93,6 +96,7 @@ _SNAPSHOT_FIELDS = (
     "evaluated_cases",
     "passed_cases",
     "contract",
+    "skills",
 )
 
 
@@ -209,6 +213,42 @@ def _stats(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def skill_rollup(cases: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The skills installed across a run, deduped by name and content.
+
+    The run-level counterpart to ``contract``: that one identifies the rules a
+    run was scored under, this one identifies what was under test. A skill A/B
+    publishes each arm as its own run, and without this the two pages differ
+    only in the numbers — nothing on either says which version produced them,
+    and ``digest`` is the whole difference between "v2 scored higher" and
+    "*this* v2 scored higher".
+
+    Two entries for one name is not a conflict to resolve: a re-graded pile of
+    traces can legitimately mix arms, and a page that silently showed one of
+    them would be worse than one that shows both.
+    """
+    seen: dict[tuple[str, str], dict[str, Any]] = {}
+    for case in cases:
+        for record in case.get("skills") or []:
+            if not isinstance(record, Mapping):
+                continue
+            name = str(record.get("name") or "")
+            if not name:
+                continue
+            key = (name, str(record.get("digest") or ""))
+            entry = seen.setdefault(
+                key,
+                {
+                    "name": name,
+                    "digest": record.get("digest", ""),
+                    "files": record.get("files", 0),
+                    "cases": 0,
+                },
+            )
+            entry["cases"] += 1
+    return [seen[key] for key in sorted(seen)]
+
+
 def contract_id(
     cases: Sequence[Mapping[str, Any]], scenarios: Sequence[Mapping[str, Any]]
 ) -> str:
@@ -268,6 +308,11 @@ def _trial_averaged_graders(
     ``grader_summary`` is keyed exactly like ``CaseResult.breakdown``, suffix
     included, so the two can never disagree about what a name refers to.
 
+    ``metrics`` gets the same treatment, and needs it more: a boolean metric
+    averaged across trials is a *rate*, and the rate is the whole point of
+    ``skill_triggered`` — a case that loaded the skill on one attempt out of
+    three publishes ``true`` beside a score of 0.333 otherwise.
+
     Returns None when there is nothing to correct (a single trial, or a result
     written before ``grader_summary`` existed).
     """
@@ -295,6 +340,12 @@ def _trial_averaged_graders(
                 row["passed"] = float(fraction) >= 0.5
                 row["pass_fraction"] = fraction
             row["trials"] = aggregate.get("trials")
+            means = aggregate.get("metrics")
+            if isinstance(means, Mapping):
+                # Merged, not replaced: the summary only aggregates numeric
+                # metrics, and a non-numeric one is still worth showing from
+                # the trial it was recorded on.
+                row["metrics"] = {**(row.get("metrics") or {}), **means}
         rows.append(row)
         if _measured(row) and row.get("weighted_score") is not None:
             breakdown[key] = float(row["weighted_score"])
@@ -373,6 +424,7 @@ def collect_run_payload(
             **_stats(cases),
             "duration_ms": sum(s["duration_ms"] for s in scenarios),
             "contract": contract_id(cases, scenarios),
+            "skills": skill_rollup(cases),
         },
         "scenarios": scenarios,
         "categories": category_rows(cases),
@@ -436,6 +488,10 @@ def publish_doc(doc: Mapping[str, Any], *, include_details: bool = False) -> dic
     whatever a grader chose to put in ``details``, which routinely means model
     output, prompts, or rendered reasoning. Publishing is not local debugging,
     so it comes out by default and goes back in only when asked for.
+
+    A skill's install record is kept — its ``digest`` is the point of
+    publishing it at all — minus ``source``, which is an absolute path on the
+    machine that ran the eval and says nothing a reader of the page needs.
     """
     published: dict[str, Any] = json.loads(json.dumps(doc))
     if include_details:
@@ -444,6 +500,8 @@ def publish_doc(doc: Mapping[str, Any], *, include_details: bool = False) -> dic
     for case in iter_cases(published):
         for grader in case.get("evaluator_results") or []:
             grader.pop("metadata", None)
+        for skill in case.get("skills") or []:
+            skill.pop("source", None)
     published["details_redacted"] = True
     return published
 

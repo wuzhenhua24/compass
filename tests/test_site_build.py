@@ -221,6 +221,53 @@ class TestMultiTrialCasesPublishTheMean:
         assert row["outcome_score"] == pytest.approx(0.75)  # (1.0 + 0.5) / 2
         assert row["transcript_score"] == pytest.approx(2 / 3)
 
+    def test_metrics_are_the_mean_too_not_one_trial(self):
+        """The number a skill eval is *about* is a rate across trials.
+
+        ``skill_triggered`` is a boolean per trial and a trigger rate across
+        them. Publishing it from the sampled trial put ``true`` beside a score
+        of 0.333 on a case that loaded the skill once out of three.
+        """
+        case = _case(
+            "pos_implicit",
+            passed=False,
+            score=1 / 3,
+            total_trials=3,
+            passed_trials=1,
+            evaluator_results=[
+                {
+                    "name": "skill_trigger",
+                    "label": "triggered",
+                    "score": 1.0,
+                    "weight": 1.0,
+                    "weighted_score": 1.0,
+                    "passed": True,
+                    "grader_scope": "transcript",
+                    "grader_type": "code",
+                    "metrics": {
+                        "skill_triggered": True,
+                        "skill_touch_calls": 1.0,
+                        "signals": "skill_tool",  # not numeric: not aggregated
+                    },
+                }
+            ],
+            grader_summary={
+                "triggered": {
+                    "score_mean": 1 / 3,
+                    "pass_fraction": 1 / 3,
+                    "trials": 3,
+                    "metrics": {"skill_triggered": 1 / 3, "skill_touch_calls": 1 / 3},
+                }
+            },
+        )
+        row = _doc(cases=[case])["scenarios"][0]["cases"][0]
+        metrics = row["evaluator_results"][0]["metrics"]
+
+        assert metrics["skill_triggered"] == pytest.approx(1 / 3)
+        assert metrics["skill_touch_calls"] == pytest.approx(1 / 3)
+        # Merged, not replaced: the summary aggregates only numbers.
+        assert metrics["signals"] == "skill_tool"
+
     def test_a_single_trial_case_is_passed_through_untouched(self):
         """No grader_summary and no trials to average — nothing to correct, and
         nothing invented either: the row keeps exactly the fields it arrived
@@ -260,6 +307,78 @@ class TestPublishDoc:
 
         assert grader["score"] == 1.0
         assert published["run"]["pass_rate"] == 1.0
+
+    def test_skill_identity_survives_but_its_local_path_does_not(self):
+        published = publish_doc(_doc(cases=[_skill_case("c1")]))
+        skill = published["scenarios"][0]["cases"][0]["skills"][0]
+
+        assert skill["digest"] == "9f2a1c0b7e5d4a63"
+        assert "source" not in skill  # an absolute path on the eval machine
+
+
+# ------------------------------------------------------------------
+# Skill provenance
+# ------------------------------------------------------------------
+
+def _skill_case(case_id, name="report-writer", digest="9f2a1c0b7e5d4a63", **extra):
+    return _case(
+        case_id,
+        skills=[
+            {
+                "name": name,
+                "source": "/Users/someone/skills/report-writer-v2",
+                "path": ".claude/skills/report-writer",
+                "digest": digest,
+                "files": 3,
+            }
+        ],
+        **extra,
+    )
+
+
+class TestSkillRollup:
+    """What was under test has to survive into the document.
+
+    The install record is the only thing that distinguishes two arms of a skill
+    A/B — same cases, same graders, same scenario name, different content.
+    """
+
+    def test_the_run_names_the_skill_and_its_digest(self):
+        doc = _doc(cases=[_skill_case("c1"), _skill_case("c2")])
+
+        assert doc["run"]["skills"] == [
+            {"name": "report-writer", "digest": "9f2a1c0b7e5d4a63", "files": 3, "cases": 2}
+        ]
+
+    def test_a_run_that_installed_nothing_says_nothing(self):
+        assert _doc()["run"]["skills"] == []
+
+    def test_two_versions_under_one_name_are_both_reported(self):
+        """A re-graded pile of traces can mix arms; showing one would lie."""
+        doc = _doc(cases=[_skill_case("c1"), _skill_case("c2", digest="deadbeefcafe")])
+
+        assert [s["digest"] for s in doc["run"]["skills"]] == [
+            "9f2a1c0b7e5d4a63",
+            "deadbeefcafe",
+        ]
+
+    def test_the_manifest_carries_it_so_the_index_can_tell_arms_apart(self, tmp_path):
+        build_site(_doc(cases=[_skill_case("c1")]), tmp_path, slug="v2")
+        entry = load_index(tmp_path)[0]
+
+        assert entry["skills"][0]["digest"] == "9f2a1c0b7e5d4a63"
+
+    def test_a_rebuild_remembers_which_version_each_point_measured(self, tmp_path):
+        """The trend line is not broken by it — that is what the line is for —
+        so each point has to say which version it was."""
+        build_site(_doc(cases=[_skill_case("c1")]), tmp_path, slug="writer")
+        build_site(
+            _doc(cases=[_skill_case("c1", digest="deadbeefcafe")]), tmp_path, slug="writer"
+        )
+        entry = load_index(tmp_path)[0]
+
+        assert entry["skills"][0]["digest"] == "deadbeefcafe"
+        assert entry["history"][0]["skills"][0]["digest"] == "9f2a1c0b7e5d4a63"
 
 
 # ------------------------------------------------------------------
@@ -537,7 +656,7 @@ class TestHistory:
         assert "scenarios" not in snapshot
         assert set(snapshot) == {
             "generated", "pass_rate", "average_score", "best_of_k_score",
-            "total_cases", "evaluated_cases", "passed_cases", "contract",
+            "total_cases", "evaluated_cases", "passed_cases", "contract", "skills",
         }
 
 

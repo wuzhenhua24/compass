@@ -1933,15 +1933,27 @@ def site_build(
     table.add_column("Pass Rate", justify="right")
     table.add_column("Traces", justify="right")
     table.add_column("History", justify="right")
+    # Only when something installed one — an image eval has no column to fill.
+    show_skills = any(r.entry.get("skills") for r in built)
+    if show_skills:
+        table.add_column("Skill")
     for result in built:
         entry = result.entry
-        table.add_row(
+        row = [
             result.slug,
             f"{entry['passed_cases']}/{entry['evaluated_cases']}",
             f"{entry['pass_rate'] * 100:.1f}%",
             _format_bytes(result.trace_bytes) if result.trace_files else "—",
             str(result.history) if result.history else "—",
-        )
+        ]
+        if show_skills:
+            row.append(
+                ", ".join(
+                    f"{s['name']}@{str(s.get('digest') or '')[:8]}"
+                    for s in entry.get("skills") or []
+                ) or "—"
+            )
+        table.add_row(*row)
     console.print(table)
 
     console.print(f"[green]{last.runs} run(s) in this site[/green]")

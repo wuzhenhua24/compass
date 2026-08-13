@@ -162,9 +162,30 @@ skill 会被报成 0% 触发率。
 compass compare out/results.<v1>.json out/results.<v2>.json \
     --on triggered --metric skill_triggered --metric cost_usd
 
+compass site build out/results.<v1>.json -o site/ --slug trigger-v1 --name "trigger · v1"
+compass site build out/results.<v2>.json -o site/ --slug trigger-v2 --name "trigger · v2"
 compass site compare out/results.<v1>.json out/results.<v2>.json \
     --label-a v1 --label-b v2 --on triggered -o site/
 ```
+
+`site build` 不认领域，skill 的结果文件直接就能发。**一条支线一个 slug**，发进同一个
+目录，清单自己累积——总览页因此是一张"哪个版本跑成什么样"的表。页面上和 skill 直接
+相关的三处：
+
+- **每次运行都写明被测的是谁**：`report-writer@9f2a1c0b`——名字加 digest 前 8 位，
+  总览列表和运行页各一处。`digest` 是内容哈希，所以"v2 更好"和"**这个** v2 更好"在
+  半年后仍然分得开。同一个 slug 重复 build 时，历史快照也各自记着当时那个版本，
+  但趋势线**不**在版本变化处断开——那正是这条线要看的东西（判分契约变了才断，
+  因为那是尺子变了）。
+- **每个 case 的 `skill_triggered` 是跨 trial 的均值**，也就是这条 case 的触发率
+  （3 次里中了 1 次 → `0.3333`），和它旁边那个同样是均值的分数对得上。
+- 触发失败的 case 带着 `not_triggered` / `unexpected_trigger` / `resource_unused`
+  标签，点一下就能筛出来；`skill_via_file` / `skill_via_skill_tool` 说明它是被哪种
+  信号认定为"加载了"的。
+
+`--include-details` 才会把 grader 的 `details`（证据：碰到的具体路径、工具名、轮次）
+一起发布。skill 的安装记录里那条本机绝对路径（`source`）永远不发布，名字、digest、
+文件数会。
 
 `compass compare` 做的是**配对**比较：逐 case 配对、列出翻转（哪条从过变成不过）、
 给出 95% 置信区间和当前样本量下的可检测效应（MDE）。这比"两边各报一个均值 ±

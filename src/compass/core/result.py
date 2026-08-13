@@ -153,6 +153,14 @@ class CaseResult:
     # hand-maintained Grader.version.
     grader_fingerprint: str = ""
 
+    #: Skills the adapter installed for this case, as
+    #: ``{"name", "source", "path", "digest", "files"}`` records. The companion
+    #: to ``grader_fingerprint`` on the agent's side: that one says what the
+    #: scoring rules were, this one says what was under test. Empty for every
+    #: adapter that installs no skills, and for the deliberate no-skill arm of
+    #: a sweep — which is exactly what it should say about that arm.
+    skills: list[dict[str, Any]] = field(default_factory=list)
+
     @property
     def best_score(self) -> float:
         """Best (max) score across trials, or overall_score for single trial."""
@@ -293,6 +301,7 @@ class EvalResult:
                     "category": r.category,
                     "error": r.error,
                     "grader_fingerprint": r.grader_fingerprint,
+                    "skills": r.skills,
                     # Full evaluator results for compass analyze
                     "evaluator_results": [er.to_dict() for er in r.evaluator_results],
                     # Alias for compass analyze compatibility

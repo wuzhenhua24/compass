@@ -421,6 +421,10 @@ site/
 
 站点里能做的事，都是把 Compass 已有的数据变得可点开：总览页按 pass rate 排、带趋势线 → 某次运行（双轴散点、分类表、Pass Rate 分母写明）→ 某个 case（每个 grader 的 scope/分数/观察标签/metrics、k 次 trial 的分布、判分契约指纹）→ 那次 case 的轨迹文件。observed_tags、failure_tags、category 都是点击筛选，不是重跑。
 
+**多 trial 的 case 上，页面给的每一个数都是跨 trial 的均值**——分数、通过判定（多数决）、以及 grader 自己发出的每一个数值型 metric。`evaluator_results` 按设计只留**一次** trial 的明细（合并出来的 `metadata` 没有意义），所以直接照搬会把"抽到的那次"摆在"均值"旁边：一条 3 次里中 1 次的 case 会显示 `skill_triggered=true`，而它左边的分数是 0.333。
+
+**装了 skill 的运行会写明装的是谁**：`run.skills` 记下名字、内容 digest 和文件数，总览列表、运行页、以及历史快照里各有一份（`report-writer@9f2a1c0b`）。这是 `contract` 在 agent 那一侧的对应物——一个说判分的尺子是什么，一个说被测的东西是什么。趋势线**不**因它变化而断开：被测对象在演进正是这条线要看的，而尺子变了则必须断。安装记录里的 `source`（本机绝对路径）不发布，其余发布。
+
 **发布 = 公开，所以默认是收着的：**
 
 - **grader 的 `metadata` 默认不发布**。它是 case 行里唯一的自由字段，装的是 grader 自己的 `details`——经常就是模型原文、prompt、评审理由。要发布得显式 `--include-details`，页面上也会写明这次 build 有没有带上。

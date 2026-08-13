@@ -67,6 +67,17 @@ class HTMLReporter:
 
         category_html = self._render_category_breakdown(doc["categories"])
 
+        # What was under test, when the adapter installed something. The digest
+        # is the identity — a source directory gets reused between versions and
+        # its content does not — so it belongs beside the run's name.
+        skills = run.get("skills") or []
+        skills_line = ""
+        if skills:
+            named = ", ".join(
+                f"{s['name']}@{str(s.get('digest') or '')[:8]}" for s in skills
+            )
+            skills_line = f'<div class="timestamp">Skill: {escape(named)}</div>'
+
         # The scatter needs both axes to mean something. Presence, not
         # magnitude: a run where every outcome grader scored 0.0 still has
         # an outcome axis, and that chart is worth looking at.
@@ -225,6 +236,7 @@ class HTMLReporter:
         <div class="container">
             <h1>{escape(self.title)}</h1>
             <div class="timestamp">Generated: {escape(doc['generated'])}</div>
+            {skills_line}
         </div>
     </header>
 

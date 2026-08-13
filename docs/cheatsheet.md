@@ -150,9 +150,10 @@ compass test ab.yaml --model-key skill -m "" -m skills/v1 -m skills/v2 \
     --report json -o out/results.json
 compass compare out/results.skills-v1.json out/results.skills-v2.json \
     --on triggered --metric skill_triggered --metric cost_usd
+compass site build out/results.skills-v2.json -o site/ --slug v2   # 一条支线一个 slug
 ```
 
-装进去的版本会连内容 hash 一起记在 `transcript.metadata["skills"]`。详见 [skills.md](skills.md)。
+装进去的版本会连内容 hash 一起记在 `transcript.metadata["skills"]` 和结果文件里，站点上每次运行都写明 `report-writer@<digest>`。详见 [skills.md](skills.md)。
 
 **安全闸门（评「执行」而非「文字」）**
 

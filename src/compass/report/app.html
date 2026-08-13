@@ -123,6 +123,11 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
 const pct = (x) => (Number(x || 0) * 100).toFixed(1) + "%";
 const num = (x) => Number(x || 0).toFixed(2);
 const grade = (x) => (x >= 0.7 ? "good" : x >= 0.4 ? "medium" : "poor");
+// A metric is whatever the grader emitted — a count, a cost, or a rate across
+// trials. Significant digits rather than fixed decimals: rounding a rate to
+// 0.333 and a $0.0004 cost to 0.000 are not the same mistake.
+const metric = (v) => (typeof v === "number" && Number.isFinite(v) && !Number.isInteger(v)
+  ? Number(v.toPrecision(4)) : v);
 const plural = (n, one) => n + " " + one + (n === 1 ? "" : "s");
 
 // ---------- language ----------
@@ -225,6 +230,8 @@ const MESSAGES = {
       + `<code>${v.cmd}</code> for a proper before/after.`,
     trend_point: (v) => `${v.when}: ${v.rate} (${v.passed}/${v.total})`,
     other_contract: " — graded under a different contract",
+    skills_note: "Under test:",
+    skill_files: (v) => plural(v.n, "file"),
     scatter_title: "Outcome vs Transcript",
     axis_outcome: "Outcome Score",
     axis_transcript: "Transcript Score",
@@ -365,6 +372,8 @@ const MESSAGES = {
       + `分数只在同一份契约内可比——要做严谨的前后对比请用 <code>${v.cmd}</code>。`,
     trend_point: (v) => `${v.when}：${v.rate}（${v.passed}/${v.total}）`,
     other_contract: " —— 判分契约与当前不同",
+    skills_note: "被测 skill：",
+    skill_files: (v) => `${v.n} 个文件`,
     scatter_title: "结果分 vs 过程分",
     axis_outcome: "结果分（Outcome）",
     axis_transcript: "过程分（Transcript）",
@@ -478,6 +487,22 @@ function tags(list) {
   return (list || []).map((tag) => `<span class="badge tag">${esc(tag)}</span>`).join("");
 }
 
+// What the run had installed, as `name@digest`. The digest is the identity —
+// a source path gets reused between versions and the content does not — so it
+// is shown wherever a run is named, not tucked into a detail row.
+function skillIds(skills) {
+  return (skills || []).filter((s) => s && s.name)
+    .map((s) => s.name + (s.digest ? "@" + String(s.digest).slice(0, 8) : ""));
+}
+
+function skillChips(skills) {
+  return (skills || []).filter((s) => s && s.name).map((s) => {
+    const files = s.files ? ` · ${t("skill_files", { n: s.files })}` : "";
+    return `<span class="badge tag mono">${esc(s.name)}${s.digest
+      ? "@" + esc(String(s.digest).slice(0, 8)) : ""}${esc(files)}</span>`;
+  }).join("");
+}
+
 function duration(ms) {
   const s = Number(ms || 0) / 1000;
   return s >= 60 ? (s / 60).toFixed(1) + "m" : s >= 1 ? s.toFixed(1) + "s" : Math.round(ms) + "ms";
@@ -533,8 +558,10 @@ function renderIndex() {
     const scopes = entry.scopes || {};
     const badges = [scopes.outcome ? "outcome" : null, scopes.transcript ? "transcript" : null]
       .filter(Boolean).map((s) => `<span class="badge scope">${s}</span>`).join(" ");
+    const skills = skillIds(entry.skills);
     return `<tr class="clickable" data-slug="${esc(entry.slug)}">
-      <td><strong>${esc(entry.name)}</strong><div class="mono" style="color:#888">${esc(entry.slug)}</div></td>
+      <td><strong>${esc(entry.name)}</strong><div class="mono" style="color:#888">${esc(entry.slug)}</div>
+        ${skills.length ? `<div class="mono" style="color:#888">${esc(skills.join(", "))}</div>` : ""}</td>
       <td class="num">${bar(entry.pass_rate)} ${pct(entry.pass_rate)}</td>
       <td class="num">${sparkline(entry)}</td>
       <td class="num">${entry.passed_cases || 0}/${entry.evaluated_cases || 0}</td>
@@ -780,6 +807,7 @@ function trendSeries(entry, run) {
     average_score: entry.average_score, total_cases: entry.total_cases,
     evaluated_cases: entry.evaluated_cases, passed_cases: entry.passed_cases,
     contract: (run || {}).contract != null ? run.contract : entry.contract,
+    skills: (run || {}).skills != null ? run.skills : entry.skills,
   }]);
 }
 
@@ -824,7 +852,10 @@ function trendPanel(entry, run) {
       fill="${color}" stroke="white" stroke-width="1.5">
       <title>${esc(t("trend_point", { when, rate: pct(p.pass_rate),
         passed: p.passed_cases || 0, total: p.evaluated_cases || 0 })
-        + (same ? "" : t("other_contract")))}</title></circle>`;
+        + (same ? "" : t("other_contract"))
+        // Which version this point measured. The line is not broken for it:
+        // the subject moving is what this trend is *for*, unlike the contract.
+        + (skillIds(p.skills).length ? " · " + skillIds(p.skills).join(", ") : ""))}</title></circle>`;
     if (i === 0 || i === series.length - 1) {
       svg += `<text x="${x(i)}" y="${h - 12}" text-anchor="${i ? "end" : "start"}"
         font-size="11" fill="#888">${esc(when)}</text>`;
@@ -868,7 +899,7 @@ function graderTable(caseRow) {
     const label = t(g.skipped ? "result_skipped" : g.passed ? "result_pass" : "result_fail");
     const score = g.score == null ? `<span style='color:#999'>${t("unscored")}</span>` : num(g.score);
     const metrics = Object.entries(g.metrics || {})
-      .map(([k, v]) => `<span class="badge tag">${esc(k)}=${esc(v)}</span>`).join("");
+      .map(([k, v]) => `<span class="badge tag">${esc(k)}=${esc(metric(v))}</span>`).join("");
     const extra = [tags(g.tags), tags(g.failure_tags), metrics].filter(Boolean).join(" ");
     return `<tr>
       <td class="mono">${esc(g.name)}</td>
@@ -945,6 +976,8 @@ function renderRun(slug, entry, doc) {
       <div class="summary-card"><div class="value">${pct(run.pass_rate)}</div><div class="label">${esc(rateLabel)}</div></div>
       <div class="summary-card"><div class="value">${num(run.average_score)}</div><div class="label">${t("th_avg_score")}</div></div>
     </div>
+    ${(run.skills || []).length
+      ? `<div class="note info">${t("skills_note")} ${skillChips(run.skills)}</div>` : ""}
     ${doc.details_redacted
       ? `<div class="note info">${t("details_redacted", { flag: "--include-details" })}</div>` : ""}
     ${trendPanel(entry, run)}

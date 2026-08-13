@@ -140,6 +140,42 @@ def test_the_replay_reads_the_skill_the_adapter_installed(repo: Path):
     assert skills[0]["digest"]
 
 
+def test_the_result_records_which_skill_produced_it(repo: Path):
+    """The digest has to reach the *results file*, not only the trace.
+
+    Traces are opt-in and separate; a results file is what gets archived,
+    compared and published. Without this the two arms of an A/B differ only in
+    their numbers, and "v2 scored higher" can no longer be tied to *this* v2 —
+    the promise ``digest`` exists to keep.
+    """
+    result = _run("ab", str(skill_eval._SKILLS / "report-writer-v2"), repo)
+    case = result.case_results[0]
+
+    assert case.skills[0]["name"] == "report-writer"
+    digest = case.skills[0]["digest"]
+    assert digest
+
+    # ... and through serialization into the published run document.
+    from compass.report.site import collect_run
+
+    doc = collect_run([result], name="v2")
+    assert doc["run"]["skills"] == [
+        {
+            "name": "report-writer",
+            "digest": digest,
+            "files": case.skills[0]["files"],
+            "cases": 3,
+        }
+    ]
+
+
+def test_the_baseline_arm_records_no_skill(repo: Path):
+    """Not an omission — the arm genuinely installed nothing."""
+    result = _run("ab", "", repo)
+
+    assert all(case.skills == [] for case in result.case_results)
+
+
 def test_the_installed_skill_is_not_reported_as_the_agents_diff(repo: Path):
     result = _run("ab", str(skill_eval._SKILLS / "report-writer-v2"), repo)
     changed = result.case_results[0].output_data["metadata"]["changed_files"]
