@@ -365,6 +365,8 @@ json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
 
 报告的**取数**和**渲染**是分开的。`collect_run()` 把一次运行的 `EvalResult` 变成一份纯 JSON 文档，HTML 报告只是这份文档的一个渲染器——没有任何 viewer 直接去碰结果对象。
 
+`--report html` 的本地报告和站点 viewer **共用同一套视觉**：同一批 CSS 变量、同一套深浅配色（跟随系统）、图表用同一组类名取色。它们本来就是同一次运行的两种看法，给它们两种视觉语言等于谎报了这层关系。
+
 ```python
 from compass.report import collect_run
 from compass.report.html import HTMLReporter
