@@ -5,91 +5,373 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Compass</title>
 <style>
+  /* One theme, two palettes. Every colour below is a token: this page is read
+     on a laptop next to a terminal as often as it is shared as a link, so it
+     follows the reader's system rather than picking a side. */
+  :root {
+    color-scheme: light;
+    --bg: oklch(98.5% 0.003 274);
+    --surface: oklch(100% 0 0);
+    --surface-2: oklch(97.2% 0.005 274);
+    --surface-3: oklch(94.6% 0.008 274);
+    --border: oklch(91% 0.007 274);
+    --border-strong: oklch(84% 0.012 274);
+    --ink: oklch(25% 0.02 274);
+    --ink-2: oklch(45% 0.017 274);
+    --ink-3: oklch(52% 0.015 274);
+    --accent: oklch(48% 0.18 274);
+    --accent-2: oklch(40% 0.17 274);
+    --accent-soft: oklch(95.5% 0.025 274);
+    --focus: oklch(55% 0.19 274);
+
+    --pass: oklch(58% 0.14 158);
+    --pass-bg: oklch(95% 0.05 158);
+    --pass-ink: oklch(41% 0.11 158);
+    --fail: oklch(57% 0.21 27);
+    --fail-bg: oklch(95.5% 0.035 27);
+    --fail-ink: oklch(45% 0.18 27);
+    --warn: oklch(72% 0.16 72);
+    --warn-bg: oklch(96% 0.05 82);
+    --warn-ink: oklch(46% 0.11 66);
+    --scope-bg: oklch(95% 0.04 300);
+    --scope-ink: oklch(44% 0.16 300);
+    --quiet-bg: oklch(96% 0.006 274);
+    --quiet-ink: oklch(42% 0.02 274);
+    /* Chart fills are read *behind* data, so they are a step quieter than the
+       badge tints that carry the same meaning in text. */
+    --zone-good: oklch(97.4% 0.024 158);
+    --zone-mixed: oklch(97.8% 0.024 85);
+    --zone-poor: oklch(97.4% 0.02 27);
+
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+    --r1: 6px; --r2: 10px; --r3: 14px;
+    --t-xs: .75rem; --t-sm: .8125rem; --t-md: .875rem;
+    --t-lg: 1rem; --t-xl: 1.25rem; --t-2xl: 1.5rem;
+    --shadow: 0 1px 2px oklch(25% 0.02 274 / .05), 0 1px 3px oklch(25% 0.02 274 / .06);
+    --scroll-shadow: oklch(20% 0.02 274 / .18);
+    --dur: 160ms; --dur-fast: 110ms; --ease: cubic-bezier(.22, 1, .36, 1);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: oklch(17.5% 0.012 274);
+      --surface: oklch(21.5% 0.014 274);
+      --surface-2: oklch(25% 0.014 274);
+      --surface-3: oklch(29% 0.016 274);
+      --border: oklch(31% 0.016 274);
+      --border-strong: oklch(39% 0.018 274);
+      --ink: oklch(95% 0.006 274);
+      --ink-2: oklch(80% 0.012 274);
+      --ink-3: oklch(69% 0.014 274);
+      --accent: oklch(78% 0.12 274);
+      --accent-2: oklch(86% 0.09 274);
+      --accent-soft: oklch(30% 0.06 274);
+      --focus: oklch(78% 0.12 274);
+
+      --pass: oklch(74% 0.15 158);
+      --pass-bg: oklch(30% 0.07 158);
+      --pass-ink: oklch(87% 0.13 158);
+      --fail: oklch(70% 0.17 27);
+      --fail-bg: oklch(31% 0.09 27);
+      --fail-ink: oklch(88% 0.09 27);
+      --warn: oklch(80% 0.14 78);
+      --warn-bg: oklch(32% 0.07 72);
+      --warn-ink: oklch(90% 0.09 82);
+      --scope-bg: oklch(31% 0.07 300);
+      --scope-ink: oklch(87% 0.08 300);
+      --quiet-bg: oklch(28% 0.012 274);
+      --quiet-ink: oklch(84% 0.012 274);
+      --zone-good: oklch(24.5% 0.019 158);
+      --zone-mixed: oklch(24.5% 0.017 85);
+      --zone-poor: oklch(24.5% 0.018 27);
+      --shadow: 0 1px 2px oklch(0% 0 0 / .3);
+      --scroll-shadow: oklch(0% 0 0 / .55);
+    }
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-    background: #f5f5f5; color: #333; line-height: 1.6;
+    background: var(--bg); color: var(--ink); line-height: 1.55;
+    font-size: var(--t-md);
+    -webkit-font-smoothing: antialiased;
   }
-  a { color: #4c51bf; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-  header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white; padding: 32px 20px; margin-bottom: 30px;
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-2); text-decoration: underline; }
+  :focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r1);
   }
-  header h1 { font-size: 1.8rem; margin-bottom: 6px; }
-  header h1 a { color: white; }
-  header .timestamp { opacity: .8; font-size: .9rem; }
-  header .crumb { opacity: .9; font-size: .9rem; margin-bottom: 8px; }
-  header .crumb a { color: white; text-decoration: underline; }
-  header .live { margin-left: 6px; color: #86efac; font-weight: 500; }
-  header .container { display: flex; align-items: flex-start; gap: 16px; }
-  header .heading { flex: 1; min-width: 0; }
+  code {
+    font-family: var(--mono); font-size: .92em;
+    background: var(--surface-3); color: var(--ink);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: var(--s5) var(--s4); }
 
-  .langs { display: flex; gap: 0; flex: none; margin-top: 2px; }
-  .langs button {
-    font: inherit; font-size: .82rem; line-height: 1; cursor: pointer;
-    padding: 6px 11px; color: white; background: rgba(255,255,255,.12);
-    border: 1px solid rgba(255,255,255,.35); border-right-width: 0;
+  header { background: var(--surface); border-bottom: 1px solid var(--border); }
+  header .container {
+    display: flex; align-items: flex-start; gap: var(--s4);
+    padding-top: var(--s5); padding-bottom: var(--s5);
   }
-  .langs button:first-child { border-radius: 6px 0 0 6px; }
-  .langs button:last-child { border-radius: 0 6px 6px 0; border-right-width: 1px; }
-  .langs button:hover { background: rgba(255,255,255,.22); }
-  .langs button.on { background: white; color: #4c51bf; font-weight: 600; }
+  header .heading { flex: 1; min-width: 0; }
+  header h1 {
+    font-size: var(--t-2xl); font-weight: 600; letter-spacing: -.02em;
+    line-height: 1.2; text-wrap: balance;
+  }
+  header .timestamp {
+    color: var(--ink-3); font-size: var(--t-sm); margin-top: var(--s1);
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s3);
+  }
+  header .skills { display: inline-flex; align-items: center; gap: var(--s2); }
+  header .crumb { font-size: var(--t-sm); margin-bottom: var(--s1); color: var(--ink-3); }
+  header .crumb a { color: var(--ink-3); }
+  header .crumb a:hover { color: var(--accent); text-decoration: none; }
+
+  /* Live means "this page is still being written". A dot that breathes says
+     that better than a word, so the word is backup, not the signal. */
+  header .live {
+    display: inline-flex; align-items: center; gap: 6px; font-weight: 500;
+    color: var(--pass-ink); background: var(--pass-bg);
+    padding: 2px 9px 2px 7px; border-radius: 20px; font-size: var(--t-xs);
+  }
+  header .live::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--pass); animation: pulse 2s var(--ease) infinite;
+  }
+  @keyframes pulse { 50% { opacity: .3; transform: scale(.8); } }
+
+  .langs { display: flex; flex: none; }
+  .langs button {
+    font: inherit; font-size: var(--t-sm); line-height: 1; cursor: pointer;
+    padding: 7px 12px; color: var(--ink-2); background: var(--surface);
+    border: 1px solid var(--border); border-right-width: 0;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .langs button:first-child { border-radius: var(--r1) 0 0 var(--r1); }
+  .langs button:last-child { border-radius: 0 var(--r1) var(--r1) 0; border-right-width: 1px; }
+  .langs button:hover { background: var(--surface-2); color: var(--ink); }
+  .langs button.on {
+    background: var(--accent-soft); color: var(--accent-2);
+    font-weight: 600; border-color: var(--border-strong);
+  }
 
   .card {
-    background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1);
-    margin-bottom: 20px; overflow: hidden;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r2); box-shadow: var(--shadow);
+    margin-bottom: var(--s5); overflow: hidden;
   }
-  .card > h2 { font-size: 1.2rem; padding: 18px 20px; border-bottom: 1px solid #eee; }
-  .card .body { padding: 20px; }
+  .card > h2 {
+    font-size: var(--t-lg); font-weight: 600; letter-spacing: -.01em;
+    padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+  }
+  .card .body { padding: var(--s4); }
 
-  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 20px; margin-bottom: 30px; }
-  .summary-card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1); text-align: center; }
-  .summary-card .value { font-size: 2.2rem; font-weight: bold; margin-bottom: 4px; }
-  .summary-card .label { color: #666; font-size: .85rem; }
-  .summary-card.passed .value { color: #10b981; }
-  .summary-card.failed .value { color: #ef4444; }
-  .summary-card.error .value { color: #f59e0b; }
+  /* One divided strip, not six floating tiles: these numbers are read across,
+     and hairlines carry that better than shadows and gaps. */
+  .summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border); border-radius: var(--r2);
+    overflow: hidden; margin-bottom: var(--s5);
+  }
+  .summary-card { background: var(--surface); padding: var(--s3) var(--s4); }
+  .summary-card .value {
+    font-size: 1.6rem; font-weight: 600; letter-spacing: -.02em; line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+  }
+  .summary-card .label { color: var(--ink-3); font-size: var(--t-xs); margin-top: 2px; }
+  .summary-card.passed .value { color: var(--pass-ink); }
+  .summary-card.failed .value { color: var(--fail-ink); }
+  .summary-card.error .value { color: var(--warn-ink); }
 
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; padding: 10px 12px; border-bottom: 2px solid #eee; font-size: .85rem; color: #666; }
-  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  tbody tr.clickable { cursor: pointer; }
-  tbody tr.clickable:hover { background: #fafaff; }
-  .num { text-align: center; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
+  th {
+    text-align: left; padding: var(--s2) var(--s3); white-space: nowrap;
+    border-bottom: 1px solid var(--border); background: var(--surface-2);
+    font-size: var(--t-xs); font-weight: 600; color: var(--ink-3);
+  }
+  td {
+    padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  /* The label column keeps its row one line tall; the table scrolls sideways
+     inside its card, which is cheaper than rows of three different heights. */
+  tbody td:first-child { white-space: nowrap; }
+  tbody tr.clickable { cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+  tbody tr.clickable:hover { background: var(--surface-2); }
+  tbody tr.clickable:has(:focus-visible) { background: var(--surface-2); }
+  /* Measurements are read down a column, so they never wrap: a bar that drops
+     below its own percentage, or a digest broken across two lines, costs more
+     than the horizontal scroll this table already has. */
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th.num { text-align: right; }
+  .mono { font-family: var(--mono); font-size: var(--t-sm); }
+  td > .mono { white-space: nowrap; }
+  .muted { color: var(--ink-2); }
+  .dim { color: var(--ink-3); }
+  /* Rows are scanned, so they stay one line tall. The full value is in the
+     cell's title rather than in a second line of every row. */
+  .trunc { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pos { color: var(--pass-ink); }
+  .neg { color: var(--fail-ink); }
+  .warn { color: var(--warn-ink); }
+  .err { color: var(--fail-ink); }
 
-  .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: .78rem; font-weight: 500; }
-  .badge.passed { background: #d1fae5; color: #065f46; }
-  .badge.failed { background: #fee2e2; color: #991b1b; }
-  .badge.error  { background: #fef3c7; color: #92400e; }
-  .badge.skipped{ background: #eef2f7; color: #475569; }
-  .badge.scope  { background: #ede9fe; color: #5b21b6; }
-  .badge.tag    { background: #eef2f7; color: #334155; margin-right: 4px; }
+  /* The whole row is the click target; this is the keyboard's way in, and the
+     chevron is what says the row opens rather than navigates. */
+  .disclosure {
+    display: inline-flex; align-items: center; gap: var(--s2);
+    font: inherit; color: inherit; background: none; border: 0;
+    padding: 0; cursor: pointer; text-align: left;
+  }
+  .disclosure::before {
+    content: ""; flex: none; width: 6px; height: 6px; opacity: .5;
+    border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg); transition: transform var(--dur) var(--ease);
+  }
+  .disclosure[aria-expanded="true"]::before { transform: rotate(45deg); }
+  .disclosure:hover::before { opacity: .9; }
+  .row-link { color: inherit; font-weight: 600; }
+  .row-link:hover { color: var(--accent); text-decoration: none; }
 
-  .bar { width: 96px; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
-  .bar > div { height: 100%; border-radius: 4px; }
-  .bar .good { background: #10b981; } .bar .medium { background: #f59e0b; } .bar .poor { background: #ef4444; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+    font-size: var(--t-xs); font-weight: 500; line-height: 1.5;
+  }
+  .badge.passed { background: var(--pass-bg); color: var(--pass-ink); }
+  .badge.failed { background: var(--fail-bg); color: var(--fail-ink); }
+  .badge.error  { background: var(--warn-bg); color: var(--warn-ink); }
+  .badge.skipped{ background: var(--quiet-bg); color: var(--quiet-ink); }
+  .badge.scope  { background: var(--scope-bg); color: var(--scope-ink); }
+  .badge.tag    { background: var(--quiet-bg); color: var(--quiet-ink); margin: 1px 3px 1px 0; }
 
-  .filters { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 20px; border-bottom: 1px solid #eee; align-items: center; }
-  .filters input, .filters select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font: inherit; font-size: .9rem; }
-  .filters input { flex: 1; min-width: 180px; }
-  .filters .count { color: #666; font-size: .85rem; }
+  .bar {
+    width: 72px; height: 6px; background: var(--surface-3); border-radius: 3px;
+    overflow: hidden; display: inline-block; vertical-align: middle; margin-right: var(--s2);
+  }
+  .bar > div { height: 100%; border-radius: 3px; }
+  .bar .good { background: var(--pass); }
+  .bar .medium { background: var(--warn); }
+  .bar .poor { background: var(--fail); }
 
-  .detail { background: #fbfbfd; }
-  .detail .body { padding: 16px 20px 20px; }
-  .detail h3 { font-size: .95rem; margin: 14px 0 8px; color: #444; }
+  .filters {
+    display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center;
+    padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .filters input, .filters select {
+    padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--r1);
+    font: inherit; font-size: var(--t-md); color: var(--ink); background: var(--surface);
+    transition: border-color var(--dur-fast) var(--ease);
+  }
+  .filters input { flex: 1; min-width: 200px; }
+  .filters input::placeholder { color: var(--ink-3); }
+  .filters input:hover, .filters select:hover { border-color: var(--ink-3); }
+  .filters .count { color: var(--ink-3); font-size: var(--t-sm); margin-left: auto; }
+
+  .detail { background: var(--surface-2); }
+  .detail .body { padding: var(--s3) var(--s4) var(--s4); }
+  .detail > td { border-bottom: 1px solid var(--border); }
+  .detail h3 {
+    font-size: var(--t-sm); font-weight: 600; color: var(--ink-2);
+    margin: var(--s4) 0 var(--s2);
+  }
   .detail h3:first-child { margin-top: 0; }
-  .kv { display: flex; flex-wrap: wrap; gap: 6px 18px; color: #555; font-size: .88rem; }
-  pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: .8rem; }
+  /* No fill mode: the row is visible on its own, and the animation only adds
+     the arrival. A paused animation (hidden tab, headless render) must not be
+     able to leave the panel blank. */
+  .detail .body > * { animation: rise var(--dur) var(--ease); }
+  @keyframes rise { from { opacity: 0; transform: translateY(-3px); } }
+  .kv {
+    display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4);
+    color: var(--ink-2); font-size: var(--t-sm);
+  }
+  .detail .scroll { border: 1px solid var(--border); border-radius: var(--r1); }
+  pre {
+    background: var(--surface); color: var(--ink-2); border: 1px solid var(--border);
+    padding: var(--s3); border-radius: var(--r1); overflow-x: auto;
+    font-family: var(--mono); font-size: var(--t-xs); line-height: 1.5;
+  }
 
-  .note { padding: 12px 16px; border-radius: 8px; font-size: .88rem; margin-bottom: 20px; }
-  .note.warn { background: #fef3c7; color: #92400e; }
-  .note.info { background: #eef2f7; color: #475569; }
-  .empty { padding: 40px 20px; text-align: center; color: #888; }
-  .scroll { overflow-x: auto; }
+  .note {
+    padding: var(--s3) var(--s4); border-radius: var(--r1);
+    font-size: var(--t-sm); margin-bottom: var(--s5);
+  }
+  .note.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .note.info { background: var(--quiet-bg); color: var(--quiet-ink); }
+  /* A note that explains the table above it belongs to that table, not to the
+     page: no gap, no second rounded corner floating in the margin. */
+  .card > .note { margin: 0; border-radius: 0; border-top: 1px solid var(--border); }
+  .note code { background: oklch(50% 0.02 274 / .12); color: inherit; }
+  .note ul { margin: var(--s2) 0 0 var(--s5); }
+  .empty { padding: var(--s7) var(--s4); text-align: center; color: var(--ink-3); }
+
+  /* A table wider than its card scrolls. The edge shadow appears only when
+     there is more to see, so a clipped last column reads as "scroll me"
+     instead of as a bug. */
+  .scroll {
+    overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--surface) 40%, transparent) left / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--surface) 40%, transparent) right / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, var(--scroll-shadow), transparent)
+        left / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, var(--scroll-shadow), transparent)
+        right / 12px 100% no-repeat scroll,
+      var(--surface);
+  }
+
+  /* Charts are data, so they take their ink from the same tokens as the text
+     around them. Hard-coded hex here is how a chart survives a theme switch
+     looking like a screenshot of the other one. */
+  .chart { max-width: 100%; height: auto; }
+  .chart .axis { stroke: var(--border-strong); stroke-width: 1.5; }
+  .chart .grid { stroke: var(--border); }
+  .chart .guide { stroke: var(--border-strong); stroke-dasharray: 5 5; }
+  .chart .diag { stroke: var(--border); stroke-dasharray: 3 3; }
+  .chart .tick { fill: var(--ink-3); font-size: 11px; }
+  .chart .axis-label { fill: var(--ink-2); font-size: 12px; font-weight: 600; }
+  .chart .zone-good { fill: var(--zone-good); }
+  .chart .zone-mixed { fill: var(--zone-mixed); }
+  .chart .zone-poor { fill: var(--zone-poor); }
+  .chart .dot { stroke: var(--surface); stroke-width: 1.5; }
+  .chart .dot.good { fill: var(--pass); }
+  .chart .dot.poor { fill: var(--fail); }
+  .chart .dot.medium { fill: var(--warn); }
+  .chart .dot.stale { fill: var(--ink-3); }
+  .chart .series { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+  .spark { fill: none; stroke-width: 1.5; }
+  .spark.up, .sparkdot.up { stroke: var(--pass); fill: var(--pass); }
+  .spark.down, .sparkdot.down { stroke: var(--fail); fill: var(--fail); }
+  .spark.flat, .sparkdot.flat { stroke: var(--ink-3); fill: var(--ink-3); }
+
+  @media (max-width: 720px) {
+    .container { padding: var(--s4) var(--s3); }
+    header .container { flex-wrap: wrap; gap: var(--s3); }
+    header h1 { font-size: var(--t-xl); }
+    .summary { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
+    .summary-card .value { font-size: 1.3rem; }
+    .filters input { min-width: 100%; }
+    .filters .count { margin-left: 0; }
+  }
+
+  /* Touch: the same controls, at a size a thumb can hit. */
+  @media (pointer: coarse) {
+    .filters input, .filters select { padding: 11px 12px; }
+    .langs button { padding: 11px 14px; }
+    td { padding: var(--s3); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -508,6 +790,22 @@ function duration(ms) {
   return s >= 60 ? (s / 60).toFixed(1) + "m" : s >= 1 ? s.toFixed(1) + "s" : Math.round(ms) + "ms";
 }
 
+// The document stamps UTC ISO, which is right to store and hard to read in a
+// table. Shown as local `YYYY-MM-DD HH:MM` — fixed rather than locale-formatted,
+// so it stays sortable by eye and the same width in every row. The exact
+// original is one hover away, because a shared report crosses time zones.
+function stampText(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return String(iso || "");
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+    + `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function stamp(iso) {
+  return `<time datetime="${esc(iso)}" title="${esc(iso)}">${esc(stampText(iso))}</time>`;
+}
+
 async function loadJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
   if (!res.ok) throw new Error(path + " → " + res.status);
@@ -525,15 +823,15 @@ function schemaNote(doc) {
 function sparkline(entry) {
   const trail = (entry.history || []).slice().reverse().map((h) => Number(h.pass_rate || 0));
   const series = trail.concat([Number(entry.pass_rate || 0)]);
-  if (series.length < 2) return '<span style="color:#bbb">—</span>';
+  if (series.length < 2) return '<span class="dim">—</span>';
   const w = 80, h = 22;
   const step = w / (series.length - 1);
   const points = series.map((v, i) => `${(i * step).toFixed(1)},${(h - v * h).toFixed(1)}`).join(" ");
   const last = series[series.length - 1], first = series[0];
-  const color = last > first ? "#10b981" : last < first ? "#ef4444" : "#94a3b8";
-  return `<svg width="${w}" height="${h}" aria-label="${esc(t("trend_alt"))}">
-    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5"/>
-    <circle cx="${w}" cy="${(h - last * h).toFixed(1)}" r="2.5" fill="${color}"/>
+  const dir = last > first ? "up" : last < first ? "down" : "flat";
+  return `<svg width="${w}" height="${h}" class="chart" role="img" aria-label="${esc(t("trend_alt"))}">
+    <polyline points="${points}" class="spark ${dir}"/>
+    <circle cx="${w - 1}" cy="${(h - last * h).toFixed(1)}" r="2.5" class="sparkdot ${dir}"/>
   </svg>`;
 }
 
@@ -541,8 +839,9 @@ function renderIndex() {
   const runs = state.index.runs || [];
   document.getElementById("crumb").innerHTML = "";
   document.getElementById("title").textContent = "Compass";
+  document.title = "Compass";
   document.getElementById("subtitle").textContent =
-    t("runs_built", { n: runs.length, when: state.index.generated || "" });
+    t("runs_built", { n: runs.length, when: stampText(state.index.generated || "") });
 
   if (!runs.length) {
     view.innerHTML = `<div class="card"><div class="empty">
@@ -559,16 +858,20 @@ function renderIndex() {
     const badges = [scopes.outcome ? "outcome" : null, scopes.transcript ? "transcript" : null]
       .filter(Boolean).map((s) => `<span class="badge scope">${s}</span>`).join(" ");
     const skills = skillIds(entry.skills);
+    // A real link, not a click handler on the row: a published report gets
+    // shared one run at a time, so the run's own URL has to be copyable — and
+    // it is what makes the row reachable from the keyboard.
     return `<tr class="clickable" data-slug="${esc(entry.slug)}">
-      <td><strong>${esc(entry.name)}</strong><div class="mono" style="color:#888">${esc(entry.slug)}</div>
-        ${skills.length ? `<div class="mono" style="color:#888">${esc(skills.join(", "))}</div>` : ""}</td>
-      <td class="num">${bar(entry.pass_rate)} ${pct(entry.pass_rate)}</td>
+      <td><a class="row-link" href="#/run/${encodeURIComponent(entry.slug)}">${esc(entry.name)}</a>
+        <div class="mono dim">${esc(entry.slug)}</div>
+        ${skills.length ? `<div class="mono dim">${esc(skills.join(", "))}</div>` : ""}</td>
+      <td class="num">${bar(entry.pass_rate)}${pct(entry.pass_rate)}</td>
       <td class="num">${sparkline(entry)}</td>
       <td class="num">${entry.passed_cases || 0}/${entry.evaluated_cases || 0}</td>
       <td class="num">${entry.error_cases ? `<span class="badge error">${entry.error_cases}</span>` : "—"}</td>
       <td class="num">${num(entry.average_score)}</td>
       <td class="num">${badges || "—"}</td>
-      <td class="mono" style="color:#666">${esc(entry.generated)}</td>
+      <td class="mono dim">${stamp(entry.generated)}</td>
     </tr>`;
   }).join("");
 
@@ -605,19 +908,19 @@ function signed(x, digits) {
 }
 
 function interval(stats, digits) {
-  if (!stats) return `<span class="mono" style="color:#888">${t("not_measured")}</span>`;
+  if (!stats) return `<span class="mono dim">${t("not_measured")}</span>`;
   const d = digits == null ? 3 : digits;
   const range = `[${signed(stats.ci_low, d)}, ${signed(stats.ci_high, d)}]`;
   if (!stats.variance_observed) {
     return `<strong class="mono">${signed(stats.mean_diff, d)}</strong>
-      <div class="mono" style="color:#888">${t("no_spread")}</div>`;
+      <div class="mono dim">${t("no_spread")}</div>`;
   }
   const verdict = stats.significant
     ? `<span class="badge passed">${t("ci_excludes_zero")}</span>`
     : `<span class="badge skipped">${t("within_noise",
         { mde: Number(stats.mde || 0).toFixed(d) })}</span>`;
   return `<strong class="mono">${signed(stats.mean_diff, d)}</strong>
-    <div class="mono" style="color:#888">${range}</div>${verdict}`;
+    <div class="mono dim">${range}</div>${verdict}`;
 }
 
 function comparisonsTable() {
@@ -625,8 +928,8 @@ function comparisonsTable() {
   if (!rows.length) return "";
   const body = rows.map((c) => `
     <tr class="clickable" data-compare="${esc(c.slug)}">
-      <td><strong>${esc(c.name)}</strong>
-        <div class="mono" style="color:#888">${esc(c.label_a)} → ${esc(c.label_b)}</div></td>
+      <td><a class="row-link" href="#/compare/${encodeURIComponent(c.slug)}">${esc(c.name)}</a>
+        <div class="mono dim">${esc(c.label_a)} → ${esc(c.label_b)}</div></td>
       <td class="num">${pct(c.pass_rate_a)} → ${pct(c.pass_rate_b)}</td>
       <td class="num">${c.paired_cases || 0}</td>
       <td class="num">${c.improved ? `<span class="badge passed">+${c.improved}</span>` : ""}
@@ -635,7 +938,7 @@ function comparisonsTable() {
       <td class="num mono">${c.score_diff == null ? "—" : signed(c.score_diff)}</td>
       <td class="num">${c.regraded ? `<span class="badge error">${c.regraded}</span>` : "—"}</td>
     </tr>`).join("");
-  return `<div class="card" style="margin-top:24px"><div class="scroll"><table>
+  return `<div class="card"><div class="scroll"><table>
       <thead><tr>
         <th>${t("th_comparison")}</th><th class="num">${t("th_pass_rate_ab")}</th>
         <th class="num">${t("th_paired")}</th><th class="num">${t("th_flips")}</th>
@@ -686,8 +989,9 @@ function signedPct(x, digits) {
 
 function renderComparison(slug, entry, doc) {
   const c = doc.comparison || {};
-  document.getElementById("crumb").innerHTML = `<a href="#/">${t("all_runs")}</a> ›`;
+  document.getElementById("crumb").innerHTML = `<a href="#/">← ${t("all_runs")}</a>`;
   document.getElementById("title").textContent = c.name || slug;
+  document.title = `${c.name || slug} · Compass`;
   document.getElementById("subtitle").textContent =
     t("paired_cases", { a: c.label_a, b: c.label_b, n: c.n_paired || 0 });
 
@@ -730,33 +1034,35 @@ function renderComparison(slug, entry, doc) {
         <div class="label">${t("card_pass_rate", { label: c.label_a })}</div></div>
       <div class="summary-card"><div class="value">${pct(c.pass_rate_b)}</div>
         <div class="label">${t("card_pass_rate", { label: c.label_b })}</div></div>
-      <div class="summary-card passed"><div class="value">${(c.improved || []).length}</div>
+      <div class="summary-card${(c.improved || []).length ? " passed" : ""}">
+        <div class="value">${(c.improved || []).length}</div>
         <div class="label">${t("card_fixed_by_b")}</div></div>
-      <div class="summary-card failed"><div class="value">${(c.regressed || []).length}</div>
+      <div class="summary-card${(c.regressed || []).length ? " failed" : ""}">
+        <div class="value">${(c.regressed || []).length}</div>
         <div class="label">${t("card_broken_by_b")}</div></div>
       <div class="summary-card"><div class="value">${c.both_pass || 0}/${c.both_fail || 0}</div>
         <div class="label">${t("card_both")}</div></div>
     </div>
 
-    ${(c.improved || []).length || (c.regressed || []).length ? `<div class="card" style="padding:16px 20px">
-      <div class="kv">${flips(c.improved, "passed")} ${flips(c.regressed, "failed")}</div></div>` : ""}
+    ${(c.improved || []).length || (c.regressed || []).length ? `<div class="card"><div class="body">
+      <div class="kv">${flips(c.improved, "passed")} ${flips(c.regressed, "failed")}</div></div></div>` : ""}
 
-    ${scoped ? `<div class="card" style="margin-top:20px"><div class="scroll"><table>
+    ${scoped ? `<div class="card"><div class="scroll"><table>
       <thead><tr><th>${t("th_grader")}</th><th class="num">A</th><th class="num">B</th>
         <th class="num">${t("th_pass_rate_ab")}</th>
         <th class="num">${t("th_difference")}</th></tr></thead>
       <tbody>${scoped}</tbody></table></div>
-      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">${t("gate_note")}</div></div>` : ""}
+      <div class="note info">${t("gate_note")}</div></div>` : ""}
 
-    ${metrics ? `<div class="card" style="margin-top:20px"><div class="scroll"><table>
+    ${metrics ? `<div class="card"><div class="scroll"><table>
       <thead><tr><th>${t("th_process_metric")}</th><th class="num">A</th><th class="num">B</th>
         <th class="num">${t("th_trials")}</th>
         <th class="num">${t("th_difference")}</th></tr></thead>
       <tbody>${metrics}</tbody></table></div>
-      <div class="note info" style="margin:0;border-radius:0 0 10px 10px">${t("metrics_note",
+      <div class="note info">${t("metrics_note",
         { sampled: t("sampled_word") })}</div></div>` : ""}
 
-    ${skipped ? `<div class="note warn" style="margin-top:20px">${t("not_compared")}<ul>${skipped}</ul></div>` : ""}`;
+    ${skipped ? `<div class="note warn">${t("not_compared")}<ul>${skipped}</ul></div>` : ""}`;
 }
 
 // ---------- run view ----------
@@ -766,36 +1072,36 @@ function scatter(cases) {
   const pw = w - padL - padR, ph = h - padT - padB, threshold = 0.7;
   const sx = (v) => padL + v * pw, sy = (v) => padT + (1 - v) * ph;
   const tx = sx(threshold), ty = sy(threshold);
-  const rect = (x, y, ww, hh, fill) =>
-    `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" fill="${fill}" opacity="0.4"/>`;
+  const rect = (x, y, ww, hh, cls) =>
+    `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" class="${cls}"/>`;
 
-  let svg = rect(tx, padT, sx(1) - tx, ty - padT, "#d1fae5")
-    + rect(padL, padT, tx - padL, ty - padT, "#fef3c7")
-    + rect(tx, ty, sx(1) - tx, sy(0) - ty, "#fef3c7")
-    + rect(padL, ty, tx - padL, sy(0) - ty, "#fee2e2")
-    + `<line x1="${padL}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(0)}" stroke="#333" stroke-width="1.5"/>`
-    + `<line x1="${padL}" y1="${sy(0)}" x2="${padL}" y2="${sy(1)}" stroke="#333" stroke-width="1.5"/>`
-    + `<line x1="${padL}" y1="${ty}" x2="${sx(1)}" y2="${ty}" stroke="#999" stroke-dasharray="5,5"/>`
-    + `<line x1="${tx}" y1="${sy(0)}" x2="${tx}" y2="${sy(1)}" stroke="#999" stroke-dasharray="5,5"/>`
-    + `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#ccc" stroke-dasharray="3,3"/>`;
+  let svg = rect(tx, padT, sx(1) - tx, ty - padT, "zone-good")
+    + rect(padL, padT, tx - padL, ty - padT, "zone-mixed")
+    + rect(tx, ty, sx(1) - tx, sy(0) - ty, "zone-mixed")
+    + rect(padL, ty, tx - padL, sy(0) - ty, "zone-poor")
+    + `<line x1="${padL}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(0)}" class="axis"/>`
+    + `<line x1="${padL}" y1="${sy(0)}" x2="${padL}" y2="${sy(1)}" class="axis"/>`
+    + `<line x1="${padL}" y1="${ty}" x2="${sx(1)}" y2="${ty}" class="guide"/>`
+    + `<line x1="${tx}" y1="${sy(0)}" x2="${tx}" y2="${sy(1)}" class="guide"/>`
+    + `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" class="diag"/>`;
 
   [0, 0.2, 0.4, 0.6, 0.8, 1].forEach((v) => {
-    svg += `<text x="${sx(v)}" y="${sy(0) + 20}" text-anchor="middle" font-size="11" fill="#666">${v.toFixed(1)}</text>`
-      + `<text x="${padL - 10}" y="${sy(v) + 4}" text-anchor="end" font-size="11" fill="#666">${v.toFixed(1)}</text>`;
+    svg += `<text x="${sx(v)}" y="${sy(0) + 20}" text-anchor="middle" class="tick">${v.toFixed(1)}</text>`
+      + `<text x="${padL - 10}" y="${sy(v) + 4}" text-anchor="end" class="tick">${v.toFixed(1)}</text>`;
   });
-  svg += `<text x="${padL + pw / 2}" y="${h - 10}" text-anchor="middle" font-size="13" font-weight="bold">${esc(t("axis_outcome"))}</text>`
-    + `<text x="15" y="${padT + ph / 2}" text-anchor="middle" font-size="13" font-weight="bold"
+  svg += `<text x="${padL + pw / 2}" y="${h - 10}" text-anchor="middle" class="axis-label">${esc(t("axis_outcome"))}</text>`
+    + `<text x="15" y="${padT + ph / 2}" text-anchor="middle" class="axis-label"
         transform="rotate(-90, 15, ${padT + ph / 2})">${esc(t("axis_transcript"))}</text>`;
 
   cases.forEach((c) => {
-    const color = c.passed ? "#10b981" : "#ef4444";
     svg += `<circle cx="${sx(c.outcome_score || 0).toFixed(1)}" cy="${sy(c.transcript_score || 0).toFixed(1)}"
-      r="6" fill="${color}" opacity="0.8" stroke="white" stroke-width="1.5"><title>${esc(t("scatter_point",
+      r="6" class="dot ${c.passed ? "good" : "poor"}" opacity="0.85"><title>${esc(t("scatter_point",
         { id: c.case_id, outcome: num(c.outcome_score), transcript: num(c.transcript_score) }))}</title></circle>`;
   });
 
   return `<div class="card"><h2>${t("scatter_title")}</h2><div class="body" style="text-align:center">
-    <svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div>`;
+    <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="chart" role="img"
+      aria-label="${esc(t("scatter_title"))}">${svg}</svg></div></div>`;
 }
 
 // Builds of this slug, oldest first: the trail plus the run on screen.
@@ -835,21 +1141,21 @@ function trendPanel(entry, run) {
 
   let svg = "";
   [0, 0.25, 0.5, 0.75, 1].forEach((v) => {
-    svg += `<line x1="${padL}" y1="${y(v)}" x2="${w - padR}" y2="${y(v)}" stroke="#eee"/>`
-      + `<text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#999">${pct(v)}</text>`;
+    svg += `<line x1="${padL}" y1="${y(v)}" x2="${w - padR}" y2="${y(v)}" class="grid"/>`
+      + `<text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end" class="tick">${Math.round(v * 100)}%</text>`;
   });
   segments.forEach((pts) => {
-    svg += `<polyline points="${pts.join(" ")}" fill="none" stroke="#667eea" stroke-width="2"/>`;
+    svg += `<polyline points="${pts.join(" ")}" class="series"/>`;
   });
 
   let stale = 0;
   series.forEach((p, i) => {
     const same = (p.contract || "") === current;
     if (!same) stale++;
-    const color = !same ? "#94a3b8" : p.pass_rate >= 0.7 ? "#10b981" : p.pass_rate >= 0.4 ? "#f59e0b" : "#ef4444";
+    const band = !same ? "stale" : p.pass_rate >= 0.7 ? "good" : p.pass_rate >= 0.4 ? "medium" : "poor";
     const when = String(p.generated || "").slice(0, 10);
     svg += `<circle cx="${x(i).toFixed(1)}" cy="${y(p.pass_rate).toFixed(1)}" r="${i === series.length - 1 ? 5 : 4}"
-      fill="${color}" stroke="white" stroke-width="1.5">
+      class="dot ${band}">
       <title>${esc(t("trend_point", { when, rate: pct(p.pass_rate),
         passed: p.passed_cases || 0, total: p.evaluated_cases || 0 })
         + (same ? "" : t("other_contract"))
@@ -858,29 +1164,32 @@ function trendPanel(entry, run) {
         + (skillIds(p.skills).length ? " · " + skillIds(p.skills).join(", ") : ""))}</title></circle>`;
     if (i === 0 || i === series.length - 1) {
       svg += `<text x="${x(i)}" y="${h - 12}" text-anchor="${i ? "end" : "start"}"
-        font-size="11" fill="#888">${esc(when)}</text>`;
+        class="tick">${esc(when)}</text>`;
     }
   });
 
   const note = stale
-    ? `<div class="note warn" style="margin:0 0 14px">${t("trend_stale",
+    ? `<div class="note warn" style="margin-bottom:var(--s4)">${t("trend_stale",
         { n: stale, cmd: "compass compare" })}</div>`
     : "";
 
   return `<div class="card"><h2>${t("trend_title", { n: series.length })}</h2>
     <div class="body">${note}
-    <div class="scroll"><svg width="${w}" height="${h}" style="max-width:100%">${svg}</svg></div></div></div>`;
+    <div class="scroll"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="chart"
+      role="img" aria-label="${esc(t("trend_alt"))}">${svg}</svg></div></div></div>`;
 }
 
 function categoryTable(rows) {
   if (!rows || !rows.length) return "";
+  // Same rule as the summary tiles: a count of zero is not a verdict, so it
+  // does not get a verdict's colour.
   const body = rows.map((r) => `<tr>
       <td><strong>${esc(r.category)}</strong></td>
       <td class="num">${r.total}</td>
-      <td class="num" style="color:#10b981">${r.passed}</td>
-      <td class="num" style="color:#ef4444">${r.failed}</td>
-      <td class="num">${r.errors || 0}</td>
-      <td class="num">${pct(r.pass_rate)}</td>
+      <td class="num${r.passed ? " pos" : ""}">${r.passed}</td>
+      <td class="num${r.failed ? " neg" : ""}">${r.failed}</td>
+      <td class="num${r.errors ? " warn" : ""}">${r.errors || 0}</td>
+      <td class="num">${bar(r.pass_rate)}${pct(r.pass_rate)}</td>
       <td class="num">${num(r.average_score)}</td>
     </tr>`).join("");
   return `<div class="card"><h2>${t("category_title")}</h2><div class="scroll"><table>
@@ -893,11 +1202,11 @@ function categoryTable(rows) {
 
 function graderTable(caseRow) {
   const graders = caseRow.evaluator_results || [];
-  if (!graders.length) return `<p style='color:#888'>${t("no_graders")}</p>`;
+  if (!graders.length) return `<p class="dim">${t("no_graders")}</p>`;
   const body = graders.map((g) => {
     const status = g.skipped ? "skipped" : g.passed ? "passed" : "failed";
     const label = t(g.skipped ? "result_skipped" : g.passed ? "result_pass" : "result_fail");
-    const score = g.score == null ? `<span style='color:#999'>${t("unscored")}</span>` : num(g.score);
+    const score = g.score == null ? `<span class="dim">${t("unscored")}</span>` : num(g.score);
     const metrics = Object.entries(g.metrics || {})
       .map(([k, v]) => `<span class="badge tag">${esc(k)}=${esc(metric(v))}</span>`).join("");
     const extra = [tags(g.tags), tags(g.failure_tags), metrics].filter(Boolean).join(" ");
@@ -908,8 +1217,8 @@ function graderTable(caseRow) {
       <td class="num">${score}</td>
       <td class="num">${esc(g.weight != null ? g.weight : 1)}</td>
       <td><span class="badge ${status}">${label}</span></td>
-      <td>${extra}${g.error ? `<div style="color:#b91c1c">${esc(g.error)}</div>` : ""}
-        ${g.skip_reason ? `<div style="color:#666">${esc(g.skip_reason)}</div>` : ""}</td>
+      <td>${extra}${g.error ? `<div class="err">${esc(g.error)}</div>` : ""}
+        ${g.skip_reason ? `<div class="muted">${esc(g.skip_reason)}</div>` : ""}</td>
     </tr>`;
   }).join("");
   return `<div class="scroll"><table>
@@ -939,8 +1248,11 @@ function caseDetail(caseRow, slug, traces) {
         `<div><a href="runs/${esc(slug)}/traces/${esc(p)}" target="_blank" class="mono">${esc(p)}</a></div>`).join("")
     : "";
 
+  // Rounded on the way out: sixteen digits of a pass rate is float noise
+  // wearing the clothes of precision, and it pushes the block twice as wide.
   const trialMetrics = caseRow.trial_metrics && Object.keys(caseRow.trial_metrics).length
-    ? `<h3>${t("h_trial_metrics")}</h3><pre>${esc(JSON.stringify(caseRow.trial_metrics, null, 2))}</pre>` : "";
+    ? `<h3>${t("h_trial_metrics")}</h3><pre>${esc(JSON.stringify(
+        caseRow.trial_metrics, (k, v) => metric(v), 2))}</pre>` : "";
 
   return `<tr class="detail"><td colspan="7"><div class="body">
     <div class="kv">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
@@ -954,11 +1266,18 @@ function renderRun(slug, entry, doc) {
   const cases = (doc.scenarios || []).flatMap((s) => s.cases || []);
   const run = doc.run || {};
   document.getElementById("crumb").innerHTML = `<a href="#/">← ${t("all_runs")}</a>`;
-  document.getElementById("title").textContent = (entry && entry.name) || run.name || slug;
-  document.getElementById("subtitle").textContent = t("run_subtitle", {
+  const name = (entry && entry.name) || run.name || slug;
+  document.getElementById("title").textContent = name;
+  // Several of these get opened side by side from CI links; the tab strip is
+  // where you tell them apart.
+  document.title = `${name} · Compass`;
+  // What was installed belongs beside the run's name, the way a version does:
+  // it is the answer to "which one is this", not a remark about the table.
+  document.getElementById("subtitle").innerHTML = `<span>${esc(t("run_subtitle", {
     scenarios: run.scenarios || 0, cases: run.total_cases || 0,
-    duration: duration(run.duration_ms), when: doc.generated || "",
-  });
+    duration: duration(run.duration_ms), when: stampText(doc.generated || ""),
+  }))}</span>` + ((run.skills || []).length
+    ? `<span class="skills">${esc(t("skills_note"))} ${skillChips(run.skills)}</span>` : "");
 
   const rateLabel = run.error_cases
     ? t("pass_rate_evaluated", { n: run.evaluated_cases }) : t("th_pass_rate");
@@ -967,17 +1286,22 @@ function renderRun(slug, entry, doc) {
   const allTags = [...new Set(cases.flatMap((c) => (c.observed_tags || []).concat(c.tags || [])))].sort();
   const showScatter = doc.scopes && doc.scopes.outcome && doc.scopes.transcript;
 
+  // Colour marks a verdict, so a zero count stays neutral: green on "0 passed"
+  // and amber on "0 errors" are the same claim in opposite directions, and
+  // neither is true.
+  const tile = (value, label, tone) =>
+    `<div class="summary-card${tone && value ? " " + tone : ""}">
+      <div class="value">${value}</div><div class="label">${label}</div></div>`;
+
   view.innerHTML = `${schemaNote(doc)}
     <div class="summary">
-      <div class="summary-card"><div class="value">${run.scenarios || 0}</div><div class="label">${t("card_scenarios")}</div></div>
-      <div class="summary-card passed"><div class="value">${run.passed_cases || 0}</div><div class="label">${t("th_passed")}</div></div>
-      <div class="summary-card failed"><div class="value">${run.failed_cases || 0}</div><div class="label">${t("card_failed")}</div></div>
-      <div class="summary-card error"><div class="value">${run.error_cases || 0}</div><div class="label">${t("th_errors")}</div></div>
-      <div class="summary-card"><div class="value">${pct(run.pass_rate)}</div><div class="label">${esc(rateLabel)}</div></div>
-      <div class="summary-card"><div class="value">${num(run.average_score)}</div><div class="label">${t("th_avg_score")}</div></div>
+      ${tile(run.scenarios || 0, t("card_scenarios"))}
+      ${tile(run.passed_cases || 0, t("th_passed"), "passed")}
+      ${tile(run.failed_cases || 0, t("card_failed"), "failed")}
+      ${tile(run.error_cases || 0, t("th_errors"), "error")}
+      ${tile(pct(run.pass_rate), esc(rateLabel))}
+      ${tile(num(run.average_score), t("th_avg_score"))}
     </div>
-    ${(run.skills || []).length
-      ? `<div class="note info">${t("skills_note")} ${skillChips(run.skills)}</div>` : ""}
     ${doc.details_redacted
       ? `<div class="note info">${t("details_redacted", { flag: "--include-details" })}</div>` : ""}
     ${trendPanel(entry, run)}
@@ -1028,7 +1352,7 @@ function renderRun(slug, entry, doc) {
     return true;
   }
 
-  function draw() {
+  function draw(focusKey) {
     const shown = cases.filter(matches);
     document.getElementById("f-count").textContent =
       t("shown_of", { shown: shown.length, total: cases.length });
@@ -1041,8 +1365,9 @@ function renderRun(slug, entry, doc) {
       const status = c.status === "error" ? "error" : c.passed ? "passed" : "failed";
       const score = c.total_trials > 1 ? c.best_score : c.overall_score;
       const row = `<tr class="clickable" data-key="${esc(key)}">
-        <td class="mono"><strong>${esc(c.case_id)}</strong></td>
-        <td style="color:#666">${esc(c.scenario) || "—"}</td>
+        <td class="mono"><button type="button" class="disclosure"
+          aria-expanded="${open.has(key)}"><strong>${esc(c.case_id)}</strong></button></td>
+        <td class="muted trunc" title="${esc(c.scenario)}">${esc(c.scenario) || "—"}</td>
         <td><span class="badge ${status}">${t("status_" + status)}</span></td>
         <td class="num">${bar(score)} ${num(score)}</td>
         <td class="num">${c.total_trials > 1 ? `${c.passed_trials || 0}/${c.total_trials}` : "—"}</td>
@@ -1052,13 +1377,26 @@ function renderRun(slug, entry, doc) {
       return row + (open.has(key) ? caseDetail(c, slug, doc.traces) : "");
     }).join("");
 
-    body.querySelectorAll("tr[data-key]").forEach((tr) => {
+    const rows = [...body.querySelectorAll("tr[data-key]")];
+    rows.forEach((tr) => {
+      // One handler for the row: a click anywhere in it toggles, and the
+      // disclosure button's own Enter / Space arrives here by bubbling, so the
+      // keyboard path and the mouse path cannot drift apart.
       tr.onclick = () => {
         const key = tr.dataset.key;
         open.has(key) ? open.delete(key) : open.add(key);
-        draw();
+        draw(key);
       };
     });
+
+    // Redrawing replaces the button that was just activated. Without this, a
+    // keyboard reader is dropped back at the top of the document every time
+    // they open a case.
+    if (focusKey) {
+      const row = rows.find((tr) => tr.dataset.key === focusKey);
+      const button = row && row.querySelector(".disclosure");
+      if (button) button.focus();
+    }
   }
 
   ["text", "status", "category", "tag"].forEach((key) => {
@@ -1136,8 +1474,9 @@ function startPolling(slug) {
 function liveBadge() {
   const sub = document.getElementById("subtitle");
   if (sub && !sub.querySelector(".live")) {
+    // The dot is drawn (and animated) by CSS, so the markup carries the word.
     sub.insertAdjacentHTML("beforeend",
-      ` <span class="live" title="${esc(t("live_title"))}">● ${esc(t("live"))}</span>`);
+      `<span class="live" title="${esc(t("live_title"))}">${esc(t("live"))}</span>`);
   }
 }
 
