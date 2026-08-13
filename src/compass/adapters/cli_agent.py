@@ -9,6 +9,9 @@ parser for the CLI's machine-readable output, and what the run is called in an
 error message — so everything else lives here:
 
 - **workspace isolation** (git worktree / copy / none) and teardown
+- **skill installation** — the version of a skill under test is copied into the
+  workspace and fingerprinted, so "which skill was actually in play" is a fact
+  in the trace rather than a claim in a commit message
 - **setup commands**, recorded as tool calls so a failed ``uv sync`` is visible
 - **spawning the CLI** and streaming its stdout through a reconstructor, with a
   timeout that keeps the partial trace instead of discarding the run
@@ -33,6 +36,7 @@ against a known-clean baseline.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import shlex
@@ -50,6 +54,7 @@ from compass.core.artifacts import (
     GeneratedFile,
     TextArtifact,
 )
+from compass.core.skills import read_skill_name
 from compass.core.transcript import Transcript
 
 logger = logging.getLogger(__name__)
@@ -139,6 +144,14 @@ class CliAgentAdapter(Adapter):
         timeout:          float — seconds before the CLI is killed
                                 (default ``900``). A timed-out run still
                                 returns the steps completed so far.
+        skill:           str  — directory of one skill to install into the
+                                workspace before the run. This is the *skill
+                                axis*: an empty string is the no-skill baseline,
+                                so ``--model-key skill -m ./v1 -m ./v2 -m ""``
+                                is a v1 / v2 / baseline sweep.
+        skills:          list[str] — further skill directories to install
+                                alongside it (companions the one under test
+                                needs). Merged with ``skill``.
         setup_commands:  list[str] — shell commands run in the workspace before
                                 the agent (install deps, seed a DB).
         setup_timeout:    float — per setup command (default ``600``).
@@ -163,6 +176,11 @@ class CliAgentAdapter(Adapter):
     stream_label: str = "stream"
     #: Argument that makes the CLI print its version, for the health check.
     version_arg: str = "--version"
+    #: Where this CLI discovers project-scoped skills, relative to the
+    #: workspace (``.claude/skills`` for Claude Code). Empty means Compass has
+    #: no way to install a skill for this CLI, and configuring one is an error
+    #: rather than a run that silently has no skill.
+    skills_dir: str = ""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -178,6 +196,8 @@ class CliAgentAdapter(Adapter):
         self.system_prompt: str = c.get("system_prompt", "")
         self.system_prompt_file: str = c.get("system_prompt_file", "")
         self.extra_args: list[str] = c.get("extra_args", [])
+        self.skill: str = c.get("skill", "")
+        self.skills: list[str] = list(c.get("skills", []))
         self.timeout: float = c.get("timeout", 900)
         self.setup_commands: list[str] = c.get("setup_commands", [])
         self.setup_timeout: float = c.get("setup_timeout", 600)
@@ -272,6 +292,15 @@ class CliAgentAdapter(Adapter):
         repo_path: Path,
         workspace: Path,
     ) -> AgentOutput:
+        # --- Install the skill(s) under test ---
+        try:
+            installed = await asyncio.to_thread(self._install_skills, workspace)
+        except CliAgentError as e:
+            return AgentOutput(
+                error=str(e),
+                metadata={"phase": "skills", "workspace": str(workspace)},
+            )
+
         # --- Setup commands (deps, fixtures) ---
         for cmd in self.setup_commands:
             started = time.monotonic()
@@ -314,7 +343,7 @@ class CliAgentAdapter(Adapter):
 
         # Merge the reconstructed run into the transcript the runner is
         # recording, so transcript-scope graders see the real steps.
-        self._merge_transcript(input, run.transcript, workspace)
+        self._merge_transcript(input, run.transcript, workspace, skills=installed)
 
         if run.timed_out:
             logger.warning(
@@ -334,6 +363,8 @@ class CliAgentAdapter(Adapter):
         }
         if self.model:
             metadata["model"] = self.model
+        if installed:
+            metadata["skills"] = installed
         metadata.update(self._run_metadata())
         if run.stream_path:
             metadata["stream_json"] = run.stream_path
@@ -446,6 +477,101 @@ class CliAgentAdapter(Adapter):
                 f"{(result.stderr or '').strip()[-500:]}"
             )
         return (result.stdout or "").strip()
+
+    # ------------------------------------------------------------------
+    # Skill installation
+    # ------------------------------------------------------------------
+
+    def _skill_sources(self) -> list[str]:
+        """The configured skill directories, in order, without the blanks.
+
+        ``skill: ""`` is the *no-skill baseline* of a sweep, not a mistake —
+        which is why an empty entry drops out here instead of raising.
+        """
+        seen: dict[str, None] = {}
+        for raw in [self.skill, *self.skills]:
+            path = str(raw).strip()
+            if path:
+                seen.setdefault(path, None)
+        return list(seen)
+
+    def _install_skills(self, workspace: Path) -> list[dict[str, Any]]:
+        """Copy the configured skills into the workspace; describe what landed.
+
+        Two things make this worth doing in the framework rather than in a
+        ``setup_commands`` one-liner.
+
+        **The install name is the skill's own name, not the source directory's.**
+        A v1/v2 comparison keeps the versions in sibling directories
+        (``report-writer-v1`` / ``report-writer-v2``), but installing under
+        those names would hand the agent two *differently named* skills and
+        quietly change the thing being measured. Both land at
+        ``<skills_dir>/report-writer`` instead, so the only difference between
+        the arms is the content.
+
+        **The content is fingerprinted.** ``digest`` is a hash of every file in
+        the skill, recorded on the transcript. Six months later that is the
+        difference between "v2 scored higher" and "*this* v2 scored higher".
+        """
+        sources = self._skill_sources()
+        if not sources:
+            return []
+        if not self.skills_dir:
+            raise CliAgentError(
+                f"{self.name} has no skill directory convention, so "
+                f"'skill'/'skills' cannot be installed for it. Remove the key, "
+                f"or use an adapter that supports skills (claude_code)."
+            )
+        if self.isolation == "none":
+            raise CliAgentError(
+                "isolation='none' runs in the repository itself, and installing "
+                f"a skill there would write into {workspace}/{self.skills_dir} "
+                "and leave it behind. Use isolation='worktree' or 'copy'."
+            )
+
+        installed: list[dict[str, Any]] = []
+        for raw in sources:
+            src = Path(raw).expanduser().resolve()
+            if not src.is_dir():
+                raise CliAgentError(f"Skill directory not found: {src}")
+            skill_md = src / "SKILL.md"
+            if not skill_md.is_file():
+                # A path typo would otherwise install nothing and score as a
+                # perfectly ordinary baseline run — the one failure mode that
+                # invalidates a comparison without leaving a mark.
+                raise CliAgentError(f"No SKILL.md in skill directory: {src}")
+
+            name = read_skill_name(src) or src.name
+            dest = workspace / self.skills_dir / name
+            if dest.exists():
+                shutil.rmtree(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(
+                src,
+                dest,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+            )
+
+            digest, file_count = _tree_digest(dest)
+            installed.append(
+                {
+                    "name": name,
+                    "source": str(src),
+                    "path": f"{self.skills_dir}/{name}",
+                    "digest": digest,
+                    "files": file_count,
+                }
+            )
+            logger.info(
+                "%s: installed skill %s (%s, %d files) from %s",
+                self.name,
+                name,
+                digest,
+                file_count,
+                src,
+            )
+        return installed
 
     # ------------------------------------------------------------------
     # CLI invocation
@@ -624,7 +750,11 @@ class CliAgentAdapter(Adapter):
     # ------------------------------------------------------------------
 
     def _merge_transcript(
-        self, input: AgentInput, run: Transcript, workspace: Path
+        self,
+        input: AgentInput,
+        run: Transcript,
+        workspace: Path,
+        skills: list[dict[str, Any]] | None = None,
     ) -> None:
         """Fold the reconstructed run into the transcript the runner owns.
 
@@ -650,6 +780,11 @@ class CliAgentAdapter(Adapter):
 
         live.metadata.update(run.metadata)
         live.metadata["workspace"] = str(workspace)
+        if skills:
+            # ``skill_trigger`` reads this to know which skill it is asking
+            # about, so a scenario does not have to repeat the name in every
+            # grader config — and an offline regrade still knows.
+            live.metadata["skills"] = skills
         if run.environment.model_version:
             live.environment.model_version = run.environment.model_version
 
@@ -665,16 +800,22 @@ class CliAgentAdapter(Adapter):
         ``git add -N`` registers new files as intent-to-add so ``git diff`` shows
         them; without it a run whose entire contribution is new files would look
         like it changed nothing.
+
+        An installed skill is *our* file, not the agent's work, so it is
+        excluded from the pathspec — otherwise every with-skill arm of a
+        comparison would show a few hundred extra changed lines and
+        ``diff_size`` would score the harness instead of the agent.
         """
         if not (workspace / ".git").exists():
             return "", []
 
-        await self._exec("git add -A -N", workspace, self.setup_timeout)
-        diff_result = await self._exec("git diff", workspace, self.setup_timeout)
+        spec = self._diff_pathspec()
+        await self._exec(f"git add -A -N{spec}", workspace, self.setup_timeout)
+        diff_result = await self._exec(f"git diff{spec}", workspace, self.setup_timeout)
         diff = diff_result.stdout or "" if diff_result.exit_code == 0 else ""
 
         names = await self._exec(
-            "git diff --name-only", workspace, self.setup_timeout
+            f"git diff --name-only{spec}", workspace, self.setup_timeout
         )
         files: list[GeneratedFile] = []
         if names.exit_code == 0:
@@ -697,6 +838,16 @@ class CliAgentAdapter(Adapter):
                     )
                 )
         return diff, files
+
+    def _diff_pathspec(self) -> str:
+        """Pathspec suffix that hides the installed skills from ``git diff``.
+
+        Empty — leaving the git commands byte-identical to what they were —
+        unless a skill was actually installed.
+        """
+        if not (self._skill_sources() and self.skills_dir):
+            return ""
+        return f" -- . {shlex.quote(f':(exclude,glob){self.skills_dir}/**')}"
 
     # ------------------------------------------------------------------
     # Shell helper
@@ -736,6 +887,25 @@ class CliAgentAdapter(Adapter):
             stderr=err.decode("utf-8", errors="replace"),
             duration_ms=(time.monotonic() - started) * 1000,
         )
+
+
+def _tree_digest(root: Path) -> tuple[str, int]:
+    """``(digest, file_count)`` over every file under *root*.
+
+    Paths go into the hash alongside the bytes, so renaming a reference file
+    is a different skill even when the content is the same.
+    """
+    h = hashlib.sha256()
+    count = 0
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        h.update(str(path.relative_to(root)).encode("utf-8"))
+        h.update(b"\0")
+        try:
+            h.update(path.read_bytes())
+        except OSError:  # unreadable file: hash the fact, not the content
+            h.update(b"<unreadable>")
+        count += 1
+    return h.hexdigest()[:16], count
 
 
 class _CliRun:

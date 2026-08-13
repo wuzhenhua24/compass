@@ -1,0 +1,115 @@
+# Skill A/B —「v2 真的比 v1 好吗，好在哪」
+#
+# 这份文件是**模板**：`{{REPO}}` / `{{CLI}}` 由 eval.py 填（离线回放）。
+#
+#   uv run python examples/skill_eval/eval.py --suite ab
+#
+# 换成你自己的 skill 时：repo 写你的仓库、删掉 cli_path，然后走标准 CLI——
+#
+#   compass test ab.yaml --model-key skill \
+#       -m "" \
+#       -m skills/report-writer-v1 \
+#       -m skills/report-writer-v2 \
+#       --report json -o out/results.json
+#
+#   compass compare out/results.skills-report-writer-v1.json \
+#                   out/results.skills-report-writer-v2.json \
+#       --on triggered --metric skill_triggered --metric cost_usd
+#
+# `--model-key skill` 把 `-m` 的值写进 `agent.config.skill`——也就是**装哪个版本
+# 的 skill**。`-m ""` 是不装（baseline，结果文件叫 results.run.json）。三条 case
+# 的判分契约逐字相同，所以唯一变动的量就是 skill 本身。
+#
+# ── 这份文件里没有 correctness grader，是故意的 ────────────────────────────
+# 报告写得好不好，是你的领域判断，属于用户代码（像 pytest 里的 tests/）。
+# Compass 管的是可复用的那半边：skill 到底加载了没有、bundled 脚本用了没有、
+# 这一趟花了多少。要加正确性，就在每条 case 上挂自己的 grader。
+# ──────────────────────────────────────────────────────────────────────────
+
+name: "Skill A/B · report-writer"
+description: "同一批请求，比 report-writer 的两个版本与不装 skill 的基线"
+
+agent:
+  adapter: claude_code
+  config:
+    repo: "{{REPO}}"           # eval.py 填；真跑时写成你自己的仓库路径
+    cli_path: "{{CLI}}"        # 离线回放；接真实 agent = 删掉这一行
+    skill: ""                  # -m 覆盖这个键，即"装哪个版本"
+    permission_mode: acceptEdits
+    allowed_tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash"]
+    max_turns: 20
+    timeout: 300
+
+    # **每一条支线都要这一行，包括 baseline。**
+    #
+    # Claude Code 默认还会加载操作员自己的 ~/.claude/skills。那里如果有个同名
+    # skill，它会盖掉、或者悄悄补上被测的这个——baseline 支线于是不再是
+    # baseline，而结果里看不出任何异常。装了 skill 的支线 Compass 会自动补上
+    # project，但 baseline 支线没装东西、没得可补，所以这里显式写死一次，三条
+    # 支线共享。
+    setting_sources: project
+
+defaults:
+  trials: 3                    # 触发是个概率事件；一次跑出来的不是率，是轶事
+
+default_graders:
+  # 这次评测的主角：skill 到底加载了没有。
+  #
+  # 两个实例，分别贴 label——`compass compare --on` 靠 label 选度量，混在一个
+  # grader 里就分不开"没触发"和"触发了但没用脚本"这两件不同的事。
+  - name: skill_trigger
+    type: code
+    label: triggered
+    config:
+      skill: report-writer     # baseline 支线没装 skill，名字得显式给
+      should_trigger: true
+
+  # v2 bundle 了 scripts/summarize.py。这一项回答的是"它真的被用了吗"——
+  # v1 没有这个脚本，所以这一项在 v1 支线上必然不过，那正是要量的差距。
+  - name: skill_trigger
+    type: code
+    label: uses_bundled_script
+    config:
+      skill: report-writer
+      should_trigger: true
+      required_resources: ["scripts/summarize.py"]
+
+  # 以下三项回答"这一趟花了多少代价"，不回答"对不对"。阈值取两侧的并集再留
+  # 余量，否则一边永远绿一边永远红，这一项就不再是测量而是站队。真比代价请看
+  # `compass compare --metric cost_usd`——不设阈值，直接比数。
+  - name: cost_budget
+    type: code
+    config: {max_cost_usd: 0.20}
+
+  - name: turn_count
+    type: code
+    config: {max_turns: 20, count_filter: "llm"}
+
+  - name: tool_usage
+    type: code
+    config: {max_tool_calls: 40}
+
+default_aggregation:
+  pass_threshold: 0.6
+
+cases:
+
+  - id: explicit_invocation
+    description: "点名调用：改了名字或描述会先在这里断"
+    input:
+      prompt: |
+        用 report-writer 把 data/q3.csv 写成一份报告，存成 report.md。
+
+  - id: implicit_invocation
+    description: "隐式调用：不提 skill 名字，只描述 skill 该干的活——描述写得够不够好，看这条"
+    input:
+      prompt: |
+        data/q3.csv 是各区各季度的收入。整理成一份季度报告，
+        要有总数、环比、和一小段说明，存成 report.md。
+
+  - id: contextual_invocation
+    description: "带噪声的真实说法：只说了受众和场景，没说要什么格式"
+    input:
+      prompt: |
+        周五要跟老板做 Q3 复盘，手上只有 data/q3.csv 这一份数。
+        帮我弄一份能直接发出去的汇报材料，放在 report.md。

@@ -306,7 +306,7 @@ graders:
 
 ### 内置评分器的 Scope 分布
 
-全部 41 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
+全部 42 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
 
 **通用 + 过程（common / transcript）**
 
@@ -324,6 +324,7 @@ graders:
 | `turn_count` | Code | Transcript | 交互轮次评分，支持 budget/linear/log 三种评分模式 |
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
 | `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3）。Claude 轨迹的文件编辑由 importer 自动填充，见下 |
+| `skill_trigger` | Code | Transcript | **Agent 到底有没有加载这个 skill**：`Skill` 工具点名，或读到 skill 目录下的文件（SKILL.md / references / 跑 scripts）。`should_trigger: false` 是负向控制（近似请求不该抢过来）；`required_resources` 查 bundle 的脚本是不是真的被用了、还是又被现场重造了一遍。产出 `skill_triggered` 指标，多次 trial 求均值就是触发率——见 [skills.md](skills.md) |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
 | `external_checker` | Code | Both | 把**任何可执行文件**变成 grader（shell / 二进制 / `npm test`），契约是进程边界：env 进、stdout JSON 出、exit code 判定——见本文"子进程 Checker"一节 |
 

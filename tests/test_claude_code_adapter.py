@@ -542,6 +542,202 @@ def test_unreadable_system_prompt_file_is_reported():
 
 
 # ---------------------------------------------------------------------------
+# Skill installation (the skill axis)
+# ---------------------------------------------------------------------------
+
+
+def _skill(
+    root: Path, dirname: str, *, name: str = "report-writer", body: str = "Write it."
+) -> Path:
+    """A skill directory whose frontmatter name differs from its own."""
+    skill = root / dirname
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Writes reports.\n---\n\n# {name}\n\n{body}\n",
+        encoding="utf-8",
+    )
+    (skill / "scripts" / "render.py").write_text("print('rendered')\n", encoding="utf-8")
+    return skill
+
+
+async def test_skill_is_installed_under_its_own_name(repo: Path, tmp_path: Path):
+    """v1 and v2 live in sibling directories but must reach the agent identically.
+
+    Installing under the *source* directory name would hand the agent a skill
+    called ``report-writer-v2``, changing its name and description-facing
+    identity between the arms — which is a different experiment from the one
+    the user asked for.
+    """
+    skill = _skill(tmp_path, "report-writer-v2")
+    cli = _make_stub_cli(tmp_path, edits={"app.py": "x\n"})
+    adapter = ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": str(skill)}
+    )
+    agent_input, transcript = _agent_input()
+
+    output = await adapter.run(agent_input)
+
+    assert output.error is None
+    workspace = Path(output.metadata["workspace"])
+    installed = workspace / ".claude" / "skills" / "report-writer"
+    assert (installed / "SKILL.md").exists()
+    assert (installed / "scripts" / "render.py").exists()
+    assert not (workspace / ".claude" / "skills" / "report-writer-v2").exists()
+
+    record = output.metadata["skills"][0]
+    assert record["name"] == "report-writer"
+    assert record["source"] == str(skill)
+    assert record["files"] == 2
+    # The grader reads it from here when the scenario does not name the skill.
+    assert transcript.metadata["skills"] == output.metadata["skills"]
+
+
+async def test_two_versions_are_told_apart_by_their_digest(repo: Path, tmp_path: Path):
+    """"v2 scored higher" is only a fact if *which* v2 is recorded."""
+    v1 = _skill(tmp_path, "rw-v1", body="Write it.")
+    v2 = _skill(tmp_path, "rw-v2", body="Write it, then check the numbers.")
+    cli = _make_stub_cli(tmp_path)
+
+    digests = []
+    for skill in (v1, v2):
+        agent_input, _ = _agent_input()
+        output = await ClaudeCodeAdapter(
+            {"repo": str(repo), "cli_path": cli, "skill": str(skill)}
+        ).run(agent_input)
+        digests.append(output.metadata["skills"][0]["digest"])
+
+    assert digests[0] != digests[1]
+
+
+async def test_a_missing_skill_md_is_an_error_not_a_baseline_run(
+    repo: Path, tmp_path: Path
+):
+    """The one failure that would invalidate a comparison without leaving a mark."""
+    empty = tmp_path / "not-a-skill"
+    empty.mkdir()
+    cli = _make_stub_cli(tmp_path)
+    agent_input, _ = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": str(empty)}
+    ).run(agent_input)
+
+    assert output.error is not None and "No SKILL.md" in output.error
+    assert output.metadata["phase"] == "skills"
+
+
+async def test_an_empty_skill_is_the_baseline_arm(repo: Path, tmp_path: Path):
+    """``-m ""`` is how a sweep asks for "no skill at all", not a config error."""
+    cli = _make_stub_cli(tmp_path, edits={"app.py": "x\n"})
+    agent_input, transcript = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": ""}
+    ).run(agent_input)
+
+    assert output.error is None
+    assert "skills" not in output.metadata
+    assert "skills" not in transcript.metadata
+    workspace = Path(output.metadata["workspace"])
+    assert not (workspace / ".claude" / "skills").exists()
+
+
+async def test_the_installed_skill_is_not_counted_as_the_agents_work(
+    repo: Path, tmp_path: Path
+):
+    """Otherwise every with-skill arm shows a few hundred extra changed lines
+    and ``diff_size`` ends up scoring the harness."""
+    skill = _skill(tmp_path, "report-writer")
+    cli = _make_stub_cli(tmp_path, edits={"app.py": "changed\n"})
+    agent_input, _ = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": str(skill)}
+    ).run(agent_input)
+
+    artifact = output.artifacts[0]
+    assert [f.path for f in artifact.files] == ["app.py"]
+    assert ".claude" not in artifact.diff
+    assert output.metadata["changed_files"] == ["app.py"]
+
+
+async def test_settings_are_scoped_to_the_workspace_when_a_skill_is_installed(
+    repo: Path, tmp_path: Path
+):
+    """The operator's own ``~/.claude/skills`` must not reach the run.
+
+    A skill named there shadows — or silently supplements — the one under
+    test, and the baseline arm quietly stops being a baseline. That failure is
+    invisible in the results, so the default has to be the safe one.
+    """
+    skill = _skill(tmp_path, "report-writer")
+    cli = _make_stub_cli(tmp_path)
+    agent_input, _ = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": str(skill)}
+    ).run(agent_input)
+
+    argv = json.loads((tmp_path / "argv.json").read_text())
+    assert argv[argv.index("--setting-sources") + 1] == "project"
+    assert output.metadata["setting_sources"] == "project"
+
+
+def test_setting_sources_stays_off_without_a_skill():
+    """Existing scenarios keep the CLI's own default; nothing changes for them."""
+    assert "--setting-sources" not in ClaudeCodeAdapter({})._build_argv("task")
+
+
+def test_an_explicit_setting_sources_wins(tmp_path: Path):
+    skill = _skill(tmp_path, "report-writer")
+    argv = ClaudeCodeAdapter(
+        {"skill": str(skill), "setting_sources": "user,project"}
+    )._build_argv("task")
+    assert argv[argv.index("--setting-sources") + 1] == "user,project"
+
+    # And "" is a real answer — "leave the flag off, I know what I am doing".
+    assert "--setting-sources" not in ClaudeCodeAdapter(
+        {"skill": str(skill), "setting_sources": ""}
+    )._build_argv("task")
+
+
+async def test_installing_into_the_source_repo_is_refused(repo: Path, tmp_path: Path):
+    """isolation='none' would write the skill into the user's own checkout."""
+    skill = _skill(tmp_path, "report-writer")
+    cli = _make_stub_cli(tmp_path)
+    agent_input, _ = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {"repo": str(repo), "cli_path": cli, "skill": str(skill), "isolation": "none"}
+    ).run(agent_input)
+
+    assert output.error is not None and "isolation='none'" in output.error
+    assert not (repo / ".claude").exists()
+
+
+async def test_companion_skills_install_alongside_the_one_under_test(
+    repo: Path, tmp_path: Path
+):
+    under_test = _skill(tmp_path, "rw", name="report-writer")
+    companion = _skill(tmp_path, "ch", name="chart-helper")
+    cli = _make_stub_cli(tmp_path)
+    agent_input, _ = _agent_input()
+
+    output = await ClaudeCodeAdapter(
+        {
+            "repo": str(repo),
+            "cli_path": cli,
+            "skill": str(under_test),
+            "skills": [str(companion)],
+        }
+    ).run(agent_input)
+
+    names = [s["name"] for s in output.metadata["skills"]]
+    # The one under test leads, so `skill_trigger` inherits the right name.
+    assert names == ["report-writer", "chart-helper"]
+
+
+# ---------------------------------------------------------------------------
 # State delta
 # ---------------------------------------------------------------------------
 

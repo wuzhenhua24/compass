@@ -72,6 +72,11 @@ TOPICS: tuple[Topic, ...] = (
         "轨迹导入（pi / codex / OTLP / Claude / OpenAI Agents）、Adapter 接入",
     ),
     Topic(
+        "skills",
+        "docs/skills.md",
+        "Agent Skill 评测：skill 版本轴、触发率与负向控制、v1→v2 的配对判断",
+    ),
+    Topic(
         "roadmap",
         "docs/roadmap.md",
         "路线图与已落地能力",

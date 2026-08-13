@@ -43,6 +43,14 @@ in this config::
     compass test coding.yaml -m claude-opus-4-6 -m claude-sonnet-5
     compass test coding.yaml --model-key append_system_prompt_file \\
         -m prompts/terse.md -m prompts/detailed.md
+
+**The skill axis works the same way.** ``skill:`` installs a skill directory
+into the workspace under ``.claude/skills/<its own name>``, so "v1 vs v2 vs no
+skill at all" is one more sweep — and the run records the skill's content
+digest, so which version produced a number is a fact rather than a claim::
+
+    compass test skill.yaml --model-key skill \\
+        -m ./skills/report-writer-v1 -m ./skills/report-writer-v2 -m ""
 """
 
 from __future__ import annotations
@@ -80,12 +88,26 @@ class ClaudeCodeAdapter(CliAgentAdapter):
         disallowed_tools: list[str] — ``--disallowedTools``.
         permission_mode:  str  — ``--permission-mode`` (e.g. ``acceptEdits``).
         max_turns:        int  — ``--max-turns``.
+        setting_sources:  str  — ``--setting-sources`` (``user,project,local``).
+                                Set it to ``project`` for a skill comparison:
+                                see :attr:`skills_dir` below.
     """
 
     name = "claude_code"
     default_cli_path = "claude"
     cli_label = "claude"
     stream_label = "stream-json"
+    #: Project-scoped skills live here, so this is where ``skill:`` installs.
+    #:
+    #: Installing is only half of a hermetic A/B. Claude Code also loads the
+    #: operator's *own* skills from ``~/.claude/skills``, and a skill named
+    #: there shadows — or silently supplements — the one under test, which
+    #: makes the baseline arm quietly not a baseline. ``--setting-sources
+    #: project`` cuts that off; when ``skill``/``skills`` is configured and
+    #: ``setting_sources`` is not, Compass supplies ``project`` rather than
+    #: let the comparison be wrong by default. Set it explicitly (on the shared
+    #: ``agent.config``, so every arm of the sweep gets it) to override.
+    skills_dir = ".claude/skills"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -94,6 +116,9 @@ class ClaudeCodeAdapter(CliAgentAdapter):
         self.disallowed_tools: list[str] = c.get("disallowed_tools", [])
         self.permission_mode: str = c.get("permission_mode", "")
         self.max_turns: int | None = c.get("max_turns")
+        # None (unset) and "" (explicitly "leave the CLI's default alone") are
+        # different answers; only the first one gets the hermetic default.
+        self.setting_sources: str | None = c.get("setting_sources")
 
     # ------------------------------------------------------------------
     # CLI invocation
@@ -136,8 +161,29 @@ class ClaudeCodeAdapter(CliAgentAdapter):
             argv += ["--permission-mode", self.permission_mode]
         if self.max_turns is not None:
             argv += ["--max-turns", str(self.max_turns)]
+        sources = self._setting_sources()
+        if sources:
+            argv += ["--setting-sources", sources]
         argv += [str(a) for a in self.extra_args]
         return argv
+
+    def _setting_sources(self) -> str:
+        """The value for ``--setting-sources``; "" leaves the flag off."""
+        if self.setting_sources is not None:
+            return str(self.setting_sources)
+        if self._skill_sources():
+            logger.info(
+                "%s: a skill is installed, so settings are scoped to the "
+                "workspace (--setting-sources project). Set "
+                "agent.config.setting_sources to override.",
+                self.name,
+            )
+            return "project"
+        return ""
+
+    def _run_metadata(self) -> dict[str, Any]:
+        sources = self._setting_sources()
+        return {"setting_sources": sources} if sources else {}
 
     def _new_reconstructor(
         self, task_id: str, workspace: Path

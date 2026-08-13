@@ -20,7 +20,8 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
-- **领域 recipe（可选）**：[`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）、[`examples/swebench/`](examples/swebench/)（接公开数据集 SWE-bench）、[`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
+- **Skill 评测**：改完一个 Agent Skill 要发版，怎么证明是优化而不是改坏了？"装哪个版本"是一条可扫的轴（内容 hash 存档，隔离安装），`skill_trigger` 把"到底加载了没有"变成可比的触发率，负向控制抓 description 写太宽导致的误触发，`required_resources` 查 bundle 的脚本是真被用了还是又被现场重造（见 [docs/skills.md](docs/skills.md)）
+- **领域 recipe（可选）**：[`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）、[`examples/skill_eval/`](examples/skill_eval/)（Skill 的 v1 vs v2）、[`examples/swebench/`](examples/swebench/)（接公开数据集 SWE-bench）、[`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
 
 **🚫 不是什么**
 
@@ -173,7 +174,7 @@ uv run compass --help
 
 ```bash
 uv pip install -e /path/to/compass     # 可编辑安装，Compass 更新后无需重装
-compass list                           # 验证：应列出 41 个 grader 和 6 个 adapter
+compass list                           # 验证：应列出 42 个 grader 和 6 个 adapter
 ```
 
 ## 快速开始
@@ -302,12 +303,13 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 
 | 主题 | 内容 | 文档 |
 |------|------|------|
-| **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、41 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
+| **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、42 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
-| **Grader 体系** | 三层体系（Code/Model/Human）、全部 41 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
+| **Grader 体系** | 三层体系（Code/Model/Human）、全部 42 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
 | **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
 | **接入外部 Agent** | OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Claude Code · pi · Codex 三个 CLI Adapter（真实仓库上评编程 Agent，同一份判分契约下跨栈对比）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
+| **Skill 评测** | 证明 skill 的新版本真的更好了：把"装哪个版本"变成可扫的轴（内容 hash 存档）、`skill_trigger` 量触发率、负向控制抓误触发、`required_resources` 查 bundle 脚本是否真被用上、v1→v2 的配对判断 | [docs/skills.md](docs/skills.md) |
 
 几个贯穿全部文档的设计要点：
 
@@ -357,6 +359,28 @@ uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，�
 三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。
 
 接自己项目时，`suite.yaml` 是要拷走的那份骨架（按"改 bug 明确/需定位、需求 增量/跨模块、陷阱 回归/歧义"排好了槽位），而 `check.py` 是**跑 agent 之前先跑的那一步**——每条用例四项自检：原始项目上隐藏测试必须**红**（不然这活早做完了，白送分）、套上参考实现必须**绿**、参考实现不能弄坏项目自带测试、绿检查重复三次不翻转（flaky 测试会污染整轮 pass^k）。**这步最容易被跳过，而它决定了你的数字有没有意义。** 详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
+
+## 端到端示例：Skill 版本对比（`examples/skill_eval/`）
+
+改完一个 Agent Skill 要发版，怎么证明它是**优化**而不是**改坏了**？
+
+```bash
+uv run python examples/skill_eval/eval.py     # 离线跑，无需 API key，不花钱
+```
+
+三条支线（不装 skill / v1 / v2）跑同一批请求，同一份判分契约，唯一变量是 skill 本身——`--model-key skill -m "" -m skills/v1 -m skills/v2`。装进 workspace 的那份连内容 hash 一起记进 trace："v2 更好"和"**这个** v2 更好"是两回事。
+
+输出的不是一句"v2 赢了"，而是分维度的、带噪声判断的读数：
+
+```
+触发率（skill_triggered）    v1 0.17 → v2 0.67
+    B is significantly higher — +0.5 (95% CI [+0.06, +0.94])
+按 `triggered` 判分：within noise band: pass-rate diff +16.7%
+    (95% CI [-43.6%, +76.9%]); detectable at n=6: ~86.0%
+    ↑ pos_contextual   ↑ pos_implicit   ↓ neg_chart   ← 回退
+```
+
+读法：触发率确实显著提升了，但把正负例合起来的总体判定还在噪声带里——**6 条用例只能检测到 86% 以上的差异**，想要结论得加用例而不是加解读。而那条 `↓ neg_chart` 是这个例子的重点：v2 的 description 写得更"主动"，召回上去了，代价是它开始抢画图的活。**只有正向用例的触发率评测看不见这一行，只报均值的 benchmark 也看不见。** 详见 [`examples/skill_eval/README.md`](examples/skill_eval/README.md) 与 [docs/skills.md](docs/skills.md)。
 
 ## 接公开数据集：SWE-bench（`examples/swebench/`）
 

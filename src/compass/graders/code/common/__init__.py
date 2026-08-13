@@ -6,6 +6,9 @@ from compass.graders.code.common.exact import (
 from compass.graders.code.common.external import (
     ExternalCheckerGrader,
 )
+from compass.graders.code.common.skill_graders import (
+    SkillTriggerGrader,
+)
 from compass.graders.code.common.structure import (
     JsonSchemaGrader,
     SqlSyntaxGrader,
@@ -30,6 +33,8 @@ __all__ = [
     "ExactMatchGrader",
     # External process graders
     "ExternalCheckerGrader",
+    # Skill graders
+    "SkillTriggerGrader",
     # Structure graders
     "JsonSchemaGrader",
     "SqlSyntaxGrader",

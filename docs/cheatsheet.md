@@ -102,13 +102,13 @@ expected:
 
 > `expected:` 下的**未知键会直接报错**，不会被静默忽略——拼错 `contian:` 却报告「通过」是最糟的一类评测 bug。需要上面覆盖不了的断言时，写自定义 grader 或用 `external_checker`。
 
-## 内置 grader 速查（41 个）
+## 内置 grader 速查（42 个）
 
 **scope 决定它能不能从有损轨迹重评**：`transcript` 域在 JSONL 上完整；`outcome` / `both` 域需要 `--trace-format json`。
 
 | scope | grader |
 |---|---|
-| **transcript**（过程，跨 Agent 通用） | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `trajectory_judge`(model) |
+| **transcript**（过程，跨 Agent 通用） | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `skill_trigger` `trajectory_judge`(model) |
 | **both** | `efficiency` `reasoning_trace` `self_correction` `groundedness`(model) `external_checker` |
 | **outcome · 通用** | `exact_match` `json_schema` `structure_check` `style_convention` `sql_syntax` |
 | **outcome · 代码** | `exit_code_check` `test_runner` `integration_test` `lint` `type_check` `security_scan` `diff_accuracy` `diff_size` |
@@ -130,6 +130,29 @@ graders:
   - {name: loop_detection,type: code, config: {max_repeats: 5}}
   - {name: tool_usage,    type: code, gate: true, config: {required_tools: [search]}}
 ```
+
+**Skill 版本对比（v1 → v2 到底有没有变好）**
+
+```yaml
+agent:
+  adapter: claude_code
+  config:
+    repo: "./my-project"
+    skill: ""                    # -m 覆盖这个键 = 装哪个版本；"" 是不装的基线
+    setting_sources: project     # 每条支线都要，否则 ~/.claude/skills 会串进来
+graders:
+  - {name: skill_trigger, type: code, label: triggered,
+     config: {skill: my-skill, should_trigger: true}}
+```
+
+```bash
+compass test ab.yaml --model-key skill -m "" -m skills/v1 -m skills/v2 \
+    --report json -o out/results.json
+compass compare out/results.skills-v1.json out/results.skills-v2.json \
+    --on triggered --metric skill_triggered --metric cost_usd
+```
+
+装进去的版本会连内容 hash 一起记在 `transcript.metadata["skills"]`。详见 [skills.md](skills.md)。
 
 **安全闸门（评「执行」而非「文字」）**
 

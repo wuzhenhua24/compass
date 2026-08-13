@@ -345,6 +345,31 @@ compass test coding.yaml --model-key append_system_prompt_file \
 
 跑一次很贵，所以配 `--trace-dir` 记录，之后改 rubric 用 `compass grade` 离线重评，不必重跑 Agent。
 
+### 第三条轴：装哪个 skill
+
+```yaml
+    skill: "./skills/report-writer-v2"   # 装进 workspace 的 skill 目录
+    skills: []                           # 被测 skill 需要的伴随 skill
+    setting_sources: project             # --setting-sources：只认工作区里的配置
+```
+
+`skill:` 指向的目录会在跑之前被复制进 `<workspace>/.claude/skills/<skill 自己的 name>/`——**取 frontmatter 里的 `name`，不是源目录名**，所以 `report-writer-v1` 和 `report-writer-v2` 到 agent 眼里是同一个 `report-writer`，两条支线之间唯一的差别是内容。安装记录（含整棵目录的内容 hash）落在 `metadata["skills"]` 和 `transcript.metadata["skills"]` 上。
+
+```bash
+compass test skill.yaml --model-key skill \
+    -m "" -m skills/report-writer-v1 -m skills/report-writer-v2          # Skill 轴
+```
+
+三件事值得单独记住：
+
+- 目录里**没有 SKILL.md 直接报错**。一个拼错的路径会安静地把 with-skill 支线变成又一条基线——这是唯一一种能让整个对比作废、却不留痕迹的失败。
+- `isolation: none` 会被**拒绝**：那种模式直接在你的仓库里跑，装 skill 意味着往你的 `.claude/skills/` 写文件并留在那儿。
+- 装进去的 skill **不计入 diff**，否则每条 with-skill 支线都会凭空多出几百行变更。
+
+`setting_sources: project` 那行不是可选的装饰：Claude Code 默认还会加载操作员自己的 `~/.claude/skills`，同名 skill 会盖掉或悄悄补上被测的这个，**基线支线于是不再是基线**。装了 skill 的支线 Compass 会自动补 `project`，基线支线没得可补——所以写在共享的 `agent.config` 里。
+
+配套的 `skill_trigger` grader、触发率与负向控制的写法，见 [skills.md](skills.md)。
+
 ### 凭证：`env_allow`
 
 `claude_code` 自己不走 sandbox，用宿主环境，所以没有这个问题。但如果你用 `environment` adapter 跑**别的**带凭证的 agent（goose、aider），会撞上 sandbox 的密钥过滤器：`ANTHROPIC_API_KEY` 同时命中 `ANTHROPIC_` 前缀和 `API_KEY` 子串，`env_passthrough` / `env_overrides` / 每次调用的 `env=` 三条路**全部**被拦——不给逃生舱的话，这类运行根本没法认证。

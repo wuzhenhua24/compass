@@ -111,5 +111,8 @@
 - **扩展面**：`external_checker` 让任何可执行文件成为 grader；grader 列表变成共享 workspace 的
   流水线（`creates:` / `required:` 中止）
 - **过程侧判官**：`trajectory_judge`（调用链是否合理）、`groundedness`（答案是否被工具观察支撑）
+- **Skill 评测**：装哪个版本的 skill 变成一条可扫的轴（隔离安装 + 内容 hash 存档），
+  `skill_trigger` 把"到底加载了没有"变成可比的触发率，负向控制抓 description 写太宽导致的
+  误触发（见 [skills.md](skills.md)）
 - **结果分发**：`compass site build/serve` 静态站与趋势线；`compass docs` 在终端读框架自身文档
 - **文档结构**：README 收敛为骨架，细节拆进 docs/ 专题文档 + 单页 cheatsheet

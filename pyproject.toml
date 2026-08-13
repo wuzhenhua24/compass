@@ -79,6 +79,7 @@ packages = ["src/compass"]
 "docs/scenario-config.md" = "compass/docs/scenario-config.md"
 "docs/analysis.md" = "compass/docs/analysis.md"
 "docs/integrations.md" = "compass/docs/integrations.md"
+"docs/skills.md" = "compass/docs/skills.md"
 "docs/roadmap.md" = "compass/docs/roadmap.md"
 
 [tool.ruff]

@@ -1,0 +1,105 @@
+# 触发率评测 —「这个 description 该响的时候响、不该响的时候不响吗」
+#
+# 同样是模板（`{{REPO}}` / `{{CLI}}` 由 eval.py 填）：
+#
+#   uv run python examples/skill_eval/eval.py --suite trigger
+#
+# 换成自己的 skill 后走标准 CLI：
+#
+#   compass test trigger.yaml --model-key skill \
+#       -m skills/report-writer-v1 \
+#       -m skills/report-writer-v2 \
+#       --report json -o out/trigger.json
+#
+# 和 ab.yaml 的区别只有一个：这里**不看 agent 干得怎么样**，只看它有没有决定
+# 加载这个 skill。所以它便宜（max_turns 小）、可以多跑几轮、适合在改完
+# description 之后先跑一遍。
+#
+# ── 负向控制是这份文件的一半 ──────────────────────────────────────────────
+# 只有正向用例的触发率评测测不出坏 description：把 description 写成
+# "任何时候都用我"，正向全绿，代价是它开始抢走别人的活——而所有正确性指标
+# 看上去都还好好的。
+#
+# 负向用例要写**近似的**：和 skill 沾边、关键词重叠、但正确做法是别用它。
+# "写个 fibonacci 函数"这种测不出任何东西。
+# ──────────────────────────────────────────────────────────────────────────
+
+name: "触发率 · report-writer"
+description: "description 的触发行为：正向召回与近似负例上的误触发"
+
+agent:
+  adapter: claude_code
+  config:
+    repo: "{{REPO}}"
+    cli_path: "{{CLI}}"        # 离线回放；接真实 agent = 删掉这一行
+    skill: ""
+    permission_mode: acceptEdits
+    allowed_tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash"]
+    # 只想知道"它决定用不用这个 skill"，不需要它把活干完。
+    max_turns: 3
+    timeout: 120
+    setting_sources: project
+
+defaults:
+  trials: 3                    # 3 次跑出一个率；1 次跑出一个故事
+
+default_aggregation:
+  pass_threshold: 0.99         # 触发是二元的，没有"部分触发"
+
+# 注意这里**没有 default_graders**：正例和负例期望相反，而 default_graders 是
+# 追加、不是覆盖——写在默认里，每条负例都会同时挂上一个 should_trigger: true
+# 的实例，然后必然判负。期望不同的用例，grader 就得写在用例上。
+cases:
+
+  # ── 该触发 ────────────────────────────────────────────────────────────
+  - id: pos_explicit
+    description: "点名"
+    input: {prompt: "用 report-writer 处理 data/q3.csv，输出 report.md"}
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: true}}
+
+  - id: pos_implicit
+    description: "描述 skill 的活，但不提名字"
+    input:
+      prompt: |
+        data/q3.csv 里是各区收入，帮我整理成一份季度报告，
+        要有总数和环比，存成 report.md。
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: true}}
+
+  - id: pos_contextual
+    description: "只说了场景和受众"
+    input:
+      prompt: |
+        周五要跟老板做 Q3 复盘，手上只有 data/q3.csv。
+        帮我弄一份能直接发出去的汇报材料。
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: true}}
+
+  # ── 不该触发（近似负例）──────────────────────────────────────────────
+  - id: neg_edit_existing
+    description: "改已有报告的措辞——沾边，但不是从数据生成报告"
+    input:
+      prompt: "report.md 里 '收入下滑' 那句话改一下措辞，说得委婉点"
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: false}}
+
+  - id: neg_format_convert
+    description: "格式转换——同一份 CSV，完全不同的活"
+    input:
+      prompt: "把 data/q3.csv 转成 JSON，字段名保持不变"
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: false}}
+
+  - id: neg_chart
+    description: "画图——描述里没有图表，但'把数据变成给人看的东西'很容易蹭上"
+    input:
+      prompt: "用 data/q3.csv 画个各区收入的柱状图，存成 chart.png"
+    graders:
+      - {name: skill_trigger, type: code, label: triggered,
+         config: {skill: report-writer, should_trigger: false}}
