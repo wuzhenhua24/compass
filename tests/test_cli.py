@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from compass.core.scenario import Scenario
-from compass.graders import GradeContext, GradeResult, GraderType
+from compass.graders import GraderType
 
 
 class TestInitCommand:
@@ -222,66 +222,6 @@ cases:
         # Should use graders not evaluators in cases
         assert len(scenario.cases[0].graders) == 1
         assert scenario.cases[0].graders[0].name == "case_grader"
-
-
-class TestEvalCommand:
-    """Tests for the eval command using grader system."""
-
-    def test_eval_uses_grader_not_evaluator(self):
-        """The eval command should use graders, not evaluators."""
-        # Verify the function signature uses --graders not --evaluators
-
-        from compass.cli.main import eval as eval_cmd
-
-        # Get the Click command options
-        param_names = [p.name for p in eval_cmd.params]
-        assert "graders" in param_names
-        assert "evaluators" not in param_names
-
-    def test_eval_creates_grade_context_with_outcome(self):
-        """The eval command should create a GradeContext with Outcome."""
-        # Create a mock image
-        from PIL import Image
-
-        from compass.core.transcript import Outcome
-        img = Image.new("RGB", (100, 100), color="red")
-
-        # Create outcome
-        outcome = Outcome(image=img)
-
-        # Create grade context
-        context = GradeContext(prompt="test prompt", outcome=outcome)
-
-        # Verify the context has the image via outcome
-        assert context.outcome is not None
-        assert context.outcome.image is img
-        assert context.image is img
-
-    @pytest.mark.asyncio
-    async def test_eval_calls_grader_grade_method(self):
-        """The eval command should call grader.grade(), not evaluator.evaluate()."""
-        from PIL import Image
-
-        from compass.core.transcript import Outcome
-        from compass.graders import get_grader
-
-        # Create mock image and context
-        img = Image.new("RGB", (100, 100))
-        outcome = Outcome(image=img)
-        context = GradeContext(prompt="test", outcome=outcome)
-
-        # Get a grader and verify it has grade() method
-        grader_cls = get_grader("semantic_match")
-        grader = grader_cls({})
-
-        # Verify it's the new grader interface
-        assert hasattr(grader, "grade")
-        assert hasattr(grader, "grader_type")
-        assert hasattr(grader, "grader_scope")
-
-        # Call grade
-        result = await grader.grade(context)
-        assert isinstance(result, GradeResult)
 
 
 class TestListCommand:

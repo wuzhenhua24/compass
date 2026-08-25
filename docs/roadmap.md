@@ -74,7 +74,6 @@
   - 已降优先级：自跑的 Agent 走**导入轨迹**（Integrations）比被外部驱动更合适，
     投入转向了 pi / OTLP / Claude / OpenAI Agents SDK 四种轨迹接入
 - [x] Human Grader 接口完善
-  - [x] 评分者一致性：Cohen's κ / Krippendorff's α（`graders/human/agreement.py`）
   - [x] 锚点校准会话（`graders/human/calibration.py`）、`pairwise_comparison` 成对比较
 - [x] 环境隔离 (Sandbox)
 - [x] 并行执行优化
@@ -91,9 +90,8 @@
 - [x] 基准测试对比
   - [x] `compass compare` 配对比较（case 翻转 + 置信区间 + MDE）
   - [x] `compass test -m` 多模型排行榜（每行标准误 + top 2 配对检验）
-  - [x] `compass baseline set/compare/list` 产物级回归基线
 - [ ] 模型校准工具
-  - 已有测量原语（任意两个评分者之间的 κ / α），但尚未做成"LLM 判官 vs 人工标注"的校准工具
+  - 尚未做成"LLM 判官 vs 人工标注"的校准工具
 
 ### Phase 5 - 基座化（原路线图之后交付）
 

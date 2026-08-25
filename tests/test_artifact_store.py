@@ -1,11 +1,9 @@
-"""Tests for ArtifactStore — artifact binary persistence and baseline management."""
+"""Tests for ArtifactStore — artifact binary persistence."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-import pytest
 
 from compass.core.artifact_store import ArtifactStore, _safe_filename
 from compass.core.artifacts import CodeArtifact, GeneratedFile, ImageArtifact, TextArtifact
@@ -174,113 +172,6 @@ class TestSaveTrialArtifacts:
         saved = store.save_trial_artifacts(transcript, "case1")
 
         assert saved == []
-
-
-# ---------------------------------------------------------------------------
-# TestBaseline
-# ---------------------------------------------------------------------------
-
-
-class TestBaseline:
-    def test_set_baseline_copies_files(self, tmp_path: Path):
-        # Create trial artifacts
-        img = _make_pil_image()
-        transcript = _make_transcript(image=img, image_hash="deadbeef")
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-
-        # Set baseline
-        baseline_dir = store.set_baseline("case1")
-
-        assert baseline_dir.exists()
-        assert (baseline_dir / "output.png").exists()
-        assert (baseline_dir / "manifest.json").exists()
-
-    def test_load_baseline_returns_manifest(self, tmp_path: Path):
-        img = _make_pil_image()
-        transcript = _make_transcript(image=img, image_hash="deadbeef")
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-        store.set_baseline("case1")
-
-        manifest = store.load_baseline("case1")
-
-        assert manifest is not None
-        assert manifest["case_id"] == "case1"
-        assert manifest["image_hash"] == "deadbeef"
-
-    def test_load_baseline_not_exists_returns_none(self, tmp_path: Path):
-        store = ArtifactStore(tmp_path)
-
-        assert store.load_baseline("nonexistent") is None
-
-    def test_compare_hash_match(self, tmp_path: Path):
-        img = _make_pil_image()
-        transcript = _make_transcript(image=img, image_hash="same_hash")
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-        store.set_baseline("case1")
-
-        result = store.compare_with_baseline("case1")
-
-        assert result.identical is True
-        assert result.hash_match is True
-
-    def test_compare_hash_mismatch(self, tmp_path: Path):
-        img = _make_pil_image()
-        # Set baseline with one hash
-        transcript = _make_transcript(image=img, image_hash="hash_v1")
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-        store.set_baseline("case1")
-
-        # Overwrite current trial with a different hash
-        transcript2 = _make_transcript(image=img, image_hash="hash_v2")
-        store.save_trial_artifacts(transcript2, "case1")
-
-        result = store.compare_with_baseline("case1")
-
-        assert result.identical is False
-        assert result.hash_match is False
-
-    def test_compare_no_baseline(self, tmp_path: Path):
-        img = _make_pil_image()
-        transcript = _make_transcript(image=img)
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-
-        result = store.compare_with_baseline("case1")
-
-        assert result.identical is False
-        assert result.baseline_path is None
-
-    def test_set_baseline_not_found_raises(self, tmp_path: Path):
-        store = ArtifactStore(tmp_path)
-        with pytest.raises(FileNotFoundError):
-            store.set_baseline("missing_case")
-
-
-# ---------------------------------------------------------------------------
-# TestListTrials
-# ---------------------------------------------------------------------------
-
-
-class TestListTrials:
-    def test_list_trials_returns_manifest(self, tmp_path: Path):
-        img = _make_pil_image()
-        transcript = _make_transcript(image=img, trial_id="t1")
-        store = ArtifactStore(tmp_path)
-        store.save_trial_artifacts(transcript, "case1")
-
-        trials = store.list_trials("case1")
-
-        assert len(trials) == 1
-        assert trials[0]["trial_id"] == "t1"
-
-    def test_list_trials_empty(self, tmp_path: Path):
-        store = ArtifactStore(tmp_path)
-
-        assert store.list_trials("nope") == []
 
 
 # ---------------------------------------------------------------------------

@@ -7,14 +7,11 @@ regression testing.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import shutil
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from compass.core.artifacts import (
     CodeArtifact,
@@ -29,17 +26,6 @@ if TYPE_CHECKING:
     from compass.core.transcript import Transcript
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class BaselineComparison:
-    """Result of comparing current trial artifacts with a baseline."""
-
-    identical: bool
-    baseline_path: Path | None
-    current_path: Path | None
-    hash_match: bool | None = None
-    details: dict[str, Any] = field(default_factory=dict)
 
 
 class ArtifactStore:
@@ -157,118 +143,6 @@ class ArtifactStore:
         if not path.is_dir():
             return []
         return sorted(p.name for p in path.iterdir() if p.is_file())
-
-    # ------------------------------------------------------------------
-    # Baseline management
-    # ------------------------------------------------------------------
-
-    def set_baseline(self, case_id: str, trial_dir: Path | str | None = None) -> Path:
-        """Copy a trial's artifacts as the baseline for *case_id*.
-
-        If *trial_dir* is ``None``, the current artifact directory for
-        *case_id* is used.
-
-        Returns:
-            Path to the baseline directory.
-        """
-        safe_id = _safe_filename(case_id)
-        source = Path(trial_dir) if trial_dir else self.base_dir / safe_id
-        if not source.is_dir():
-            raise FileNotFoundError(f"Trial directory not found: {source}")
-
-        baseline_dir = self.base_dir / "baselines" / safe_id
-        if baseline_dir.exists():
-            shutil.rmtree(baseline_dir)
-        shutil.copytree(source, baseline_dir)
-        return baseline_dir
-
-    def load_baseline(self, case_id: str) -> dict[str, Any] | None:
-        """Load the baseline manifest for *case_id*.
-
-        Returns:
-            Manifest dict, or ``None`` if no baseline exists.
-        """
-        safe_id = _safe_filename(case_id)
-        manifest_path = self.base_dir / "baselines" / safe_id / "manifest.json"
-        if not manifest_path.exists():
-            return None
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    def compare_with_baseline(self, case_id: str) -> BaselineComparison:
-        """Compare the latest trial artifacts with the baseline.
-
-        Uses ``image_hash`` from both manifests for a fast comparison.
-        """
-        safe_id = _safe_filename(case_id)
-        current_dir = self.base_dir / safe_id
-        baseline_dir = self.base_dir / "baselines" / safe_id
-
-        current_manifest_path = current_dir / "manifest.json"
-        baseline_manifest_path = baseline_dir / "manifest.json"
-
-        if not baseline_manifest_path.exists():
-            return BaselineComparison(
-                identical=False,
-                baseline_path=None,
-                current_path=current_dir if current_dir.exists() else None,
-                details={"error": "no baseline found"},
-            )
-
-        if not current_manifest_path.exists():
-            return BaselineComparison(
-                identical=False,
-                baseline_path=baseline_dir,
-                current_path=None,
-                details={"error": "no current trial artifacts found"},
-            )
-
-        baseline_manifest = json.loads(
-            baseline_manifest_path.read_text(encoding="utf-8")
-        )
-        current_manifest = json.loads(
-            current_manifest_path.read_text(encoding="utf-8")
-        )
-
-        baseline_hash = baseline_manifest.get("image_hash")
-        current_hash = current_manifest.get("image_hash")
-
-        hash_match: bool | None = None
-        if baseline_hash is not None and current_hash is not None:
-            hash_match = baseline_hash == current_hash
-
-        identical = hash_match is True
-
-        return BaselineComparison(
-            identical=identical,
-            baseline_path=baseline_dir,
-            current_path=current_dir,
-            hash_match=hash_match,
-            details={
-                "baseline_hash": baseline_hash,
-                "current_hash": current_hash,
-                "baseline_trial_id": baseline_manifest.get("trial_id"),
-                "current_trial_id": current_manifest.get("trial_id"),
-            },
-        )
-
-    def list_trials(self, case_id: str) -> list[dict[str, Any]]:
-        """List stored trial manifests for *case_id*.
-
-        Returns:
-            List of manifest dicts (empty if none found).
-        """
-        safe_id = _safe_filename(case_id)
-        case_dir = self.base_dir / safe_id
-        if not case_dir.is_dir():
-            return []
-
-        manifest_path = case_dir / "manifest.json"
-        if not manifest_path.exists():
-            return []
-
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return [manifest]
-
 
 # ------------------------------------------------------------------
 # Helpers

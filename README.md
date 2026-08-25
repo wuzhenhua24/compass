@@ -149,11 +149,9 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
 | `compass import <trace 文件>` | 导入外部轨迹（pi / Codex `exec --json` / OTLP·OpenInference / Claude stream-json / ATIF·Harbor，自动识别；codex 流不含模型名，用 `--model` 补；给一个 Harbor job 目录则整目录导入） |
-| `compass eval <image>` | 单张图像快速评估（不写 scenario） |
 | `compass init [output.yaml]` | 生成场景模板 |
 | `compass docs [topic]` | 在终端里打印 Compass 自身文档（raw markdown，可管道）；不带参数列出主题 |
 | `compass list` | 列出已注册的 grader 和 adapter |
-| `compass baseline set/compare/list` | 回归基线管理：把某 case 的产物存为基线，再拿当前产物与之逐哈希比对 |
 | `compass checkpoint list/clean` | 列出 trace 目录下的运行断点（配合 `compass test --resume`）；`clean` 清理断点文件，默认只删已完成的 |
 
 ## 安装
@@ -430,7 +428,7 @@ compass/
 │   │   ├── runner.py         # 测试运行器（含审计溯源盖章、round-major 多试验调度）
 │   │   ├── transcript.py     # Transcript / Outcome / ToolCall 协议
 │   │   ├── artifacts.py      # 类型化产物（Image / Code / Text …，插件式注册）
-│   │   ├── artifact_store.py # 产物落盘与回归基线（compass baseline）
+│   │   ├── artifact_store.py # 产物落盘与判分工作区
 │   │   ├── trial.py          # 试验管理
 │   │   ├── result.py         # 结果数据结构
 │   │   ├── metrics.py        # pass@k / pass^k 计算
@@ -443,7 +441,7 @@ compass/
 │   │   ├── registry.py       # 评分器注册表
 │   │   ├── code/             # Code Graders（common / coding / data / image）
 │   │   ├── model/            # Model Graders（semantic / vlm / rubric / trajectory / groundedness...）
-│   │   └── human/            # Human Graders（human_review / pairwise + 一致性 κ/α、锚点校准）
+│   │   └── human/            # Human Graders（human_review / pairwise + 锚点校准）
 │   ├── adapters/             # Agent 适配器（image / coding / environment / claude_code / pi / codex；
 │   │                         #   cli_agent.py 是后三者共用的基类，llm.py 是 mixin 与定价，均非 adapter）
 │   ├── integrations/         # 外部轨迹导入（openai_agents / pi / codex_exec / otlp / claude_agent / atif）
@@ -465,7 +463,7 @@ compass/
 
 Phase 1（MVP）、Phase 2（核心功能）已全部完成，Phase 3（增强）只剩"更多图像 Adapter"未做——且已主动降优先级：自跑的 Agent 走**导入轨迹**比被外部驱动更合适。原路线图之后的那批基座化工作（轨迹接入、`compass grade` 执行/评分解耦、ToolCall 协议 2.0、观察标签与指标、静态站）归档在 Phase 5。
 
-**当前未做**：Web Dashboard 的常驻服务形态（静态站 `compass site` 已交付）、现成的 CI/CD 流水线模板（退出码门禁已有）、"LLM 判官 vs 人工标注"的校准工具（κ / α 测量原语已有）。详细清单见 [docs/roadmap.md](docs/roadmap.md)。
+**当前未做**：Web Dashboard 的常驻服务形态（静态站 `compass site` 已交付）、现成的 CI/CD 流水线模板（退出码门禁已有）、"LLM 判官 vs 人工标注"的校准工具。详细清单见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 参考资料
 

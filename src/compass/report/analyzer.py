@@ -142,7 +142,6 @@ class AnalysisReport:
     failure_patterns: list[dict[str, Any]]
     failure_tag_analysis: dict[str, dict[str, Any]]  # Per-tag cluster stats
     recommendations: list[str]
-    agreement: dict[str, Any] = field(default_factory=dict)
     dual_axis_data: list[dict[str, Any]] = field(default_factory=list)
     category_analysis: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Static classification tags from the scenario YAML, bucketed
@@ -162,7 +161,6 @@ class AnalysisReport:
             "failure_patterns": self.failure_patterns,
             "failure_tag_analysis": self.failure_tag_analysis,
             "recommendations": self.recommendations,
-            "agreement": self.agreement,
             "dual_axis_data": self.dual_axis_data,
             "category_analysis": self.category_analysis,
             "tag_analysis": self.tag_analysis,
