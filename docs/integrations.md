@@ -213,11 +213,57 @@ graders:
 
 Codex 的 `file_change` item 自带路径和 `add`/`update`/`delete` 标签，所以它那份 delta 同样是精确值；三条边界一字不差地照搬（只记**完成**的改动、target 相对运行 cwd、shell 里 `rm` 掉的文件不记）。多一条 codex 特有的：路径**先归一化再相对化**，否则 `/wt/repo/../repo/app.py` 会按字面相对成 `../repo/app.py`——一个指向 workspace 之外的 target，而那次改动根本没离开 workspace。相对化还会比对 resolve 后的形式：workspace 来自 `tempfile`、被改路径来自 codex 自己的进程，macOS 上这俩差一个软链（`/var/folders/…` vs `/private/var/folders/…`），不 resolve 的话每个 target 都保持绝对、每条 glob 静默失配。
 
-至此，五个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）+ CLI 事件流（Codex）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
+**第六个集成：ATIF 轨迹（Harbor）**（`compass.integrations.atif`）
+
+**ATIF**（Agent Trajectory Interchange Format）是 [Harbor](https://github.com/harbor-framework/harbor) 的轨迹格式——Terminal-Bench 那套 harness 的作者定的、带 RFC 和版本号（现为 v1.7）的 schema。一次运行一个 JSON 文档：根上一个 `agent` 块、一个扁平的 `steps` 数组、可选的内嵌 `subagent_trajectories`。Harbor 自己的 agent 把它写到 `<trial_dir>/agent/trajectory.json`，claude-code / codex / gemini-cli / copilot 等二十多个 agent 的适配都往这个形状收敛。
+
+**为什么值得接**：Harbor 用 **verifier**（任务容器里跑的一个脚本，往 `/logs/verifier/reward.txt` 写数字）判对错，而轨迹本身**不带任何判定**。这正好是 Compass 的接缝——reward 说"答案对不对"，这个 importer 把轨迹变成 Transcript，让**过程**交给现成的 TRANSCRIPT 域评分器（成本、绕圈、工具用法、危险操作）：
+
+```python
+from compass.integrations import import_atif_file, import_atif_dir
+
+t = import_atif_file("jobs/run-1/fix-bug/trial-1/agent/trajectory.json")
+transcripts = import_atif_dir("jobs/run-1")   # 整个 job：一个 trial 一个 Transcript
+```
+
+| ATIF | → Compass |
+|---|---|
+| `agent` | `environment.adapter_version` / `model_version` |
+| 首个 `source: "user"` step | `input_prompt`（后续的进 reasoning step——Harbor 的模拟用户轮就落在这儿）|
+| 首个 `source: "system"` step | `input_params["system_prompt"]`（仅当它是**整条轨迹的第一步**）|
+| `source: "agent"` step | 一条 `llm.generation`，扛该步的 `TokenUsage` + `CostInfo`，message 作 output |
+| `step.tool_calls[]` | 一个调用一个 `ToolCall`，`tool_call_id` 作 `call_id`、`function_name` 作名字 |
+| `step.observation.results[]` | 按 `source_call_id` 回填对应调用的 output；没有 `source_call_id` 的是系统事件，进 reasoning step |
+| `reasoning_content` | 一条 reasoning step |
+| 子 agent 轨迹 | **摊平**进同一个 Transcript，`ToolCall.agent_name` 标明是谁干的 |
+| 最后一条根级 agent message | `outcome.output_data["final_output"]` |
+
+**复制上下文会被丢掉，而这正是要点。** ATIF-v1.5 的 `is_copied_context` 标记的是「压缩/摘要后从上一段轨迹**抄过来**的步骤」——它是记账产物，不是这次运行干的活。算进去会**把它们的 token 重复计一遍**，还会让每一次上下文压缩在重复检测评分器眼里都像一次绕圈。importer 直接跳过，丢了多少写在 `metadata["atif"]["copied_context_steps"]`。
+
+**确定性调度不产生 LLM 调用。** ATIF-v1.7 的 `llm_call_count: 0` 表示这一步没做推理（写死的编排跳转），所以不为它造 `llm.generation`——否则 `turn_count` 配 `count_filter: "llm"` 会把脚手架当成思考来数。`llm_call_count > 1` 时一步聚合了多次推理，次数记在调用的 metadata 上，而**不**拆成几条从未被分别计量过的调用。
+
+**子 agent 摊平，而不是分家。** Compass 的 `ToolCall.agent_name` 本就是"这次调用是谁干的"那个槽位，而 ATIF 的 `total_cost_usd` 按定义**包含**子 agent——所以被委派的轨迹接在委派调用之后、打上子 agent 名字。反过来做（一个 agent 一个 Transcript）会让整次运行的成本和工具用量从任何单独一个里都读不出来。一次委派算**父 agent 的一轮**，不管里面发生了多少轮。外部引用（`trajectory_path`）相对源文件所在目录解析、且**只在该目录内**；越界的不读盘，列进 `metadata["atif"]["unresolved_subagent_refs"]`——轨迹是数据，数据没资格点名本机的任意路径。
+
+在 Harbor 自带的 golden fixture 上验过这套账：摊平子 agent + 丢掉复制上下文之后，Compass 算出的 token 与成本和 ATIF 自报的 `final_metrics` **逐位相等**。
+
+**ATIF 不带的四样东西**，每一样都以显式缺口出现，而不是一个看起来合理的数字：
+
+| 缺什么 | 后果 |
+|---|---|
+| **工具调用的失败信号** | ATIF 把 observation 建模成"内容"，没有 status / exit code / error 标志。所以导进来的调用**一律 `status="ok"`**，靠 `status="error"` 的评分器在 ATIF 轨迹上**什么都没量到**。全 ok 读作"没记录"，不是"没失败" |
+| **单次调用的耗时** | `timestamp` 标的是**步**不是调用，一步里可能有好几个并行调用。`duration_ms` 一律留 0，说明写在 `metadata["atif"]["timings"]`；整次运行的墙钟仍从首末步的时间戳还原 |
+| **State delta** | schema 里没有"这次调用改了哪些文件"，所以 `state_delta` 恒为空——不像 Claude/codex 那样有结构化的变更记录可映射。`state_delta` 评分器在 ATIF 轨迹上是**空过** |
+| **判定** | 正确性在 Harbor 的 `VerifierResult` 里，是**同级的另一个文件**。从 Harbor trial 目录导入时，importer 会读那个 `results.json`，把 rewards 停在 `metadata["harbor"]`，让两种信号并排放着——但它**不会**把 reward 变成 Compass 分数 |
+
+成本：`metrics.cost_usd` 有就照用；没有才用 `calculate_cost` 按价格表算，模型不在表里就是 `cost=None`（先 `register_pricing()` 再读 `cost_budget` 那一列）。token 换算和 codex 同理：ATIF 的 `prompt_tokens` **含缓存**，Compass 的 `input_tokens` 不含、缓存单独报，所以新鲜输入 = `prompt_tokens − cached_tokens`。
+
+**零依赖**：不 import 任何 harbor 包，纯 JSON 解析。
+
+至此，六个集成覆盖了「实时 span processor（OpenAI）+ 离线 SDK session（pi）+ 通用 OTLP/OpenInference（其余框架）+ 子进程消息流（Claude Agent SDK）+ CLI 事件流（Codex）+ 标准轨迹文档（ATIF/Harbor）」，评估外部 Agent 基本不再需要为每个框架写 Adapter。
 
 **命令行统一入口：`compass import`**
 
-四个**文件型**导入器（pi、OTLP/OpenInference、Claude stream-json、Codex `exec --json`）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
+五个**文件型**导入器（pi、OTLP/OpenInference、Claude stream-json、Codex `exec --json`、ATIF）统一挂到了一个子命令上——自动识别格式、重建为 Compass transcript、打印摘要，并可保存后用 `compass trace` 查看：
 
 ```bash
 compass import session.jsonl                    # 自动识别 + 摘要
@@ -225,9 +271,12 @@ compass import phoenix_export.json -o out/      # 多 trace：每条存一个文
 compass import run.stream.jsonl -f claude -o t.json   # Claude stream-json + 存单文件
 compass import phoenix_export.json --json       # 打印重建后的 transcript JSON
 compass import codex.stream.jsonl --model gpt-5.4-mini   # codex 流不带模型名，补上才有成本
+compass import jobs/my-run -f atif -o out/      # 一个 Harbor job 的全部 trial
 ```
 
 格式自动识别（各用其首行不变量）：pi 首行是 `{"type":"session"}`；Claude stream-json 首行 `type` 是 CLI 消息类型（`assistant`/`user`/`result`/`system`…）；codex 的事件类型带命名空间前缀（`thread.` / `turn.` / `item.`），别的格式都不用这种写法；其余 JSON 按 OTLP/OpenInference 处理。pi 的两种形态（session 树 / `--mode json` 事件流）首行相同，再看后续行有没有 `id` 区分——所以 adapter 存下的原始流也能直接 `compass import`。（OpenAI Agents SDK 是实时集成，编程方式经 `compass.integrations` 使用，不走文件导入。）
+
+ATIF 是**唯一单独嗅探**的那个：它通常是 pretty-print 的，首行只有一个孤零零的 `{`——解析不出任何东西，会一路掉进 OTLP 兜底。所以它改看文件头里的 `"schema_version": "ATIF-…"` 声明。目录同理：一个 Harbor job 目录下有 `<trial>/agent/trajectory.json`，认出来就按 atif 整目录导入，否则仍按 pi 处理。
 
 **流式重建：`WireReconstructor`**
 

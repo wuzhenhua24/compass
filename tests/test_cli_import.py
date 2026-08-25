@@ -1,4 +1,4 @@
-"""Tests for the ``compass import`` CLI subcommand (pi/claude/codex/otlp files)."""
+"""Tests for the ``compass import`` CLI subcommand (pi/claude/codex/otlp/atif traces)."""
 
 from __future__ import annotations
 
@@ -118,6 +118,55 @@ def _otlp_two_traces() -> str:
     return json.dumps(spans)
 
 
+def _atif_trajectory() -> dict:
+    """A pretty-printed ATIF trajectory — the shape Harbor writes per trial."""
+    return {
+        "schema_version": "ATIF-v1.7",
+        "session_id": "sess-atif",
+        "agent": {"name": "claude-code", "version": "2.1.0", "model_name": "gpt-4o"},
+        "steps": [
+            {"step_id": 1, "source": "user", "message": "Create hello.txt"},
+            {
+                "step_id": 2,
+                "source": "agent",
+                "message": "Created hello.txt.",
+                "tool_calls": [
+                    {"tool_call_id": "c1", "function_name": "Write",
+                     "arguments": {"path": "hello.txt"}}
+                ],
+                "observation": {"results": [{"source_call_id": "c1", "content": "ok"}]},
+                "metrics": {"prompt_tokens": 100, "completion_tokens": 20},
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def atif_file(tmp_path):
+    p = tmp_path / "trajectory.json"
+    # indent=2 on purpose: the first line is a bare "{", which is exactly the
+    # case a first-line sniff cannot parse.
+    p.write_text(json.dumps(_atif_trajectory(), indent=2), encoding="utf-8")
+    return p
+
+
+@pytest.fixture
+def harbor_job_dir(tmp_path):
+    job = tmp_path / "job"
+    for trial in ("trial-1", "trial-2"):
+        trial_dir = job / "fix-bug" / trial
+        (trial_dir / "agent").mkdir(parents=True)
+        (trial_dir / "agent" / "trajectory.json").write_text(
+            json.dumps(_atif_trajectory(), indent=2), encoding="utf-8"
+        )
+        (trial_dir / "results.json").write_text(
+            json.dumps({"task_name": "fix-bug", "trial_name": trial,
+                        "verifier_result": {"rewards": {"reward": 1.0}}}),
+            encoding="utf-8",
+        )
+    return job
+
+
 @pytest.fixture
 def pi_file(tmp_path):
     p = tmp_path / "session.jsonl"
@@ -165,8 +214,15 @@ class TestDetect:
         """codex namespaces its event types (thread./turn./item.); nothing else does."""
         assert _detect_trace_format(codex_file) == "codex"
 
+    def test_detect_atif(self, atif_file):
+        """A pretty-printed ATIF doc opens with a bare `{`, which parses as nothing."""
+        assert _detect_trace_format(atif_file) == "atif"
+
     def test_detect_directory_is_pi(self, tmp_path):
         assert _detect_trace_format(tmp_path) == "pi"
+
+    def test_detect_harbor_job_directory_is_atif(self, harbor_job_dir):
+        assert _detect_trace_format(harbor_job_dir) == "atif"
 
     def test_detect_non_json_is_none(self, tmp_path):
         p = tmp_path / "junk.txt"
@@ -193,6 +249,28 @@ class TestImportCommand:
         assert "format: otlp" in result.output
         assert "2 transcript(s)" in result.output
         assert "trA" in result.output and "trB" in result.output
+
+    def test_auto_import_atif_trajectory(self, atif_file):
+        result = CliRunner().invoke(cli, ["import", str(atif_file)])
+        assert result.exit_code == 0
+        assert "format: atif" in result.output
+        assert "sess-atif" in result.output
+        assert "Created hello.txt." in result.output
+
+    def test_auto_import_a_whole_harbor_job(self, harbor_job_dir):
+        result = CliRunner().invoke(cli, ["import", str(harbor_job_dir)])
+        assert result.exit_code == 0
+        assert "format: atif" in result.output
+        assert "2 transcript(s)" in result.output
+        assert "fix-bug" in result.output
+
+    def test_atif_save_and_reload(self, atif_file, tmp_path):
+        out = tmp_path / "t.json"
+        result = CliRunner().invoke(cli, ["import", str(atif_file), "-o", str(out)])
+        assert result.exit_code == 0
+        reloaded = Transcript.load(out)
+        assert reloaded.metadata["atif"]["schema_version"] == "ATIF-v1.7"
+        assert [c.tool_name for c in reloaded.tool_calls] == ["llm.generation", "Write"]
 
     def test_explicit_format(self, pi_file):
         result = CliRunner().invoke(cli, ["import", str(pi_file), "-f", "pi"])

@@ -5,6 +5,14 @@ Compass adapter, you bridge the agent framework's own trace/telemetry into a
 Compass ``Transcript`` and grade it with the normal transcript-scope graders.
 """
 
+from compass.integrations.atif import (
+    ATIFImportError,
+    atif_to_transcript,
+    import_atif_dir,
+    import_atif_file,
+    load_atif,
+    looks_like_atif,
+)
 from compass.integrations.claude_agent import (
     WireReconstructor,
     import_claude_stream_json,
@@ -39,6 +47,12 @@ from compass.integrations.pi_sessions import (
 )
 
 __all__ = [
+    "ATIFImportError",
+    "atif_to_transcript",
+    "import_atif_dir",
+    "import_atif_file",
+    "load_atif",
+    "looks_like_atif",
     "CompassTraceProcessor",
     "install_openai_agents_processor",
     "reconstruct_transcript",

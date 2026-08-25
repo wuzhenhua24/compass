@@ -11,7 +11,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 **✅ 是什么**
 
 - **一套标准**：Transcript（怎么做的）/ Outcome（做出了什么）+ ToolCall 协议，让评分器面向统一数据结构，跨 Agent 复用
-- **轨迹接入**：把 OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK 的原生轨迹归一成 Transcript（见 [docs/integrations.md](docs/integrations.md)）
+- **轨迹接入**：把 OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK / ATIF·Harbor 的原生轨迹归一成 Transcript（见 [docs/integrations.md](docs/integrations.md)）
 - **可复用的过程评分器**：规则式的 `cost_budget` / `latency_budget` / `loop_detection` / `tool_usage` / `state_delta`（环境状态变更守卫），以及两个 LLM 判官——`trajectory_judge`（过程侧：调用链是否合理/遗漏关键步骤/过度探索）和 `groundedness`（答案 vs 证据：最终答案是否被工具观察支撑，专抓"空工具结果幻觉"）；机器通用、criteria 由你配
 - **执行与评分解耦**：轨迹是不可变证据，`compass grade` 给已落盘的轨迹打分——改判分器不用重跑 Agent，多套 grader 可并排评同一批样本；判分器指纹自动标记过期评分（见 [docs/analysis.md](docs/analysis.md)）
 - **评测卫生**：harness 失败不算模型失败（移出 pass rate 分母）、未打分 ≠ 0 分（判官超时不会伪装成低分，但也不许签发"通过"）、多试验轮转采样 + 补齐语义（中断后样本均衡，pass^k 不被偏样本污染）
@@ -145,7 +145,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass site compare <a> <b>` | 把两次运行的**配对比较**发布进同一个站点：总体 + 逐 grader + 过程指标，并标出判分契约不同、差异不可归因的 case |
 | `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
 | `compass trace <trace 文件>` | 查看执行轨迹（JSON/JSONL，`--steps` 展开工具调用） |
-| `compass import <trace 文件>` | 导入外部轨迹（pi / Codex `exec --json` / OTLP·OpenInference / Claude stream-json，自动识别；codex 流不含模型名，用 `--model` 补） |
+| `compass import <trace 文件>` | 导入外部轨迹（pi / Codex `exec --json` / OTLP·OpenInference / Claude stream-json / ATIF·Harbor，自动识别；codex 流不含模型名，用 `--model` 补；给一个 Harbor job 目录则整目录导入） |
 | `compass eval <image>` | 单张图像快速评估（不写 scenario） |
 | `compass init [output.yaml]` | 生成场景模板 |
 | `compass docs [topic]` | 在终端里打印 Compass 自身文档（raw markdown，可管道）；不带参数列出主题 |
@@ -308,7 +308,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 | **Grader 体系** | 三层体系（Code/Model/Human）、全部 42 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
 | **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
-| **接入外部 Agent** | OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK 轨迹导入、Claude Code · pi · Codex 三个 CLI Adapter（真实仓库上评编程 Agent，同一份判分契约下跨栈对比）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
+| **接入外部 Agent** | OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK / ATIF·Harbor 轨迹导入、Claude Code · pi · Codex 三个 CLI Adapter（真实仓库上评编程 Agent，同一份判分契约下跨栈对比）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
 | **Skill 评测** | 证明 skill 的新版本真的更好了：把"装哪个版本"变成可扫的轴（内容 hash 存档）、`skill_trigger` 量触发率、负向控制抓误触发、`required_resources` 查 bundle 脚本是否真被用上、v1→v2 的配对判断 | [docs/skills.md](docs/skills.md) |
 
 几个贯穿全部文档的设计要点：
@@ -443,7 +443,7 @@ compass/
 │   │   └── human/            # Human Graders（human_review / pairwise + 一致性 κ/α、锚点校准）
 │   ├── adapters/             # Agent 适配器（image / coding / environment / claude_code / pi / codex；
 │   │                         #   cli_agent.py 是后三者共用的基类，llm.py 是 mixin 与定价，均非 adapter）
-│   ├── integrations/         # 外部轨迹导入（openai_agents / pi / codex_exec / otlp / claude_agent）
+│   ├── integrations/         # 外部轨迹导入（openai_agents / pi / codex_exec / otlp / claude_agent / atif）
 │   ├── sandbox/              # 沙箱执行
 │   └── report/               # 报告与分析
 │       ├── analyzer.py       # 分维度诊断、失败模式、改进建议

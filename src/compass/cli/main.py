@@ -1321,7 +1321,7 @@ def trace(trace_file: str, steps: bool, as_json: bool) -> None:
 @click.argument("source", type=click.Path(exists=True))
 @click.option(
     "--format", "-f", "fmt",
-    type=click.Choice(["auto", "pi", "otlp", "claude", "codex"]), default="auto",
+    type=click.Choice(["auto", "pi", "otlp", "claude", "codex", "atif"]), default="auto",
     help="Trace format (default: auto-detect)",
 )
 @click.option(
@@ -1357,23 +1357,29 @@ def import_(
               exported via Arize Phoenix); a single file may hold many traces
       claude  a Claude Code `--output-format stream-json` file
       codex   a Codex CLI `codex exec --json` event stream
+      atif    a Harbor ATIF trajectory (`trajectory.json`), or a directory of
+              them — point it at a Harbor job dir to import every trial at once
 
     Format is auto-detected by default. The OpenAI Agents SDK integration is
     live/streaming (used programmatically via ``compass.integrations``); the
     Claude Agent SDK can be imported from its stream-json output.
 
     A codex stream records no model id and no cost — pass ``--model`` to name the
-    model (which is also what makes cost computable from the pricing table).
+    model (which is also what makes cost computable from the pricing table). An
+    ATIF trajectory usually names its own model; ``--model`` overrides it.
 
     Examples:
         compass import session.jsonl                  # auto-detect + summarize
         compass import phoenix_export.json -o out/    # one saved file per trace
         compass import run.stream.jsonl -f claude -o t.json
         compass import codex.stream.jsonl --model gpt-5.4-mini
+        compass import jobs/my-run -f atif -o out/    # every trial in a Harbor job
     """
     import json as json_mod
 
     from compass.integrations import (
+        import_atif_dir,
+        import_atif_file,
         import_claude_stream_json,
         import_codex_stream_json,
         import_otlp_file,
@@ -1386,7 +1392,7 @@ def import_(
     if detected is None:
         console.print(
             "[red]Could not auto-detect trace format.[/red] "
-            "Pass [bold]--format pi|otlp|claude|codex[/bold]."
+            "Pass [bold]--format pi|otlp|claude|codex|atif[/bold]."
         )
         sys.exit(1)
 
@@ -1394,6 +1400,12 @@ def import_(
         if detected == "pi":
             transcripts = (
                 import_pi_sessions(src) if src.is_dir() else [import_pi_session(src)]
+            )
+        elif detected == "atif":
+            transcripts = (
+                import_atif_dir(src, model=model)
+                if src.is_dir()
+                else [import_atif_file(src, model=model)]
             )
         elif detected == "claude":
             transcripts = [import_claude_stream_json(src)]
@@ -1438,18 +1450,27 @@ _CLAUDE_WIRE_TYPES = frozenset(
 def _detect_trace_format(path: Path) -> str | None:
     """Sniff the trace format from a file (or directory) without full parsing.
 
-    Discriminate by each format's first-line invariant:
+    The line-oriented formats are told apart by their first-line invariant:
       - pi:     a ``{"type": "session", ...}`` session header
       - claude: a stream-json line whose ``type`` is a Claude Code message type
       - codex:  an event whose ``type`` is namespaced ``thread.``/``turn.``/``item.``
       - otlp:   anything else that is JSON (OTLP / OpenInference)
+
+    ATIF is checked separately, because it is the one format that is normally
+    *pretty-printed*: its first line is a bare ``{``, which parses as nothing and
+    would otherwise fall through to the ``otlp`` catch-all.
     """
     import json as json_mod
 
     from compass.integrations import looks_like_codex_stream
 
     if path.is_dir():
-        return "pi"  # import_pi_sessions globs the directory for sessions
+        # A Harbor job dir holds <trial>/agent/trajectory.json; anything else
+        # with a directory of traces in it is pi (import_pi_sessions globs it).
+        for candidate in path.glob("**/trajectory.json"):
+            if _looks_like_atif_file(candidate):
+                return "atif"
+        return "pi"
 
     first_line = ""
     try:
@@ -1472,9 +1493,40 @@ def _detect_trace_format(path: Path) -> str | None:
             return "claude"
         if looks_like_codex_stream(obj):
             return "codex"
+    if _looks_like_atif_file(path, first_line=first_line, parsed=obj):
+        return "atif"
     if first_line[:1] in ("{", "["):
         return "otlp"
     return None
+
+
+# `schema_version` is ATIF's first field, so it lands well inside the head of any
+# machine-written trajectory, pretty-printed or not.
+_ATIF_HEAD_BYTES = 8192
+
+
+def _looks_like_atif_file(
+    path: Path, *, first_line: str | None = None, parsed: Any = None
+) -> bool:
+    """Whether a file is an ATIF trajectory, without parsing all of it.
+
+    A one-line document is settled by the parsed object. A pretty-printed one is
+    settled by finding the ``schema_version`` declaration in the file's head.
+    """
+    import re
+
+    from compass.integrations import looks_like_atif
+
+    if parsed is not None and looks_like_atif(parsed):
+        return True
+    if first_line is not None and first_line[:1] not in ("{", ""):
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(_ATIF_HEAD_BYTES)
+    except OSError:
+        return False
+    return bool(re.search(r'"schema_version"\s*:\s*"ATIF-', head))
 
 
 def _print_import_summary(transcripts: list["Transcript"]) -> None:
