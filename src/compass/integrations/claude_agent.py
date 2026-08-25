@@ -94,6 +94,7 @@ from compass.core.transcript import (
     ToolCall,
     Transcript,
 )
+from compass.integrations._common import as_dict, truncate, write_op
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,7 @@ class _Builder:
             elif bkind == "thinking":
                 thinking = getattr(block, "thinking", "") or ""
                 if thinking:
-                    self.transcript.add_reasoning_step(f"[thinking] {_truncate(thinking)}")
+                    self.transcript.add_reasoning_step(f"[thinking] {truncate(thinking)}")
             elif bkind == "tool_use":
                 self._open_tool_call(block, agent_name, parent)
                 self._track_subagent(block)
@@ -380,7 +381,7 @@ class _Builder:
         name = getattr(block, "name", "") or "unknown_tool"
         kwargs: dict[str, Any] = dict(
             tool_name=str(name),
-            input=_as_dict(getattr(block, "input", None)),
+            input=as_dict(getattr(block, "input", None)),
             status="ok",
             tool_type=_tool_type(str(name)),
             metadata={"parent_tool_use_id": parent} if parent else {},
@@ -418,7 +419,7 @@ class _Builder:
             if not self.transcript.input_prompt:
                 self.transcript.input_prompt = text
             elif text:
-                self.transcript.add_reasoning_step(f"[user] {_truncate(text)}")
+                self.transcript.add_reasoning_step(f"[user] {truncate(text)}")
             return
         for block in content or []:
             if _block_kind(block) == "tool_result":
@@ -434,7 +435,7 @@ class _Builder:
         call.output = result_text
         call.status = "error" if is_error else "ok"
         if is_error:
-            call.error = {"message": _truncate(result_text, 500)}
+            call.error = {"message": truncate(result_text, 500)}
             return  # a failed edit changed nothing
         self._record_state_delta(call, result_text)
 
@@ -461,7 +462,7 @@ class _Builder:
         call.state_delta.append(
             StateChange(
                 kind="file",
-                op=_FILE_EDIT_OPS.get(call.tool_name) or _write_op(result_text),
+                op=_FILE_EDIT_OPS.get(call.tool_name) or write_op(result_text),
                 target=target,
                 metadata=metadata,
             )
@@ -618,16 +619,6 @@ def _block_kind(block: Any) -> str:
     return "other"
 
 
-def _write_op(result_text: str) -> str:
-    """``create`` or ``update`` for a ``Write``, read off the tool's own result.
-
-    Write is the one editing tool that does both, and its input cannot tell them
-    apart — only the result says whether the file already existed. The check is
-    best-effort on the CLI's wording, defaulting to ``update`` (the file's
-    contents changed, which is true either way). Match on ``target`` rather than
-    ``op`` when you need certainty.
-    """
-    return "create" if "created" in (result_text or "").lower() else "update"
 
 
 def _tool_type(name: str) -> str:
@@ -815,13 +806,5 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    return {"value": value}
 
 
-def _truncate(text: str, limit: int = 4000) -> str:
-    return text if len(text) <= limit else text[:limit] + "…"

@@ -111,11 +111,11 @@ from typing import Any
 
 from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
+from compass.integrations._common import MAX_STEP_CHARS, as_dict, token_count
 
 logger = logging.getLogger(__name__)
 
 # Max characters kept for a single reasoning step / for a captured prompt.
-_MAX_STEP_CHARS = 4000
 _MAX_PROMPT_CHARS = 8000
 
 # Delegation can nest; a malformed file could nest it in a cycle. `visited`
@@ -541,7 +541,7 @@ def _emit_tool_calls(
 
         kwargs: dict[str, Any] = dict(
             tool_name=name,
-            input=_as_dict(raw.get("arguments")),
+            input=as_dict(raw.get("arguments")),
             # ATIF records no failure signal — see the module docstring.
             status="ok",
             tool_type=_tool_type(name),
@@ -803,9 +803,9 @@ def _step_tokens_cost(
     if not isinstance(metrics, dict):
         return None, None
 
-    prompt = _int(metrics.get("prompt_tokens"))
-    completion = _int(metrics.get("completion_tokens"))
-    cached = _int(metrics.get("cached_tokens"))
+    prompt = token_count(metrics.get("prompt_tokens"))
+    completion = token_count(metrics.get("completion_tokens"))
+    cached = token_count(metrics.get("cached_tokens"))
     fresh_input = max(0, prompt - cached)
 
     tokens: TokenUsage | None = None
@@ -891,7 +891,7 @@ def _record_timestamp(ctx: _Ctx, value: Any) -> None:
     """Collect a step timestamp as a *local* naive datetime.
 
     Local, not UTC, and naive, not aware, for the same two reasons pi's
-    ``_parse_iso`` is: the rest of Compass dates transcripts with naive local
+    ``_parse_iso_local`` is: the rest of Compass dates transcripts with naive local
     datetimes (``datetime.now()``), and a producer that mixes offset-carrying and
     offset-free timestamps in one file would otherwise make ``min()``/``max()``
     raise on the comparison. Dropping the offset instead of converting through it
@@ -909,21 +909,15 @@ def _record_timestamp(ctx: _Ctx, value: Any) -> None:
     )
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    """Coerce tool arguments into a dict (ATIF records them as an object)."""
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    return {"value": value}
 
 
-def _int(value: Any) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
 
 
-def _truncate(text: str, limit: int = _MAX_STEP_CHARS) -> str:
+def _truncate(text: str, limit: int = MAX_STEP_CHARS) -> str:
+    """Like :func:`_common.truncate`, but says how much was cut.
+
+    ATIF is the interchange format, so a step that was shortened on the way
+    in should say by how much — a reader comparing an ATIF import against
+    the vendor trace it came from can otherwise only see that text is gone.
+    """
     return text if len(text) <= limit else text[:limit] + f"… (+{len(text) - limit} chars)"

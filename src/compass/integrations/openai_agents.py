@@ -51,8 +51,13 @@ _TOOL_SPAN_TYPES = frozenset({"function"})
 _CONTEXT_SPAN_TYPES = frozenset({"agent", "turn"})
 
 
-def _parse_iso(value: Any) -> datetime | None:
-    """Parse an ISO-8601 timestamp string (tolerating a trailing 'Z')."""
+def _parse_iso_aware(value: Any) -> datetime | None:
+    """An ISO-8601 timestamp as written — offset kept when the string carries one.
+
+    Aware, unlike otlp's ``_parse_iso_naive`` and pi's ``_parse_iso_local``:
+    the spans this reads are only ever subtracted from each other, so the
+    offset cancels and there is nothing to normalize away.
+    """
     if not value or not isinstance(value, str):
         return None
     try:
@@ -329,8 +334,8 @@ class CompassTraceProcessor:
 
 def _timing(span: Any) -> tuple[float, float]:
     """Return (duration_ms, start_timestamp_epoch) from a span."""
-    start = _parse_iso(getattr(span, "started_at", None))
-    end = _parse_iso(getattr(span, "ended_at", None))
+    start = _parse_iso_aware(getattr(span, "started_at", None))
+    end = _parse_iso_aware(getattr(span, "ended_at", None))
     timestamp = start.timestamp() if start else 0.0
     if start and end:
         duration_ms = (end - start).total_seconds() * 1000.0

@@ -114,11 +114,11 @@ from compass.core.transcript import (
     ToolCall,
     Transcript,
 )
+from compass.integrations._common import as_dict, truncate
 
 logger = logging.getLogger(__name__)
 
 # Max characters kept for a single reasoning step.
-_MAX_STEP_CHARS = 4000
 
 # Codex item type -> (tool name, tool_type). The tool names are codex's own —
 # what the model actually calls — so a transcript reads the way the run did.
@@ -456,7 +456,7 @@ class CodexStreamReconstructor:
         if kind == "reasoning":
             text = str(item.get("text") or "")
             if text:
-                self._transcript.add_reasoning_step(f"[reasoning] {_truncate(text)}")
+                self._transcript.add_reasoning_step(f"[reasoning] {truncate(text)}")
             return
         if kind == "error":
             self._record_error("item", item.get("message"))
@@ -468,11 +468,11 @@ class CodexStreamReconstructor:
         # the turn's output and the run's final answer.
         text = str(item.get("text") or "")
         if text:
-            self._transcript.add_reasoning_step(f"[message] {_truncate(text)}")
+            self._transcript.add_reasoning_step(f"[message] {truncate(text)}")
             self._turn_message = text
 
     def _record_error(self, where: str, message: Any) -> None:
-        text = _truncate(str(message or "unknown error"), 500)
+        text = truncate(str(message or "unknown error"), 500)
         self._transcript.metadata.setdefault("errors", []).append(
             {"source": where, "message": text}
         )
@@ -575,7 +575,7 @@ def _apply_item(call: ToolCall, kind: str, item: dict[str, Any]) -> None:
         if failed:
             call.status = "error"
             call.error = {
-                "message": _truncate(str(call.output or ""), 500) or "command failed",
+                "message": truncate(str(call.output or ""), 500) or "command failed",
                 "exit_code": exit_code,
             }
         return
@@ -593,7 +593,7 @@ def _apply_item(call: ToolCall, kind: str, item: dict[str, Any]) -> None:
 
     if kind == "mcp_tool_call":
         call.tool_name = _mcp_tool_name(item)
-        call.input = _as_dict(item.get("arguments"))
+        call.input = as_dict(item.get("arguments"))
         if item.get("server"):
             call.metadata["server"] = item["server"]
         call.output = item.get("result")
@@ -674,17 +674,10 @@ def _usage_to_tokens_cost(
 
 def _error_message(error: Any) -> str:
     if isinstance(error, dict):
-        return _truncate(str(error.get("message") or error), 500)
-    return _truncate(str(error or "turn failed"), 500)
+        return truncate(str(error.get("message") or error), 500)
+    return truncate(str(error or "turn failed"), 500)
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    """Coerce tool arguments into a dict (codex records them as an object)."""
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    return {"value": value}
 
 
 def _relativize(raw_path: str, cwd: str) -> tuple[str, str]:
@@ -732,5 +725,3 @@ def _resolved(path: Path) -> Path:
         return path
 
 
-def _truncate(text: str, limit: int = _MAX_STEP_CHARS) -> str:
-    return text if len(text) <= limit else text[:limit] + "…"

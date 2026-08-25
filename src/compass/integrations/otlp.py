@@ -44,6 +44,7 @@ from typing import Any
 
 from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
+from compass.integrations._common import as_dict, opt_float, token_count
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +287,7 @@ def _span_time(raw: dict[str, Any], nano_key: str, iso_key: str) -> float:
     if iso_key in raw and raw[iso_key] is not None:
         val = raw[iso_key]
         if isinstance(val, str):
-            dt = _parse_iso(val)
+            dt = _parse_iso_naive(val)
             return dt.timestamp() if dt else 0.0
         return _num_to_seconds(val)
     return 0.0
@@ -376,9 +377,9 @@ def _add_llm_call(
     transcript: Transcript, span: _Span, by_id: dict[str, _Span], *, embedding: bool
 ) -> None:
     model = span.attrs.get(_EMBED_MODEL if embedding else _LLM_MODEL) or span.attrs.get(_LLM_MODEL)
-    prompt_tok = _int(span.attrs.get(_TOK_PROMPT))
-    completion_tok = _int(span.attrs.get(_TOK_COMPLETION))
-    total_tok = _int(span.attrs.get(_TOK_TOTAL)) or (prompt_tok + completion_tok)
+    prompt_tok = token_count(span.attrs.get(_TOK_PROMPT))
+    completion_tok = token_count(span.attrs.get(_TOK_COMPLETION))
+    total_tok = token_count(span.attrs.get(_TOK_TOTAL)) or (prompt_tok + completion_tok)
 
     tokens = None
     if prompt_tok or completion_tok or total_tok:
@@ -392,7 +393,7 @@ def _add_llm_call(
             input_tokens=prompt_tok,
             output_tokens=completion_tok,
             total_tokens=total_tok,
-            cache_read_tokens=_int(span.attrs.get(_TOK_CACHE_READ)),
+            cache_read_tokens=token_count(span.attrs.get(_TOK_CACHE_READ)),
         )
 
     cost = _cost(span.attrs, model, prompt_tok, completion_tok)
@@ -411,7 +412,7 @@ def _add_llm_call(
     transcript.tool_calls.append(
         ToolCall(
             tool_name="llm.embedding" if embedding else "llm.generation",
-            input=_as_dict(_coerce(span.attrs.get(_INPUT)) or _input_messages(span.attrs)),
+            input=as_dict(_coerce(span.attrs.get(_INPUT)) or _input_messages(span.attrs)),
             output=_to_text(_coerce(span.attrs.get(_OUTPUT))) or None,
             status="error" if span.is_error else "ok",
             duration_ms=_duration_ms(span),
@@ -434,7 +435,7 @@ def _add_tool_call(transcript: Transcript, span: _Span, by_id: dict[str, _Span])
     transcript.tool_calls.append(
         ToolCall(
             tool_name=str(name),
-            input=_as_dict(tool_input),
+            input=as_dict(tool_input),
             output=_coerce(span.attrs.get(_OUTPUT)),
             status="error" if span.is_error else "ok",
             duration_ms=_duration_ms(span),
@@ -451,7 +452,7 @@ def _add_retriever_call(transcript: Transcript, span: _Span, by_id: dict[str, _S
     transcript.tool_calls.append(
         ToolCall(
             tool_name=span.name or "retriever",
-            input=_as_dict(_coerce(span.attrs.get(_INPUT))),
+            input=as_dict(_coerce(span.attrs.get(_INPUT))),
             output=documents if documents else _coerce(span.attrs.get(_OUTPUT)),
             status="error" if span.is_error else "ok",
             duration_ms=_duration_ms(span),
@@ -575,8 +576,8 @@ def _cost(
             meta["model"] = model
         return CostInfo(
             total_usd=_float(total),
-            input_cost_usd=_opt_float(attrs.get(_COST_PROMPT)),
-            output_cost_usd=_opt_float(attrs.get(_COST_COMPLETION)),
+            input_cost_usd=opt_float(attrs.get(_COST_PROMPT)),
+            output_cost_usd=opt_float(attrs.get(_COST_COMPLETION)),
             metadata=meta,
         )
     if model:
@@ -602,12 +603,6 @@ def _coerce(value: Any) -> Any:
     return value
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    return {"value": value}
 
 
 def _to_text(value: Any) -> str:
@@ -631,11 +626,6 @@ def _to_text(value: Any) -> str:
     return str(value)
 
 
-def _int(value: Any) -> int:
-    try:
-        return int(value) if value is not None else 0
-    except (TypeError, ValueError):
-        return 0
 
 
 def _float(value: Any) -> float:
@@ -645,14 +635,10 @@ def _float(value: Any) -> float:
         return 0.0
 
 
-def _opt_float(value: Any) -> float | None:
-    try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
-def _parse_iso(value: str) -> datetime | None:
+def _parse_iso_naive(value: str) -> datetime | None:
+    """An ISO-8601 timestamp with its offset dropped, not converted through."""
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     except (ValueError, TypeError):

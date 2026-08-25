@@ -76,11 +76,11 @@ from compass.core.transcript import (
     ToolCall,
     Transcript,
 )
+from compass.integrations._common import as_dict, opt_float, truncate, write_op
 
 logger = logging.getLogger(__name__)
 
 # Max characters kept for a single reasoning step (thinking blocks can be huge).
-_MAX_STEP_CHARS = 4000
 
 # pi's file-editing tools -> the tool-input key holding the path they change.
 # Only these produce a StateChange: `read`/`ls`/`glob` change nothing, and
@@ -421,17 +421,17 @@ def _handle_meta_entry(transcript: Transcript, entry: dict[str, Any]) -> bool:
     elif etype == "thinking_level_change":
         transcript.metadata["thinking_level"] = entry.get("thinkingLevel")
     elif etype == "compaction":
-        summary = _truncate(str(entry.get("summary", "")))
+        summary = truncate(str(entry.get("summary", "")))
         transcript.add_reasoning_step(f"[compaction] {summary}")
         transcript.metadata.setdefault("compactions", []).append(
             {"summary": summary, "tokens_before": entry.get("tokensBefore")}
         )
     elif etype == "branch_summary":
-        summary = _truncate(str(entry.get("summary", "")))
+        summary = truncate(str(entry.get("summary", "")))
         transcript.add_reasoning_step(f"[branch_summary] {summary}")
     elif etype in ("custom", "custom_message"):
         ctype = entry.get("customType", "custom")
-        body = _truncate(_content_to_text(entry.get("content", "")))
+        body = truncate(_content_to_text(entry.get("content", "")))
         transcript.add_reasoning_step(f"[{ctype}] {body}")
     elif etype == "session_info":
         name = entry.get("name")
@@ -462,7 +462,7 @@ def _handle_message(
         if not transcript.input_prompt:
             transcript.input_prompt = text
         elif text:
-            transcript.add_reasoning_step(f"[user] {_truncate(text)}")
+            transcript.add_reasoning_step(f"[user] {truncate(text)}")
         return None, None
 
     if role == "assistant":
@@ -504,7 +504,7 @@ def _handle_assistant(
         elif btype == "thinking":
             thinking = block.get("thinking", "")
             if thinking:
-                transcript.add_reasoning_step(f"[thinking] {_truncate(thinking)}")
+                transcript.add_reasoning_step(f"[thinking] {truncate(thinking)}")
         elif btype == "toolCall":
             tool_blocks.append(block)
 
@@ -539,7 +539,7 @@ def _handle_assistant(
         call_id = str(block.get("id") or "")
         kwargs: dict[str, Any] = dict(
             tool_name=block.get("name") or "unknown_tool",
-            input=_as_dict(block.get("arguments")),
+            input=as_dict(block.get("arguments")),
             status="ok",
             timestamp=ts,
             tool_type="function",
@@ -575,7 +575,7 @@ def _handle_tool_result(
             output=result_text,
             status="error" if is_error else "ok",
             timestamp=result_ts,
-            error={"message": _truncate(result_text, 500)} if is_error else None,
+            error={"message": truncate(result_text, 500)} if is_error else None,
             tool_type="function",
         )
         if call_id:
@@ -586,7 +586,7 @@ def _handle_tool_result(
     tc.output = result_text
     tc.status = "error" if is_error else "ok"
     if is_error:
-        tc.error = {"message": _truncate(result_text, 500)}
+        tc.error = {"message": truncate(result_text, 500)}
     if details is not None:
         tc.metadata["details"] = details
     call_ts = tc.metadata.pop("call_ts", None)
@@ -621,7 +621,7 @@ def _record_state_delta(
     call.state_delta.append(
         StateChange(
             kind="file",
-            op=_FILE_EDIT_OPS.get(call.tool_name) or _write_op(result_text),
+            op=_FILE_EDIT_OPS.get(call.tool_name) or write_op(result_text),
             target=target,
             metadata=metadata,
         )
@@ -654,16 +654,6 @@ def _relativize(raw_path: str, cwd: str) -> tuple[str, str]:
     return str(path), str(path)
 
 
-def _write_op(result_text: str) -> str:
-    """``create`` or ``update`` for a ``write``, read off the tool's own result.
-
-    ``write`` is the one editing tool that does both, and its input cannot tell
-    them apart. pi's success message ("Successfully wrote N bytes to X") does not
-    distinguish either, so this defaults to ``update`` — true either way, since
-    the contents changed. Match on ``target`` rather than ``op`` when you need
-    certainty.
-    """
-    return "create" if "created" in (result_text or "").lower() else "update"
 
 
 def _finalize(
@@ -678,7 +668,7 @@ def _finalize(
         transcript.environment.model_version = last_model
 
     # Timing: prefer the session header start + last message timestamp.
-    start = _parse_iso(header.get("timestamp"))
+    start = _parse_iso_local(header.get("timestamp"))
     if start:
         transcript.start_time = start
         if end_ts:
@@ -849,8 +839,8 @@ def _usage_to_tokens_cost(
     if isinstance(native, dict) and native.get("total"):
         cost = CostInfo(
             total_usd=float(native.get("total", 0.0)),
-            input_cost_usd=_opt_float(native.get("input")),
-            output_cost_usd=_opt_float(native.get("output")),
+            input_cost_usd=opt_float(native.get("input")),
+            output_cost_usd=opt_float(native.get("output")),
             metadata={"model": model, "source": "pi"} if model else {"source": "pi"},
         )
     elif model:
@@ -891,13 +881,6 @@ def _content_to_text(content: Any) -> str:
     return ""
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    """Coerce tool arguments into a dict (pi records them as an object)."""
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    return {"value": value}
 
 
 def _ms_to_epoch(ms: Any) -> float:
@@ -917,7 +900,7 @@ def _last_message_epoch(entries: list[dict[str, Any]]) -> float:
     return 0.0
 
 
-def _parse_iso(value: Any) -> datetime | None:
+def _parse_iso_local(value: Any) -> datetime | None:
     """A pi ISO timestamp as a *local* naive datetime.
 
     Local, not UTC, because the other end of the same subtraction comes from
@@ -936,14 +919,5 @@ def _parse_iso(value: Any) -> datetime | None:
     return parsed.astimezone().replace(tzinfo=None)
 
 
-def _opt_float(value: Any) -> float | None:
-    try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
-def _truncate(text: str, limit: int = _MAX_STEP_CHARS) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "…"
