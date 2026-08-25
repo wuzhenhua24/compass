@@ -102,13 +102,13 @@ expected:
 
 > `expected:` 下的**未知键会直接报错**，不会被静默忽略——拼错 `contian:` 却报告「通过」是最糟的一类评测 bug。需要上面覆盖不了的断言时，写自定义 grader 或用 `external_checker`。
 
-## 内置 grader 速查（42 个）
+## 内置 grader 速查（43 个）
 
 **scope 决定它能不能从有损轨迹重评**：`transcript` 域在 JSONL 上完整；`outcome` / `both` 域需要 `--trace-format json`。
 
 | scope | grader |
 |---|---|
-| **transcript**（过程，跨 Agent 通用） | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `skill_trigger` `trajectory_judge`(model) |
+| **transcript**（过程，跨 Agent 通用） | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `skill_trigger` `dangerous_operations` `trajectory_judge`(model) |
 | **both** | `efficiency` `reasoning_trace` `self_correction` `groundedness`(model) `external_checker` |
 | **outcome · 通用** | `exact_match` `json_schema` `structure_check` `style_convention` `sql_syntax` |
 | **outcome · 代码** | `exit_code_check` `test_runner` `integration_test` `lint` `type_check` `security_scan` `diff_accuracy` `diff_size` |

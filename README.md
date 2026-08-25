@@ -177,7 +177,7 @@ uv run compass --help
 
 ```bash
 uv pip install -e /path/to/compass     # 可编辑安装，Compass 更新后无需重装
-compass list                           # 验证：应列出 42 个 grader 和 6 个 adapter
+compass list                           # 验证：应列出 43 个 grader 和 6 个 adapter
 ```
 
 ## 快速开始
@@ -306,9 +306,9 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 
 | 主题 | 内容 | 文档 |
 |------|------|------|
-| **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、42 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
+| **速查表** | 一页读完就能写出正确的 scenario 和 grader：YAML 全字段、43 个内置评分器、常用配方、易踩的语义坑 | [docs/cheatsheet.md](docs/cheatsheet.md) |
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
-| **Grader 体系** | 三层体系（Code/Model/Human）、全部 42 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
+| **Grader 体系** | 三层体系（Code/Model/Human）、全部 43 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
 | **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、`compass insights` 有据可依的 LLM 结论（逐条拿数据核，核不过就丢）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
 | **接入外部 Agent** | OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK / ATIF·Harbor 轨迹导入、Claude Code · pi · Codex 三个 CLI Adapter（真实仓库上评编程 Agent，同一份判分契约下跨栈对比）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |

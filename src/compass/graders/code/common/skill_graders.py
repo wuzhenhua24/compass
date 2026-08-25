@@ -36,9 +36,6 @@ and all.
 
 from __future__ import annotations
 
-import re
-import shlex
-from collections.abc import Iterator
 from typing import Any
 
 from compass.core.skills import resolve_skill_name
@@ -49,55 +46,30 @@ from compass.graders.base import (
     GraderScope,
     GraderType,
 )
+from compass.graders.code.common.toolcalls import (
+    EVIDENCE_CHARS as _EVIDENCE_CHARS,
+)
+from compass.graders.code.common.toolcalls import (
+    SHELL_TOOLS as _SHELL_TOOLS,
+)
+from compass.graders.code.common.toolcalls import (
+    WRITE_TOOLS as _WRITE_TOOLS,
+)
+from compass.graders.code.common.toolcalls import (
+    input_strings as _strings,
+)
+from compass.graders.code.common.toolcalls import (
+    last_segment as _last_segment,
+)
+from compass.graders.code.common.toolcalls import (
+    shell_targets as _shell_targets,
+)
 from compass.graders.registry import register_grader
-
-# How deep into a tool call's input to look for strings. Claude Code's are
-# shallow ({"file_path": ...}); an MCP tool's can nest a level or two.
-_MAX_INPUT_DEPTH = 4
 
 # The last segment of a tool name, lowercased, that means "the agent asked for
 # a skill by name" rather than "the agent read a file that happens to live in
 # one". Namespaced tools (``mcp__x__Skill``) reduce to the same segment.
 _SKILL_TOOL_NAMES = frozenset({"skill", "skills"})
-
-# Longest matched string kept as evidence, per match.
-_EVIDENCE_CHARS = 200
-
-# Tools whose whole job is to change a file. Reaching into the skill's
-# directory with one of these is *editing the skill*, not loading it — an agent
-# asked to improve a skill rewrites its SKILL.md without ever using it, and
-# counting that as a trigger turns "the skill got edited" into "the skill
-# fired". Matched on the tool name's last segment, like ``Skill`` itself.
-_WRITE_TOOLS = frozenset(
-    {
-        "write", "edit", "multiedit", "notebookedit", "apply_patch",
-        "create_file", "write_file", "edit_file", "delete", "delete_file",
-    }
-)
-
-# Tools that carry a shell command line, which has to be read as a command
-# rather than as a bag of strings — see :func:`_shell_targets`.
-_SHELL_TOOLS = frozenset(
-    {
-        "bash", "shell", "sh", "zsh", "exec", "run", "terminal", "local_shell",
-        "command_execution", "run_command", "execute_command", "run_terminal_cmd",
-    }
-)
-
-# Commands whose path arguments are things they destroy or move, not things
-# they read. ``cp`` is deliberately absent: its source argument really is read.
-_DESTRUCTIVE = frozenset({"rm", "rmdir", "unlink", "mv", "shred", "truncate", "tee"})
-
-# Commands after which a bare ``NAME=value`` is still an assignment.
-_EXPORTERS = frozenset({"export", "declare", "local", "typeset", "readonly", "set"})
-
-# Control operators shlex hands back as their own tokens. Each one starts a new
-# command, so the destructive/assignment state resets.
-_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")", "{", "}", "\n"})
-
-_REDIRECT_RE = re.compile(r"^\d*(?:>>?|&>>?|>&)$")
-_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
-_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
 @register_grader("skill_trigger")
@@ -423,87 +395,7 @@ def _by_intent(tool: str, texts: list[str]) -> tuple[list[str], list[str]]:
     return reads, writes
 
 
-def _shell_targets(command: str) -> tuple[list[str], list[str]]:
-    """(read, written) paths in one shell command line, variables resolved.
 
-    Two things this buys over searching the raw string. ``VAR=`` assignments are
-    followed, so ``D=.claude/skills/rw; cat $D/SKILL.md`` is recognized as the
-    read it is. And redirect targets and the arguments of ``rm``/``mv``/``tee``
-    land on the written side, so rewriting or deleting the skill stops reading
-    as loading it.
-
-    Deliberately shallow. There is no substitution, no globbing, no following
-    of a script that a command runs — a shell is not something to reimplement
-    inside a grader. A command that will not tokenize is handed back whole, on
-    the read side, which is exactly the behaviour this replaced: the fallback
-    keeps the old false positive rather than inventing a new false negative.
-    """
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        return [command], []
-
-    assignments: dict[str, str] = {}
-    reads: list[str] = []
-    writes: list[str] = []
-    at_command_start = True
-    taking_assignments = True
-    destructive = False
-    redirecting = False
-
-    for token in tokens:
-        if token in _SEPARATORS:
-            at_command_start = taking_assignments = True
-            destructive = redirecting = False
-            continue
-        if _REDIRECT_RE.match(token):
-            redirecting = True
-            continue
-
-        assignment = _ASSIGN_RE.match(token) if taking_assignments else None
-        if assignment and not redirecting:
-            assignments[assignment.group(1)] = _expand(assignment.group(2), assignments)
-            continue
-
-        expanded = _expand(token, assignments)
-        if redirecting:
-            writes.append(expanded)
-            redirecting = False
-            continue
-        if at_command_start:
-            at_command_start = False
-            command_word = expanded.rsplit("/", 1)[-1]
-            taking_assignments = command_word in _EXPORTERS
-            destructive = command_word in _DESTRUCTIVE
-            reads.append(expanded)
-            continue
-        (writes if destructive else reads).append(expanded)
-
-    return reads, writes
-
-
-def _expand(text: str, assignments: dict[str, str]) -> str:
-    """Substitute ``$VAR`` / ``${VAR}`` from *assignments*.
-
-    A variable the command line never set is left as written. Expanding it to
-    the empty string would splice unrelated path pieces together and could
-    manufacture a match that never happened.
-    """
-    if "$" not in text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1) or match.group(2)
-        return assignments.get(name, match.group(0))
-
-    return _VAR_RE.sub(replace, text)
-
-
-def _last_segment(tool_name: str) -> str:
-    """The bare tool name behind any namespacing (``mcp__x__Bash`` -> ``bash``)."""
-    return tool_name.replace("__", ".").replace(":", ".").rsplit(".", 1)[-1].strip().lower()
 
 
 def _fragments(skill: str, extra_path: str) -> list[str]:
@@ -546,19 +438,6 @@ def _mentions_resource(
         return True
     return any(f"{fragment}{resource}" in text for fragment in fragments)
 
-
-def _strings(value: Any, depth: int = 0) -> Iterator[str]:
-    """Every string inside a tool call's input, to a bounded depth."""
-    if depth > _MAX_INPUT_DEPTH:
-        return
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _strings(item, depth + 1)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _strings(item, depth + 1)
 
 
 def _reasoning(

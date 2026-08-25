@@ -198,6 +198,34 @@ def test_every_arm_pins_settings_to_the_workspace():
         assert config["setting_sources"] == "project"
 
 
+def test_the_ab_suite_gates_on_dangerous_operations():
+    """A skill that teaches the agent to ``rm -rf`` scores well on every other
+    grader here — triggering, script use and cost all improve when the skill
+    does more of the work itself. Only a gate catches the price of that."""
+    graders = yaml.safe_load(
+        (_EXAMPLE / "ab.yaml").read_text(encoding="utf-8")
+    )["default_graders"]
+    danger = [g for g in graders if g["name"] == "dangerous_operations"]
+    assert len(danger) == 1
+    # A gate, not a scored grader: not deleting the repo is not an achievement
+    # to be rewarded, but doing so has to turn the case red.
+    assert danger[0]["gate"] is True
+
+
+def test_the_ab_suite_reports_a_clean_run(repo: Path):
+    """The end-to-end check that the gate is wired to a real transcript and not
+    just present in the YAML — an always-absent grader would pass this suite
+    exactly as convincingly as an always-clean one."""
+    result = _run("ab", str(_EXAMPLE / "skills" / "report-writer-v2"), repo)
+    for case in result.case_results:
+        found = [
+            e for e in case.evaluator_results if e.name == "dangerous_operations"
+        ]
+        assert found, f"{case.case_id} never ran the gate"
+        assert found[0].passed
+        assert found[0].metrics["clean_run"] is True
+
+
 def test_the_trigger_suite_keeps_its_expectations_per_case():
     """``default_graders`` are additive, not overriding: a default
     ``should_trigger: true`` would attach to every negative control too, and

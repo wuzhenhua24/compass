@@ -17,7 +17,7 @@ checkout, `uv sync` only puts it in `.venv`.
 # Install dependencies
 uv sync
 
-# Run all tests (2044 as of now; keep them green)
+# Run all tests (2272 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file
@@ -189,5 +189,5 @@ cases:
  - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
  - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——cheatsheet.md（单页速查，agent 入口）、core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）、skills.md（Agent Skill 评测）、roadmap.md（路线图归档）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
  - 这 8 份专题文档同时是 `compass docs <topic>` 的内容源，且在 pyproject 的 `force-include` 里逐个打进 wheel。**新增专题文档要三处同步**：`src/compass/docs_index.py` 的 TOPICS、pyproject 的 force-include、README 导航表——漏掉任一处，装出来的包就读不到它。
- - 改评分器数量时记得同步：README 导航表两处、docs/graders.md 的"全部 N 个"与其表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 42）。
+ - 改评分器数量时记得同步：README 导航表两处、docs/graders.md 的"全部 N 个"与其表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 43）。
  - docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 等是本地参考资料（gitignore），专题 *.md 文档是版本库的一部分。

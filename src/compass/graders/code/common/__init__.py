@@ -1,5 +1,8 @@
 """Common graders shared across different agent types."""
 
+from compass.graders.code.common.danger import (
+    DangerousOperationsGrader,
+)
 from compass.graders.code.common.exact import (
     ExactMatchGrader,
 )
@@ -29,6 +32,8 @@ from compass.graders.code.common.transcript_graders import (
 )
 
 __all__ = [
+    # Dangerous-op execution
+    "DangerousOperationsGrader",
     # Exact match
     "ExactMatchGrader",
     # External process graders
