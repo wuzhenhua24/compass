@@ -405,3 +405,173 @@ async def test_running_a_bundled_script_is_still_a_load():
 
     assert result.details["triggered"] is True
     assert result.metrics["skill_write_calls"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# acceptable_skills: when more than one skill is a right answer
+#
+# In a repo with several skills, "report-writer or doc-writer, either is fine"
+# is a legitimate expectation — and scoring it as a miss would push whoever
+# wrote the case toward deleting it, which is how a suite quietly loses its
+# hardest routing questions.
+# ---------------------------------------------------------------------------
+
+DOC_ROOT = "/tmp/wt_ab12/.claude/skills/doc-writer"
+
+
+async def test_an_accepted_alternate_counts_as_correct_routing():
+    context = _context([_read(f"{DOC_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.passed is True
+    assert result.details["triggered"] is True
+    assert result.details["matched_skill"] == "doc-writer"
+
+
+async def test_the_alternate_does_not_hide_that_the_skill_lost_the_routing():
+    """The A/B question survives the widening: `skill_triggered` says the
+    routing was acceptable, `skill_primary_triggered` says who won it."""
+    context = _context([_read(f"{DOC_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.metrics["skill_triggered"] is True
+    assert result.metrics["skill_primary_triggered"] is False
+    assert "skill_alternate" in result.tags
+
+
+async def test_the_primary_is_reported_even_when_an_alternate_went_first():
+    context = _context(
+        [_read(f"{DOC_ROOT}/SKILL.md", turn=1), _read(f"{SKILL_ROOT}/SKILL.md", turn=3)]
+    )
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.details["matched_skill"] == "report-writer"
+    assert result.metrics["skill_primary_triggered"] is True
+    assert "skill_alternate" not in result.tags
+
+
+async def test_an_unrelated_skill_is_still_a_miss():
+    context = _context([_read("/tmp/wt_ab12/.claude/skills/chart-maker/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.passed is False
+    assert result.details["matched_skill"] == ""
+    assert "not_triggered" in result.failure_tags
+
+
+async def test_the_skill_tool_can_name_an_alternate():
+    context = _context(
+        [ToolCall(tool_name="Skill", input={"skill": "doc-writer"}, turn_index=1)]
+    )
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.details["matched_skill"] == "doc-writer"
+    assert result.details["signals"] == ["skill_tool"]
+
+
+async def test_the_metric_is_absent_when_no_alternates_are_configured():
+    """`skill_triggered` alone is the whole answer then; a second metric that
+    always duplicates it would just be noise in every compare."""
+    context = _context([_read(f"{SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert "skill_primary_triggered" not in result.metrics
+
+
+async def test_the_primarys_resources_are_not_held_against_an_alternate():
+    """`required_resources` name files bundled with the skill under test. When
+    an accepted neighbour answered, there is nothing to check — not a
+    checklist of failures."""
+    context = _context([_read(f"{DOC_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer",
+        acceptable_skills=["doc-writer"],
+        required_resources=["scripts/render.py"],
+    ).grade(context)
+
+    assert result.passed is True
+    assert result.details["resources"] == {}
+    assert "resource_unused" not in result.failure_tags
+    assert "skill_resources_used" not in result.metrics
+
+
+async def test_the_resources_are_still_checked_when_the_skill_itself_answered():
+    context = _context([_read(f"{SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer",
+        acceptable_skills=["doc-writer"],
+        required_resources=["scripts/render.py"],
+    ).grade(context)
+
+    assert result.passed is False
+    assert result.details["resources"] == {"scripts/render.py": False}
+    assert "resource_unused" in result.failure_tags
+
+
+async def test_a_negative_control_rejects_the_list_rather_than_ignoring_it():
+    """It would silently do nothing here, and a config that measures nothing
+    must not read as an agent that behaved."""
+    context = _context([_read(f"{SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"], should_trigger=False
+    ).grade(context)
+
+    assert result.score is None
+    assert "should_trigger" in result.error
+
+
+async def test_an_alternate_given_as_a_directory_resolves_to_its_real_name(tmp_path: Path):
+    source = tmp_path / "doc-writer-v7"
+    source.mkdir()
+    (source / "SKILL.md").write_text(
+        "---\nname: doc-writer\ndescription: x\n---\n", encoding="utf-8"
+    )
+    context = _context([_read(f"{DOC_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=[str(source)]
+    ).grade(context)
+
+    assert result.details["acceptable_skills"] == ["doc-writer"]
+    assert result.details["matched_skill"] == "doc-writer"
+
+
+async def test_listing_the_skill_itself_is_harmless():
+    context = _context([_read(f"{SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["report-writer", "doc-writer"]
+    ).grade(context)
+
+    assert result.details["matched_skill"] == "report-writer"
+    assert result.metrics["skill_primary_triggered"] is True
+
+
+async def test_editing_an_alternate_is_no_more_a_load_than_editing_the_primary():
+    context = _context([_bash(f"echo x > {DOC_ROOT}/SKILL.md")])
+
+    result = await _grader(
+        skill="report-writer", acceptable_skills=["doc-writer"]
+    ).grade(context)
+
+    assert result.details["triggered"] is False
+    assert result.details["writes"][0]["match"].endswith("doc-writer/SKILL.md")

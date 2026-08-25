@@ -113,11 +113,22 @@ class SkillTriggerGrader(CodeGrader):
                 arm has no installed skill to inherit the name from.
         should_trigger: bool — ``True`` (default) to require the load,
                 ``False`` for a negative control that must *not* load it.
+        acceptable_skills: list[str] — other skills whose load also counts as
+                correct routing, for a prompt more than one skill may rightly
+                answer. Only meaningful with ``should_trigger: true``; see
+                below.
         required_resources: list[str] — bundled files that must have been used,
                 relative to the skill root (``scripts/render.py``). Each is a
                 check of its own.
         path:   str  — an extra path fragment that counts as the skill's, for a
                 skill installed somewhere Compass did not put it.
+
+    ``acceptable_skills`` splits one question into two, and both are reported.
+    ``skill_triggered`` becomes *was the routing acceptable*, while
+    ``skill_primary_triggered`` stays *did the skill under test win it* — which
+    is the one an A/B between two versions of that skill is actually asking.
+    Collapsing them would make a version that lost every routing decision to a
+    neighbour look identical to one that won them all.
     """
 
     name = "skill_trigger"
@@ -128,6 +139,11 @@ class SkillTriggerGrader(CodeGrader):
         super().__init__(config)
         self.skill: str = str(self.config.get("skill", "") or "")
         self.should_trigger: bool = bool(self.config.get("should_trigger", True))
+        self.acceptable_skills: list[str] = [
+            name
+            for raw in self.config.get("acceptable_skills", [])
+            if (name := resolve_skill_name(str(raw)))
+        ]
         self.required_resources: list[str] = [
             str(r).strip().lstrip("./")
             for r in self.config.get("required_resources", [])
@@ -148,20 +164,42 @@ class SkillTriggerGrader(CodeGrader):
                 "adapter that installs one."
             )
 
+        if self.acceptable_skills and not self.should_trigger:
+            return self._unmeasured(
+                "acceptable_skills only means something with should_trigger: "
+                "true — it names the skills that would *also* be correct "
+                "routing. A negative control asks the opposite question, so "
+                "the list would silently do nothing here. Drop it, or give "
+                "the skill you mean to forbid its own `skill:`."
+            )
+
         fragments = _fragments(skill, self.path)
-        touches, writes = _scan(context.tool_calls, skill, fragments)
+        # Primary first: it is what `matched_skill` reports when more than one
+        # accepted skill was loaded, and `path` belongs to it alone.
+        candidates = [(skill, fragments)] + [
+            (name, _fragments(name, "")) for name in self.acceptable_skills if name != skill
+        ]
+        touches, writes = _scan(context.tool_calls, candidates)
 
         triggered = bool(touches)
+        primary = [t for t in touches if t.skill == skill]
+        # Routing went to a neighbour we said we would accept. Correct, and not
+        # the same thing as the skill under test winning.
+        alternate_only = triggered and not primary
+
         checks: list[tuple[str, bool]] = [("triggered", triggered == self.should_trigger)]
         failure_tags: list[str] = []
         if triggered != self.should_trigger:
             failure_tags.append("not_triggered" if self.should_trigger else "unexpected_trigger")
 
         resources: dict[str, bool] = {}
-        for resource in self.required_resources:
+        # `required_resources` name files bundled with the *primary* skill, so
+        # when an accepted alternate answered instead there is nothing to check
+        # — not a checklist of failures. Not measured is not measured as zero.
+        for resource in self.required_resources if not alternate_only else []:
             used = any(
                 _mentions_resource(text, skill, resource, fragments)
-                for touch in touches
+                for touch in primary
                 for text in touch.texts
             )
             resources[resource] = used
@@ -180,14 +218,21 @@ class SkillTriggerGrader(CodeGrader):
         }
         if triggered:
             metrics["skill_trigger_turn"] = float(touches[0].turn)
-        if self.required_resources:
+        if self.required_resources and not alternate_only:
             metrics["skill_resources_used"] = float(sum(resources.values()))
+        if self.acceptable_skills:
+            # `skill_triggered` has widened to "the routing was acceptable".
+            # This is the one that still answers "did *this* skill win it",
+            # which is what an A/B between two of its versions compares.
+            metrics["skill_primary_triggered"] = bool(primary)
 
         tags = [f"skill_via_{s}" for s in signals]
         if writes and not triggered:
             # The one case where a reader would otherwise be misled: the agent
             # was all over the skill's directory and still never loaded it.
             tags.append("skill_write_only")
+        if alternate_only:
+            tags.append("skill_alternate")
 
         return GradeResult(
             name=self.name,
@@ -199,6 +244,14 @@ class SkillTriggerGrader(CodeGrader):
                 "skill": skill,
                 "should_trigger": self.should_trigger,
                 "triggered": triggered,
+                # Which accepted skill answered. The primary whenever it loaded
+                # at all — even if an alternate got there first — so a reader
+                # never has to work out whether one stood in for it. Ordering
+                # is still in `evidence` and `skill_trigger_turn`.
+                "matched_skill": (
+                    skill if primary else (touches[0].skill if touches else "")
+                ),
+                "acceptable_skills": self.acceptable_skills,
                 "signals": signals,
                 "resources": resources,
                 # The grader's verdict is only as useful as what backs it up:
@@ -220,7 +273,12 @@ class SkillTriggerGrader(CodeGrader):
             metrics=metrics,
             failure_tags=failure_tags,
             reasoning=_reasoning(
-                skill, triggered, self.should_trigger, resources, bool(writes)
+                skill,
+                triggered,
+                self.should_trigger,
+                resources,
+                bool(writes),
+                touches[0].skill if alternate_only else "",
             ),
         )
 
@@ -256,29 +314,39 @@ class SkillTriggerGrader(CodeGrader):
 
 
 class _Touch:
-    """One tool call that reached into the skill."""
+    """One tool call that reached into a skill, and which one."""
 
-    __slots__ = ("tool", "turn", "signal", "evidence", "texts")
+    __slots__ = ("tool", "turn", "signal", "evidence", "texts", "skill")
 
     def __init__(
-        self, tool: str, turn: int, signal: str, evidence: str, texts: list[str]
+        self,
+        tool: str,
+        turn: int,
+        signal: str,
+        evidence: str,
+        texts: list[str],
+        skill: str,
     ) -> None:
         self.tool = tool
         self.turn = turn
         self.signal = signal
         self.evidence = evidence
         self.texts = texts
+        self.skill = skill
 
 
 def _scan(
-    tool_calls: list[Any], skill: str, fragments: list[str]
+    tool_calls: list[Any], candidates: list[tuple[str, list[str]]]
 ) -> tuple[list[_Touch], list[_Touch]]:
-    """(loads, writes) — calls that opened the skill, and calls that changed it.
+    """(loads, writes) — calls that opened a skill, and calls that changed it.
 
-    Both are "the call mentioned a path inside the skill", and the difference
-    between them is the whole point: a run that rewrote ``SKILL.md`` and never
-    read it did not load the skill, and reporting it as a trigger would make an
-    edit look like a hit.
+    *candidates* is ``(name, fragments)`` per accepted skill, primary first, so
+    a call that names two of them is attributed to the one under test.
+
+    Both lists are "the call mentioned a path inside a skill", and the
+    difference between them is the whole point: a run that rewrote ``SKILL.md``
+    and never read it did not load the skill, and reporting it as a trigger
+    would make an edit look like a hit.
     """
     loads: list[_Touch] = []
     writes: list[_Touch] = []
@@ -289,28 +357,48 @@ def _scan(
         turn = int(turn_index) if turn_index is not None else index
 
         if _is_skill_tool(tool):
-            named = next((t for t in texts if _names_skill(t, skill)), "")
-            if named:
-                loads.append(_Touch(tool, turn, "skill_tool", named[:_EVIDENCE_CHARS], texts))
+            name, named = _first_named(texts, candidates)
+            if name:
+                loads.append(
+                    _Touch(tool, turn, "skill_tool", named[:_EVIDENCE_CHARS], texts, name)
+                )
                 continue
 
         read_texts, write_texts = _by_intent(tool, texts)
-        read_hit = _first_hit(read_texts, fragments)
-        if read_hit:
-            loads.append(_Touch(tool, turn, "file", read_hit[:_EVIDENCE_CHARS], read_texts))
+        name, hit = _first_hit(read_texts, candidates)
+        if name:
+            loads.append(
+                _Touch(tool, turn, "file", hit[:_EVIDENCE_CHARS], read_texts, name)
+            )
             continue
-        write_hit = _first_hit(write_texts, fragments)
-        if write_hit:
-            writes.append(_Touch(tool, turn, "write", write_hit[:_EVIDENCE_CHARS], write_texts))
+        name, hit = _first_hit(write_texts, candidates)
+        if name:
+            writes.append(
+                _Touch(tool, turn, "write", hit[:_EVIDENCE_CHARS], write_texts, name)
+            )
     return loads, writes
 
 
-def _first_hit(texts: list[str], fragments: list[str]) -> str:
-    """The first of *texts* that points inside the skill, or ``""``."""
-    for text in texts:
-        if any(fragment in text for fragment in fragments):
-            return text
-    return ""
+def _first_hit(
+    texts: list[str], candidates: list[tuple[str, list[str]]]
+) -> tuple[str, str]:
+    """(skill, text) for the first candidate any of *texts* points inside."""
+    for skill, fragments in candidates:
+        for text in texts:
+            if any(fragment in text for fragment in fragments):
+                return skill, text
+    return "", ""
+
+
+def _first_named(
+    texts: list[str], candidates: list[tuple[str, list[str]]]
+) -> tuple[str, str]:
+    """(skill, text) for the first candidate any of *texts* names outright."""
+    for skill, _ in candidates:
+        named = next((t for t in texts if _names_skill(t, skill)), "")
+        if named:
+            return skill, named
+    return "", ""
 
 
 def _by_intent(tool: str, texts: list[str]) -> tuple[list[str], list[str]]:
@@ -479,6 +567,7 @@ def _reasoning(
     should_trigger: bool,
     resources: dict[str, bool],
     edited: bool = False,
+    alternate: str = "",
 ) -> str:
     if triggered != should_trigger:
         if should_trigger:
@@ -489,6 +578,11 @@ def _reasoning(
                 )
             return f"'{skill}' was never loaded — no Skill call and no file read under it."
         return f"'{skill}' loaded on a prompt that should have been handled without it."
+    if alternate:
+        return (
+            f"'{skill}' did not load; accepted alternate '{alternate}' answered "
+            f"instead. Routing is fine — the skill under test did not win it."
+        )
     unused = [r for r, used in resources.items() if not used]
     if unused:
         return f"'{skill}' loaded, but bundled {', '.join(unused)} went unused."

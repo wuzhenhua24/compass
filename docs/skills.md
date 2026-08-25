@@ -106,6 +106,7 @@ graders:
     config:
       skill: report-writer        # 名字或目录都行；不写则读安装记录
       should_trigger: true        # false = 负向控制
+      acceptable_skills: []       # 走这些近邻也算对（见下）；仅 should_trigger: true 有意义
       required_resources: ["scripts/summarize.py"]   # bundle 的脚本用了没有
 ```
 
@@ -143,11 +144,47 @@ shell 实现**。没设过的变量原样留着而不是展开成空串（否则
 一个根本没发生的匹配）。引号不闭合之类分词失败的命令，整条退回旧的字符串匹配：
 这是触发信号本身，**留一个旧的误报也好过造一个新的漏报**。
 
+### 对的答案不止一个：`acceptable_skills`
+
+一个 skill 仓库里常有近邻。"这条 prompt 走 report-writer 或 doc-writer 都算对"是
+合法的期望，把它判成 miss 会逼着写用例的人把它删掉——一个 suite 就是这样悄悄丢掉
+最难的那些路由题的。
+
+```yaml
+config:
+  skill: report-writer
+  acceptable_skills: ["doc-writer"]   # 名字或目录都行
+```
+
+**它把一个问题拆成两个，两个都报**：
+
+| 指标 | 问的是 |
+|---|---|
+| `skill_triggered` | 路由**可接受**吗 |
+| `skill_primary_triggered` | 被测的这个 skill **赢下**路由了吗 |
+
+合成一个就废了：一个把每次路由都输给近邻的版本，会和一个次次赢的版本读起来一模
+一样——而后者才是 A/B 真正在问的。没配 `acceptable_skills` 时不产出第二个指标，
+否则它永远是第一个的副本，在每次 compare 里都是噪声。
+
+被接受的近邻答了的 case 带 `skill_alternate` 标签，`matched_skill` 记下到底是谁答
+的（**只要被测 skill 加载了就记它**，哪怕近邻先动手——先后顺序在 `evidence` 和
+`skill_trigger_turn` 里）。
+
+两条边界：
+
+- **`required_resources` 是被测 skill 自己 bundle 的文件**。近邻答了的时候没什么可
+  查——不是一串失败。这条 case 的分母里就不放这些检查（"没测"不是"测了 0 分"）。
+- **`should_trigger: false` 下直接报配置错误**（`score=None`），而不是默默忽略。
+  负向控制问的是相反的问题，这个列表在那儿什么也不做；一个什么都没测的配置不该读
+  成"agent 表现良好"。要禁哪个 skill，就给它自己一条 `skill:`。
+
 产出的指标：
 
 | 指标 | 含义 |
 |---|---|
-| `skill_triggered` | 布尔；跨 trial 求均值就是**触发率** |
+| `skill_triggered` | 布尔；跨 trial 求均值就是**触发率**（配了 `acceptable_skills` 时是"路由可接受率"）|
+| `skill_primary_triggered` | 布尔；被测 skill 自己赢下路由了吗（仅在配了 `acceptable_skills` 时产出）|
 | `skill_trigger_turn` | 第几轮加载的——越早越好，晚加载意味着它先走了一段弯路 |
 | `skill_touch_calls` | 碰到 skill 的调用数 |
 | `skill_write_calls` | 往 skill 目录里**写**的调用数（不计入触发）|
@@ -212,7 +249,8 @@ compass site compare out/results.<v1>.json out/results.<v2>.json \
   （3 次里中了 1 次 → `0.3333`），和它旁边那个同样是均值的分数对得上。
 - 触发失败的 case 带着 `not_triggered` / `unexpected_trigger` / `resource_unused`
   标签，点一下就能筛出来；`skill_via_file` / `skill_via_skill_tool` 说明它是被哪种
-  信号认定为"加载了"的，`skill_write_only` 则说明它只往 skill 目录里写、没读。
+  信号认定为"加载了"的，`skill_write_only` 则说明它只往 skill 目录里写、没读，
+  `skill_alternate` 说明答话的是一个被接受的近邻而不是被测的这个。
 
 `--include-details` 才会把 grader 的 `details`（证据：碰到的具体路径、工具名、轮次）
 一起发布。skill 的安装记录里那条本机绝对路径（`source`）永远不发布，名字、digest、
