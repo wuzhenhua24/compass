@@ -7,7 +7,7 @@ import pytest
 from compass.core.artifacts import CodeArtifact, GeneratedFile
 from compass.core.transcript import Outcome
 from compass.graders.base import GradeContext, GradeResult
-from compass.graders.code.coding.security import SecurityScanGrader
+from compass.graders.domains.coding.security import SecurityScanGrader
 from compass.graders.registry import get_grader
 
 

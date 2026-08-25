@@ -13,7 +13,7 @@ from typing import Any
 from PIL import ImageStat
 
 from compass.graders.base import CodeGrader, GradeContext, GradeResult, GraderScope, GraderType
-from compass.graders.code.image.edit_diff import (
+from compass.graders.domains.image.edit_diff import (
     compute_change_mask,
     compute_change_ratio,
     ensure_comparable,

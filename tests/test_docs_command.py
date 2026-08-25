@@ -153,12 +153,22 @@ class TestCheatsheetAccuracy:
         assert len(text) < len(graders_doc) / 2
 
     @staticmethod
-    def _table_rows(text: str) -> list[tuple[str, list[str]]]:
-        """(scope, grader names) parsed out of the grader table."""
-        rows = []
+    def _table_rows(text: str, *, under: str | None = None) -> list[tuple[str, list[str]]]:
+        """(label, grader names) from the grader tables.
+
+        The cheatsheet has two of them and they group on different axes — one by
+        scope, one by domain — so *under* selects the table whose header line
+        contains that string. Without it, both are returned, which is what the
+        coverage checks want.
+        """
+        rows: list[tuple[str, list[str]]] = []
+        selected = under is None
         for line in text.splitlines():
+            if line.startswith("|") and "---" not in line and "`" not in line:
+                selected = under is None or under in line
+                continue
             m = re.match(r"\|\s+\*\*(\w+)[^*]*\*\*[^|]*\|(.+)\|", line)
-            if m:
+            if m and selected:
                 rows.append((m.group(1), re.findall(r"`([a-z_]+)`", m.group(2))))
         return rows
 
@@ -177,12 +187,37 @@ class TestCheatsheetAccuracy:
         import compass.graders  # noqa: F401
         from compass.graders.registry import get_grader as lookup
 
-        for scope, names in self._table_rows(text):
+        rows = self._table_rows(text, under="scope")
+        assert rows, "the scope table could not be parsed"
+        for scope, names in rows:
             if scope == "human":
                 continue  # the human row groups by grader type, not scope
             for name in names:
                 actual = getattr(lookup(name).grader_scope, "value", None)
                 assert actual == scope, f"{name} is {actual}, listed under {scope}"
+
+    def test_every_domain_in_the_table_is_correct(self, text):
+        """Which half a grader is in is the cheatsheet's other claim about it."""
+        from compass.graders.domains import domain_of
+
+        rows = self._table_rows(text, under="领域")
+        assert rows, "the domain table could not be parsed"
+        for domain, names in rows:
+            for name in names:
+                actual = domain_of(name)
+                assert actual == domain, f"{name} is in {actual}, listed under {domain}"
+
+    def test_the_scope_table_holds_only_framework_graders(self, text):
+        """The scope table is the framework's half; a domain grader there is a leak."""
+        from compass.graders.domains import domain_of
+
+        strays = {
+            name: domain_of(name)
+            for _scope, names in self._table_rows(text, under="scope")
+            for name in names
+            if domain_of(name) is not None
+        }
+        assert strays == {}, f"domain graders listed as framework: {strays}"
 
     @staticmethod
     def _builtin_graders() -> set[str]:

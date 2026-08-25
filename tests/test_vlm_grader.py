@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from compass.graders.model.vlm import VLMJudgeGrader
+from compass.graders.domains.image.vlm import VLMJudgeGrader
 
 
 class TestVLMStructuredPrompt:

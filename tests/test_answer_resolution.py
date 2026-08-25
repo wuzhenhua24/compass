@@ -17,10 +17,10 @@ import pytest
 from compass.core.artifacts import CodeArtifact, TextArtifact
 from compass.core.transcript import Outcome
 from compass.graders.base import GradeContext
-from compass.graders.model.aesthetic import AestheticScoreGrader
+from compass.graders.domains.image.aesthetic import AestheticScoreGrader
+from compass.graders.domains.image.semantic import SemanticMatchGrader
+from compass.graders.domains.image.vlm import VLMJudgeGrader
 from compass.graders.model.rubric import RubricGrader
-from compass.graders.model.semantic import SemanticMatchGrader
-from compass.graders.model.vlm import VLMJudgeGrader
 
 # ===================================================================
 # Answer resolution

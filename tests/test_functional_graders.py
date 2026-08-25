@@ -7,7 +7,7 @@ import pytest
 from compass.core.artifacts import CodeArtifact, ExecutionResult, GeneratedFile
 from compass.core.transcript import Outcome
 from compass.graders.base import GradeContext, GradeResult, GraderType
-from compass.graders.code.coding.functional import ExitCodeGrader, TestRunnerGrader
+from compass.graders.domains.coding.functional import ExitCodeGrader, TestRunnerGrader
 from compass.graders.registry import get_grader
 
 

@@ -304,11 +304,16 @@ graders:
 └─────────────────────┴─────────────────────┴─────────────────────────┘
 ```
 
-### 内置评分器的 Scope 分布
+### 框架的 grader 与领域的 grader
 
-全部 43 个内置评分器（与 `list_graders()` 注册表一一对应），按领域分组：
+43 个内置评分器（与 `list_graders()` 注册表一一对应）分成两半，`compass list` 也是这么显示的：
 
-**通用 + 过程（common / transcript）**
+- **框架**（`compass.graders`）——20 个，问的是**过程好不好**：成本、延迟、循环、工具用法、危险操作、状态变更。这些跟被测 Agent 干的是什么活无关，任何 Agent 都能用。
+- **领域**（`compass.graders.domains`）——23 个，问的是**答案对不对**。这是领域的问题，答案归拥有那个领域的人，就像 `tests/` 归项目而不归 pytest。Compass 随包带了三个域（`coding` / `data` / `image`），因为没有样板的框架教不会人东西；它们**按需加载**——场景里点名 `sql_equivalence`，注册表落空时才去导入 `data`，无需声明也无需配置。可选后端走 extras：`compass[data]`（sqlparse / duckdb）、`compass[image]`（torch / open-clip）；后端缺失时 grader 在结果里说明，而不是在 import 处炸掉。
+
+自己的领域正确性判定，写成自定义 grader 挂进来即可，见本文末"自定义 Grader"。
+
+#### 框架：通用 + 过程（20 个）
 
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
@@ -316,20 +321,24 @@ graders:
 | `json_schema` | Code | Outcome | JSON Schema 校验，支持部分合规评分 |
 | `structure_check` | Code | Outcome | 结构化格式校验（JSON/YAML/XML/TOML） |
 | `style_convention` | Code | Outcome | 输出风格校验：模板段落、必需/禁止短语、正则模式、命名规范 |
-| `sql_syntax` | Code | Outcome | SQL 语法正确性校验 |
 | `tool_usage` | Code | Transcript | 必需/禁止工具、调用次数、重试行为 |
 | `cost_budget` | Code | Transcript | 成本预算、token 用量 |
 | `latency_budget` | Code | Transcript | 总耗时、单工具耗时上限 |
 | `loop_detection` | Code | Transcript | 循环检测、浪费行为识别、序列模式检测 |
 | `turn_count` | Code | Transcript | 交互轮次评分，支持 budget/linear/log 三种评分模式 |
 | `leak_detection` | Code | Transcript | 答案泄漏检测，扫描 Transcript 中的 UUID 标记 |
-| `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3）。Claude 轨迹的文件编辑由 importer 自动填充，见下 |
+| `state_delta` | Code | Transcript | 环境状态变更守卫：readonly / forbid / require / max_changes，基于 `ToolCall.state_delta`（协议 1.3）。Claude 轨迹的文件编辑由 importer 自动填充 |
 | `skill_trigger` | Code | Transcript | **Agent 到底有没有加载这个 skill**：`Skill` 工具点名，或读到 skill 目录下的文件（SKILL.md / references / 跑 scripts）。`should_trigger: false` 是负向控制（近似请求不该抢过来）；`required_resources` 查 bundle 的脚本是不是真的被用了、还是又被现场重造了一遍。产出 `skill_triggered` 指标，多次 trial 求均值就是触发率——见 [skills.md](skills.md) |
 | `dangerous_operations` | Code | Transcript | **跑的时候真的执行了什么危险操作**：解析 shell 命令行读*命令词*而非字符串（`echo "rm -rf /"` 跑的是 echo），跟踪 `VAR=` 赋值，并按 `status` 区分**执行了 / 试了没成 / 被拦住**——这三件事静态扫描都做不到。六类：`destructive` `privilege` `exfiltration` `credentials` `untrusted_exec` `tamper`；`min_severity` 只决定什么能判失败，观察到的一律进 metrics（`rm -rf ./build` 记录但不失败）。装了 skill 时，命中 skill 自己文件的操作会归因到它——见 [skills.md](skills.md) |
 | `efficiency` | Code | Both | 工具调用效率 vs 产出质量 |
 | `external_checker` | Code | Both | 把**任何可执行文件**变成 grader（shell / 二进制 / `npm test`），契约是进程边界：env 进、stdout JSON 出、exit code 判定——见本文"子进程 Checker"一节 |
+| `rubric` | Model | Outcome | 多维度 Rubric 评审，结构化输出 |
+| `trajectory_judge` | Model | Transcript | **LLM 判官评"过程"**：调用链是否合理 / 是否遗漏关键步骤 / 是否过度探索 / 工具选择是否恰当——规则覆盖不了的定性维度 |
+| `groundedness` | Model | Both | **答案是否被证据支撑**：最终答案的事实断言 vs 工具实际观察到的结果；专抓"空工具结果幻觉"（工具返回空列表、答案却编出一个像样的数）——只看结果的 grader 抓不到，因为编造的答案可以既流畅又碰巧正确 |
+| `human_review` | Human | Outcome | 人工评审任务创建 |
+| `pairwise_comparison` | Human | Outcome | 人工 A/B 成对比较任务 |
 
-**Coding Agent**
+#### 领域 `coding`（8 个）
 
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
@@ -342,17 +351,20 @@ graders:
 | `diff_accuracy` | Code | Outcome | 生成代码与参考实现逐文件比对 |
 | `diff_size` | Code | Outcome | 变更规模守卫（diff 行数 / 文件数上限） |
 
-**Data Agent**
+这一域调用项目自己的工具链（ruff / mypy / pytest），没有额外依赖，因而没有对应的 extra。
+
+#### 领域 `data`（6 个，extra：`compass[data]`）
 
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
-| `sql_equivalence` | Code | Outcome | 生成 SQL 与期望 SQL 的执行结果等价性 |
+| `sql_syntax` | Code | Outcome | SQL 语法正确性校验（`sqlparse`） |
+| `sql_equivalence` | Code | Outcome | 生成 SQL 与期望 SQL 的执行结果等价性（`duckdb`） |
 | `data_correctness` | Code | Outcome | 查询/分析结果与期望数据比对 |
 | `query_quality` | Code | Outcome | SQL 查询质量与反模式检测 |
 | `reasoning_trace` | Code | Both | 分析型推理过程检查（是否探索了数据、验证了假设） |
 | `self_correction` | Code | Both | 错误检测与自我修复能力评估 |
 
-**图像生成 / 编辑**
+#### 领域 `image`（9 个，extra：`compass[image]`）
 
 | 评分器 | 类型 | 作用域 | 说明 |
 |--------|------|--------|------|
@@ -361,20 +373,10 @@ graders:
 | `edit_locality` | Code | Outcome | 图像编辑局部性：改动是否限于目标区域 |
 | `edit_preservation` | Code | Outcome | 非目标区域保留度：编辑没有破坏不该动的部分 |
 | `edit_correctness` | Model | Outcome | VLM 评审编辑指令是否被正确执行 |
-
-**Model / Human**
-
-| 评分器 | 类型 | 作用域 | 说明 |
-|--------|------|--------|------|
 | `semantic_match` | Model | Outcome | CLIP 图文语义相似度 |
 | `vlm_judge` | Model | Outcome | VLM 多维度评审 |
 | `aesthetic_score` | Model | Outcome | 美学评分 |
-| `safety_check` | Model | Outcome | NSFW / 水印 / 版权检测 |
-| `rubric` | Model | Outcome | 多维度 Rubric 评审，结构化输出 |
-| `trajectory_judge` | Model | Transcript | **LLM 判官评"过程"**：调用链是否合理 / 是否遗漏关键步骤 / 是否过度探索 / 工具选择是否恰当——规则覆盖不了的定性维度 |
-| `groundedness` | Model | Both | **答案是否被证据支撑**：最终答案的事实断言 vs 工具实际观察到的结果；专抓"空工具结果幻觉"（工具返回空列表、答案却编出一个像样的数）——只看结果的 grader 抓不到，因为编造的答案可以既流畅又碰巧正确 |
-| `human_review` | Human | Outcome | 人工评审任务创建 |
-| `pairwise_comparison` | Human | Outcome | 人工 A/B 成对比较任务 |
+| `safety_check` | Model | Outcome | NSFW / 水印 / 版权检测；`expect_blocked: true` 时改判"该拒的有没有拒" |
 
 ## 正向/负向测试
 

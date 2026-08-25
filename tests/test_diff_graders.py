@@ -7,7 +7,7 @@ import pytest
 from compass.core.artifacts import CodeArtifact, GeneratedFile
 from compass.core.transcript import Outcome
 from compass.graders.base import GradeContext
-from compass.graders.code.coding.diff import DiffAccuracyGrader, DiffSizeGrader
+from compass.graders.domains.coding.diff import DiffAccuracyGrader, DiffSizeGrader
 from compass.graders.registry import get_grader
 
 

@@ -1,7 +1,7 @@
 """Structured output validation graders.
 
-Provides graders for validating structured outputs like JSON Schema,
-SQL syntax, and general format validation (JSON/YAML/XML/TOML).
+Provides graders for validating structured outputs: JSON Schema and general
+format validation (JSON/YAML/XML/TOML).
 """
 
 from __future__ import annotations
@@ -11,59 +11,8 @@ import re
 from typing import Any
 
 from compass.graders.base import CodeGrader, GradeContext, GradeResult, GraderScope, GraderType
+from compass.graders.content import extract_content
 from compass.graders.registry import register_grader
-
-
-def _extract_content(context: GradeContext, source: str) -> str | dict[str, Any] | None:
-    """Extract content from context based on source specification.
-
-    Args:
-        context: Grade context.
-        source: Source specification:
-            - "output_data" or "output": from outcome.output_data
-            - "text" or "text_artifact": from TextArtifact.content
-            - "code" or "code_artifact": from CodeArtifact files
-            - "metadata.<key>": from outcome.metadata
-            - "output_data.<key>": from specific field in output_data
-
-    Returns:
-        Extracted content as string or dict.
-    """
-    if not context.outcome:
-        return None
-
-    if source in ("output_data", "output"):
-        return context.outcome.output_data
-
-    if source in ("text", "text_artifact"):
-        artifact = context.text_artifact
-        if artifact and hasattr(artifact, "content"):
-            return artifact.content
-        return None
-
-    if source in ("code", "code_artifact"):
-        artifact = context.code_artifact
-        if artifact and hasattr(artifact, "files"):
-            # Return concatenated file contents
-            contents = []
-            for f in artifact.files:
-                if hasattr(f, "content"):
-                    contents.append(f.content)
-            return "\n".join(contents)
-        return None
-
-    if source.startswith("metadata."):
-        key = source[9:]
-        return context.outcome.metadata.get(key)
-
-    if source.startswith("output_data."):
-        key = source[12:]
-        data = context.outcome.output_data
-        if isinstance(data, dict):
-            return data.get(key)
-
-    return None
-
 
 # =============================================================================
 # JSON Schema Grader
@@ -369,7 +318,7 @@ class JsonSchemaGrader(CodeGrader):
             )
 
         # Extract content
-        content = _extract_content(context, self.source)
+        content = extract_content(context, self.source)
         if content is None:
             return GradeResult(
                 name=self.name,
@@ -539,173 +488,6 @@ class JsonSchemaGrader(CodeGrader):
 
 
 # =============================================================================
-# SQL Syntax Grader
-# =============================================================================
-
-
-@register_grader("sql_syntax")
-class SqlSyntaxGrader(CodeGrader):
-    """Validates SQL syntax correctness.
-
-    Config:
-        source: str — Where to get SQL from (default "text_artifact").
-        dialect: str — SQL dialect for validation (default "generic").
-            Options: "generic", "mysql", "postgresql", "sqlite", "tsql".
-        allowed_statements: list[str] — Allowed statement types (default all).
-            Options: "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", etc.
-        forbidden_keywords: list[str] — Keywords that should not appear.
-        require_semicolon: bool — Require statements to end with semicolon.
-        max_statements: int — Maximum number of statements allowed (0 = unlimited).
-
-    Example YAML:
-        graders:
-          - name: sql_syntax
-            config:
-              source: text_artifact
-              dialect: postgresql
-              allowed_statements: [SELECT]
-              forbidden_keywords: [DROP, TRUNCATE, DELETE]
-    """
-
-    grader_type = GraderType.CODE
-    grader_scope = GraderScope.OUTCOME
-
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        super().__init__(config)
-        self.source = self.config.get("source", "text_artifact")
-        self.dialect = self.config.get("dialect", "generic")
-        self.allowed_statements = self.config.get("allowed_statements", [])
-        self.forbidden_keywords = [k.upper() for k in self.config.get("forbidden_keywords", [])]
-        self.require_semicolon = self.config.get("require_semicolon", False)
-        self.max_statements = self.config.get("max_statements", 0)
-
-    async def grade(self, context: GradeContext) -> GradeResult:
-        """Validate SQL syntax."""
-        try:
-            import sqlparse
-        except ImportError:
-            return GradeResult(
-                score=0.0,
-                passed=False,
-                error="sqlparse library not installed. Run: pip install sqlparse",
-            )
-
-        # Extract content
-        content = _extract_content(context, self.source)
-        if content is None:
-            return GradeResult(
-                score=0.0,
-                passed=False,
-                error=f"No content found at source: {self.source}",
-            )
-
-        if not isinstance(content, str):
-            content = str(content)
-
-        # Extract SQL from code blocks if present
-        code_block_match = re.search(r"```(?:sql)?\s*([\s\S]*?)```", content)
-        if code_block_match:
-            content = code_block_match.group(1).strip()
-
-        if not content.strip():
-            return GradeResult(
-                score=0.0,
-                passed=False,
-                error="Empty SQL content",
-            )
-
-        # Parse SQL
-        try:
-            statements = sqlparse.parse(content)
-        except Exception as e:
-            return GradeResult(
-                score=0.0,
-                passed=False,
-                error=f"SQL parse error: {e}",
-            )
-
-        if not statements:
-            return GradeResult(
-                score=0.0,
-                passed=False,
-                error="No valid SQL statements found",
-            )
-
-        # Filter out empty statements
-        statements = [s for s in statements if s.get_type() != "UNKNOWN" or str(s).strip()]
-
-        errors = []
-        warnings = []
-        statement_types = []
-
-        # Check max statements
-        if self.max_statements > 0 and len(statements) > self.max_statements:
-            errors.append(f"Too many statements: {len(statements)} > {self.max_statements}")
-
-        for i, stmt in enumerate(statements):
-            stmt_str = str(stmt).strip()
-            if not stmt_str:
-                continue
-
-            stmt_type = stmt.get_type()
-            statement_types.append(stmt_type)
-
-            # Check allowed statements
-            if self.allowed_statements:
-                allowed_upper = [s.upper() for s in self.allowed_statements]
-                if stmt_type.upper() not in allowed_upper and stmt_type != "UNKNOWN":
-                    errors.append(f"Statement {i+1}: {stmt_type} not in allowed types")
-
-            # Check forbidden keywords
-            stmt_upper = stmt_str.upper()
-            for keyword in self.forbidden_keywords:
-                if re.search(rf"\b{keyword}\b", stmt_upper):
-                    errors.append(f"Statement {i+1}: contains forbidden keyword '{keyword}'")
-
-            # Check semicolon
-            if self.require_semicolon and not stmt_str.rstrip().endswith(";"):
-                warnings.append(f"Statement {i+1}: missing semicolon")
-
-            # Basic syntax validation
-            if stmt_type == "UNKNOWN" and not self._is_valid_statement(stmt_str):
-                errors.append(f"Statement {i+1}: unrecognized or invalid syntax")
-
-        # Calculate score
-        if errors:
-            score = 0.0
-            passed = False
-        elif warnings:
-            score = 0.8
-            passed = True
-        else:
-            score = 1.0
-            passed = True
-
-        return GradeResult(
-            score=score,
-            passed=passed,
-            details={
-                "statement_count": len(statements),
-                "statement_types": statement_types,
-                "errors": errors,
-                "warnings": warnings,
-            },
-            error="; ".join(errors) if errors else None,
-        )
-
-    def _is_valid_statement(self, sql: str) -> bool:
-        """Basic check if SQL looks valid."""
-        sql = sql.strip().upper()
-        # Check if it starts with a known keyword
-        known_starts = [
-            "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
-            "TRUNCATE", "GRANT", "REVOKE", "BEGIN", "COMMIT", "ROLLBACK",
-            "WITH", "EXPLAIN", "SHOW", "DESCRIBE", "USE", "SET",
-        ]
-        return any(sql.startswith(k) for k in known_starts)
-
-
-# =============================================================================
 # Structure Check Grader (Generic Format Validation)
 # =============================================================================
 
@@ -764,7 +546,7 @@ class StructureCheckGrader(CodeGrader):
     async def grade(self, context: GradeContext) -> GradeResult:
         """Validate structured format."""
         # Extract content
-        content = _extract_content(context, self.source)
+        content = extract_content(context, self.source)
         if content is None:
             return GradeResult(
                 score=0.0,

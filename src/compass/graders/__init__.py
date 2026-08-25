@@ -2,6 +2,10 @@
 
 Key design: Graders independently access Transcript and Outcome.
 See GraderScope for details.
+
+Importing this package registers the framework's own graders — the
+domain-agnostic ones. Domain correctness graders live in
+:mod:`compass.graders.domains` and load on first use; see that module for why.
 """
 
 from compass.graders.base import (
@@ -15,40 +19,24 @@ from compass.graders.base import (
     ModelGrader,
 )
 
-# Coding Agent graders
-from compass.graders.code.coding import (  # noqa: F401
-    diff,
-    functional,
-    integration,
-    quality,
-    security,
-)
-
-# Import built-in graders to trigger registration
-# Common graders
+# Import built-in graders to trigger registration.
 from compass.graders.code.common import (
+    danger,  # noqa: F401
+    exact,  # noqa: F401
+    external,  # noqa: F401
+    skill_graders,  # noqa: F401
     structure,  # noqa: F401
+    style,  # noqa: F401
     transcript_graders,  # noqa: F401
 )
-
-# Data Agent graders
-from compass.graders.code.data import (
-    data_correctness,  # noqa: F401
-    query_quality,  # noqa: F401
-    reasoning_trace,  # noqa: F401
-    self_correction,  # noqa: F401
-    sql_equivalence,  # noqa: F401
-)
-
-# Image Agent graders
-from compass.graders.code.image import assertions, technical  # noqa: F401
-
-# Human graders
+from compass.graders.content import extract_content
 from compass.graders.human import base as _human_base  # noqa: F401
 from compass.graders.human import pairwise as _human_pairwise  # noqa: F401
-
-# Model graders
-from compass.graders.model import aesthetic, safety, semantic, vlm  # noqa: F401
+from compass.graders.model import (
+    groundedness,  # noqa: F401
+    rubric,  # noqa: F401
+    trajectory,  # noqa: F401
+)
 from compass.graders.registry import get_grader, list_graders, register_grader
 
 __all__ = [
@@ -61,6 +49,8 @@ __all__ = [
     "GradeResult",
     "GraderScope",
     "GraderType",
+    # Context helpers
+    "extract_content",
     # Registry
     "register_grader",
     "get_grader",

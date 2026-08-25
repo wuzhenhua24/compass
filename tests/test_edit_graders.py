@@ -14,7 +14,8 @@ from PIL import Image
 
 from compass.core.transcript import Outcome
 from compass.graders.base import GradeContext, GraderScope, GraderType
-from compass.graders.code.image.edit_diff import (
+from compass.graders.domains.image.edit_correctness import EditCorrectnessGrader
+from compass.graders.domains.image.edit_diff import (
     compute_change_mask,
     compute_change_ratio,
     compute_diff_image,
@@ -25,9 +26,8 @@ from compass.graders.code.image.edit_diff import (
     load_edit_mask,
     mse_to_similarity,
 )
-from compass.graders.code.image.edit_locality import EditLocalityGrader
-from compass.graders.code.image.edit_preservation import EditPreservationGrader
-from compass.graders.model.edit_correctness import EditCorrectnessGrader
+from compass.graders.domains.image.edit_locality import EditLocalityGrader
+from compass.graders.domains.image.edit_preservation import EditPreservationGrader
 
 # =====================================================================
 # Fixtures

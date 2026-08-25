@@ -386,7 +386,7 @@ class TestIntegrationGraderLeakRefactor:
     @pytest.mark.asyncio
     async def test_context_markers_detected(self):
         """IntegrationGrader picks up leak_markers from GradeContext."""
-        from compass.graders.code.coding.integration import IntegrationGrader
+        from compass.graders.domains.coding.integration import IntegrationGrader
 
         grader = IntegrationGrader({"script": "echo ok"})
         ctx = _make_context(
@@ -400,7 +400,7 @@ class TestIntegrationGraderLeakRefactor:
     @pytest.mark.asyncio
     async def test_config_patterns_still_work(self):
         """IntegrationGrader's own leak_patterns still detected."""
-        from compass.graders.code.coding.integration import IntegrationGrader
+        from compass.graders.domains.coding.integration import IntegrationGrader
 
         grader = IntegrationGrader({
             "script": "echo ok",
@@ -417,7 +417,7 @@ class TestIntegrationGraderLeakRefactor:
     @pytest.mark.asyncio
     async def test_clean_runs_script(self):
         """No leak → proceeds to run the script."""
-        from compass.graders.code.coding.integration import IntegrationGrader
+        from compass.graders.domains.coding.integration import IntegrationGrader
 
         grader = IntegrationGrader({"script": "echo '1 passed'"})
         ctx = _make_context(

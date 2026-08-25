@@ -1,74 +1,42 @@
-"""Code-based graders for deterministic evaluation.
+"""The framework's own code graders — deterministic, and domain-agnostic.
 
-Organized by agent type:
-- common/  - Shared graders (structure validation, transcript analysis)
-- coding/  - Coding Agent graders (tests, linting, diffs)
-- data/    - Data Agent graders (SQL equivalence, data correctness)
-- image/   - Image Agent graders (assertions, technical quality)
+Only ``common/`` lives here now. The by-domain packages that used to sit
+alongside it (``coding``, ``data``, ``image``) moved to
+:mod:`compass.graders.domains`, which explains why.
 """
 
-# Common graders
-# Coding Agent graders
-from compass.graders.code.coding import (
-    DiffAccuracyGrader,
-    DiffSizeGrader,
-    ExitCodeGrader,
-    IntegrationGrader,
-    LintGrader,
-    SecurityScanGrader,
-    TestRunnerGrader,
-    TypeCheckGrader,
-)
 from compass.graders.code.common import (
     CostBudgetGrader,
+    DangerousOperationsGrader,
     EfficiencyGrader,
+    ExactMatchGrader,
+    ExternalCheckerGrader,
     JsonSchemaGrader,
     LatencyBudgetGrader,
-    SqlSyntaxGrader,
+    LeakDetectionGrader,
+    LoopDetectionGrader,
+    SkillTriggerGrader,
+    StateDeltaGrader,
     StructureCheckGrader,
+    StyleConventionGrader,
     ToolUsageGrader,
-)
-
-# Data Agent graders
-from compass.graders.code.data import (
-    DataCorrectnessGrader,
-    QueryQualityGrader,
-    ReasoningTraceGrader,
-    SelfCorrectionGrader,
-    SqlEquivalenceGrader,
-)
-
-# Image Agent graders
-from compass.graders.code.image import (
-    ImageAssertionGrader,
-    TechnicalQualityGrader,
+    TurnCountGrader,
 )
 
 __all__ = [
-    # Common graders
     "CostBudgetGrader",
+    "DangerousOperationsGrader",
     "EfficiencyGrader",
+    "ExactMatchGrader",
+    "ExternalCheckerGrader",
     "JsonSchemaGrader",
     "LatencyBudgetGrader",
-    "SqlSyntaxGrader",
+    "LeakDetectionGrader",
+    "LoopDetectionGrader",
+    "SkillTriggerGrader",
+    "StateDeltaGrader",
     "StructureCheckGrader",
+    "StyleConventionGrader",
     "ToolUsageGrader",
-    # Coding Agent graders
-    "DiffAccuracyGrader",
-    "DiffSizeGrader",
-    "ExitCodeGrader",
-    "IntegrationGrader",
-    "LintGrader",
-    "SecurityScanGrader",
-    "TestRunnerGrader",
-    "TypeCheckGrader",
-    # Data Agent graders
-    "DataCorrectnessGrader",
-    "QueryQualityGrader",
-    "ReasoningTraceGrader",
-    "SelfCorrectionGrader",
-    "SqlEquivalenceGrader",
-    # Image Agent graders
-    "ImageAssertionGrader",
-    "TechnicalQualityGrader",
+    "TurnCountGrader",
 ]

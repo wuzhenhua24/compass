@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from compass.graders.base import CodeGrader, GradeContext, GradeResult, GraderScope, GraderType
-from compass.graders.code.image.edit_diff import (
+from compass.graders.domains.image.edit_diff import (
     compute_change_mask,
     compute_change_ratio,
     compute_histogram_similarity,

@@ -1,4 +1,11 @@
-"""Grader registry for managing grader plugins."""
+"""Grader registry for managing grader plugins.
+
+Built-in framework graders register at import time. Domain graders
+(``compass.graders.domains``) do not — they are loaded the first time a
+lookup misses, so that importing Compass costs nothing for domains a user
+is not evaluating. The fallback is what makes that invisible: a scenario
+naming ``sql_equivalence`` gets it, with nothing to declare.
+"""
 
 
 from collections.abc import Callable
@@ -49,8 +56,14 @@ def get_grader(name: str) -> type[Grader]:
         KeyError: If grader not found.
     """
     if name not in _grader_registry:
+        # A miss may just mean the domain that owns this grader has not been
+        # imported yet. Pay for that import once, here, rather than at startup.
+        from compass.graders import domains
+
+        domains.load_all()
+    if name not in _grader_registry:
         raise KeyError(
-            f"Grader '{name}' not found. Available: {list(_grader_registry.keys())}"
+            f"Grader '{name}' not found. Available: {sorted(_grader_registry)}"
         )
     return _grader_registry[name]
 
@@ -64,6 +77,12 @@ def list_graders(grader_type: GraderType | None = None) -> list[str]:
     Returns:
         List of grader names.
     """
+    # `compass list` is exactly where the full picture is wanted, so this
+    # always loads the domains rather than reporting whatever happens to be in.
+    from compass.graders import domains
+
+    domains.load_all()
+
     if grader_type is None:
         return list(_grader_registry.keys())
 

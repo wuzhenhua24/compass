@@ -30,14 +30,21 @@ dependencies = [
     "pillow>=10.0.0",
     "aiofiles>=23.0.0",
     "jsonschema>=4.0.0",
-    "sqlparse>=0.4.0",
 ]
 
 [project.optional-dependencies]
-eval = [
+# One extra per grader domain (see compass.graders.domains). The domain's
+# graders always import — only their heavy backends are optional, and a grader
+# whose backend is missing says so in its result instead of raising. The
+# `coding` domain shells out to the project's own tools, so it has no extra.
+image = [
     "torch>=2.0.0",
     "transformers>=4.35.0",
     "open-clip-torch>=2.20.0",
+]
+data = [
+    "sqlparse>=0.4.0",
+    "duckdb>=0.9.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -47,7 +54,7 @@ dev = [
     "mypy>=1.0.0",
 ]
 all = [
-    "compass-qa[eval,dev]",
+    "compass-qa[image,data,dev]",
 ]
 
 [project.scripts]
@@ -144,27 +151,27 @@ module = [
     "compass.core.sweep",
     "compass.core.transcript",
     "compass.graders.base",
-    "compass.graders.code.coding.functional",
-    "compass.graders.code.coding.integration",
-    "compass.graders.code.coding.quality",
-    "compass.graders.code.coding.security",
     "compass.graders.code.common.structure",
     "compass.graders.code.common.style",
     "compass.graders.code.common.transcript_graders",
-    "compass.graders.code.data._utils",
-    "compass.graders.code.data.data_correctness",
-    "compass.graders.code.data.query_quality",
-    "compass.graders.code.data.reasoning_trace",
-    "compass.graders.code.data.self_correction",
-    "compass.graders.code.data.sql_equivalence",
-    "compass.graders.code.image.assertions",
-    "compass.graders.code.image.edit_diff",
-    "compass.graders.code.image.edit_locality",
-    "compass.graders.code.image.technical",
-    "compass.graders.model.aesthetic",
+    "compass.graders.domains.coding.functional",
+    "compass.graders.domains.coding.integration",
+    "compass.graders.domains.coding.quality",
+    "compass.graders.domains.coding.security",
+    "compass.graders.domains.data._utils",
+    "compass.graders.domains.data.data_correctness",
+    "compass.graders.domains.data.query_quality",
+    "compass.graders.domains.data.reasoning_trace",
+    "compass.graders.domains.data.self_correction",
+    "compass.graders.domains.data.sql_equivalence",
+    "compass.graders.domains.image.aesthetic",
+    "compass.graders.domains.image.assertions",
+    "compass.graders.domains.image.edit_diff",
+    "compass.graders.domains.image.edit_locality",
+    "compass.graders.domains.image.semantic",
+    "compass.graders.domains.image.technical",
     "compass.graders.model.rubric",
-    "compass.graders.model.safety",
-    "compass.graders.model.semantic",
+    "compass.graders.domains.image.safety",
     "compass.report.analyzer",
     "compass.report.console",
 ]

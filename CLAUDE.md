@@ -8,6 +8,10 @@ Compass is a **substrate for Agent evaluation** — not a "evals everything out 
 
 Positioning discipline (keep this in mind when extending): the core stays small. Process/reliability checks (TRANSCRIPT scope: cost, latency, loops, tool usage, dangerous-op execution) are reusable and belong in the framework; correctness checks (OUTCOME scope: is the answer/image/code right) are domain-specific and belong in user graders. Domain-specific fields (e.g. `expected_doc`, `key_facts`) go in grader config or a user harness, NOT the core Scenario/GradeContext models — resist adding them to core. See README "定位：是什么 / 不是什么".
 
+**Where that line falls in the tree.** `compass/graders/` holds the framework's 20 (`code/common/`, `model/`, `human/`); `compass/graders/domains/` holds the 23 that ship as worked examples of user code, one package per domain (`coding`, `data`, `image`), imported lazily on a registry miss so `import compass` costs nothing for a domain nobody is evaluating. A new *process* grader goes in `code/common/`. A new *correctness* grader goes in a domain — and if it does not fit one of the three, that is the signal it is user code, not a core addition. Optional backends are extras named after the domain (`compass[data]`, `compass[image]`), imported inside a try/except so a missing one degrades the grader instead of breaking the import.
+
+One field already sits on the wrong side of this line and is not being moved: `Outcome.image` is a first-class field of the core transcript model, so Pillow is a hard dependency and image is the one domain the core knows about by name. Pulling it out means generalizing `Outcome` to artifacts across seven core modules — a deliberate, separate change, not something to do in passing.
+
 ## Common Commands
 
 Everything runs through `uv run` — Compass is not installed on PATH in a source
@@ -121,13 +125,12 @@ src/compass/
 │   └── result.py         # EvalResult, TestStatus
 ├── graders/
 │   ├── base.py           # Grader, GraderScope, GradeContext, GradeResult
-│   ├── registry.py       # @register_grader decorator
-│   ├── code/             # Deterministic graders by domain
-│   │   ├── common/       # style_convention, json_schema, structure_check
-│   │   ├── coding/       # functional, quality, diff, security graders
-│   │   ├── data/         # SQL, data correctness, query quality
-│   │   └── image/        # image_assertions, technical_quality
-│   └── model/            # LLM-based graders (semantic, vlm, rubric, safety)
+│   ├── registry.py       # @register_grader; loads domains/ on a lookup miss
+│   ├── content.py        # extract_content — pull the graded subject out of a context
+│   ├── code/common/      # the framework's Code graders (process & reliability)
+│   ├── model/            # the framework's Model graders (rubric, trajectory, groundedness)
+│   ├── human/            # human_review, pairwise_comparison
+│   └── domains/          # domain CORRECTNESS, lazily loaded: coding / data / image
 ├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi, codex)
 └── report/               # Console and HTML reporting, analyzer
 ```
@@ -192,5 +195,8 @@ cases:
  - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
  - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——cheatsheet.md（单页速查，agent 入口）、core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）、skills.md（Agent Skill 评测）、roadmap.md（路线图归档）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
  - 这 8 份专题文档同时是 `compass docs <topic>` 的内容源，且在 pyproject 的 `force-include` 里逐个打进 wheel。**新增专题文档要三处同步**：`src/compass/docs_index.py` 的 TOPICS、pyproject 的 force-include、README 导航表——漏掉任一处，装出来的包就读不到它。
- - 改评分器数量时记得同步：README 导航表两处、docs/graders.md 的"全部 N 个"与其表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 43）。
+ - 改评分器数量时记得同步：README 导航表两处 + 安装校验那行、docs/graders.md 的分组表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 43 = 框架 20 + 领域 23）；`compass.graders.domains.domain_of(name)` 给出某个 grader 属于哪一半。改完可以跑这个核对，不要靠人数：
+   ```bash
+   uv run python -c "from compass.graders import list_graders; from compass.graders.domains import domain_of; import collections; print(collections.Counter(domain_of(g) for g in list_graders()))"
+   ```
  - docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 等是本地参考资料（gitignore），专题 *.md 文档是版本库的一部分。

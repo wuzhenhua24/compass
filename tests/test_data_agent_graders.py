@@ -5,7 +5,7 @@ import pytest
 from compass.core.transcript import Outcome, Transcript
 from compass.graders import get_grader
 from compass.graders.base import GradeContext
-from compass.graders.code.data import (
+from compass.graders.domains.data import (
     DataCorrectnessGrader,
     QueryQualityGrader,
     ReasoningTraceGrader,

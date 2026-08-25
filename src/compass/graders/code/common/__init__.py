@@ -14,7 +14,6 @@ from compass.graders.code.common.skill_graders import (
 )
 from compass.graders.code.common.structure import (
     JsonSchemaGrader,
-    SqlSyntaxGrader,
     StructureCheckGrader,
 )
 from compass.graders.code.common.style import (
@@ -42,7 +41,6 @@ __all__ = [
     "SkillTriggerGrader",
     # Structure graders
     "JsonSchemaGrader",
-    "SqlSyntaxGrader",
     "StructureCheckGrader",
     # Style graders
     "StyleConventionGrader",

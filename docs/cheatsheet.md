@@ -104,18 +104,22 @@ expected:
 
 ## 内置 grader 速查（43 个）
 
+分两半，`compass list` 也这么显示：**框架** 20 个问过程好不好，跨 Agent 通用；**领域** 23 个问答案对不对，按需自动加载（点名即可，无需声明），可选后端走 `compass[data]` / `compass[image]`。自己的领域判定写自定义 grader。
+
 **scope 决定它能不能从有损轨迹重评**：`transcript` 域在 JSONL 上完整；`outcome` / `both` 域需要 `--trace-format json`。
 
-| scope | grader |
+| scope | 框架 grader |
 |---|---|
-| **transcript**（过程，跨 Agent 通用） | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `skill_trigger` `dangerous_operations` `trajectory_judge`(model) |
-| **both** | `efficiency` `reasoning_trace` `self_correction` `groundedness`(model) `external_checker` |
-| **outcome · 通用** | `exact_match` `json_schema` `structure_check` `style_convention` `sql_syntax` |
-| **outcome · 代码** | `exit_code_check` `test_runner` `integration_test` `lint` `type_check` `security_scan` `diff_accuracy` `diff_size` |
-| **outcome · 数据** | `data_correctness` `query_quality` `sql_equivalence` |
-| **outcome · 图像** | `image_assertions` `technical_quality` `edit_locality` `edit_preservation` |
-| **outcome · LLM 判官** | `semantic_match` `rubric` `vlm_judge` `safety_check` `aesthetic_score` `edit_correctness` |
+| **transcript** | `tool_usage` `cost_budget` `latency_budget` `loop_detection` `turn_count` `state_delta` `leak_detection` `skill_trigger` `dangerous_operations` `trajectory_judge`(model) |
+| **both** | `efficiency` `external_checker` `groundedness`(model) |
+| **outcome** | `exact_match` `json_schema` `structure_check` `style_convention` `rubric`(model) |
 | **human** | `human_review` `pairwise_comparison` |
+
+| 领域 | grader |
+|---|---|
+| **coding**（无 extra） | `exit_code_check` `test_runner` `integration_test` `lint` `type_check` `security_scan` `diff_accuracy` `diff_size` |
+| **data** `compass[data]` | `sql_syntax` `sql_equivalence` `data_correctness` `query_quality` `reasoning_trace`(both) `self_correction`(both) |
+| **image** `compass[image]` | `image_assertions` `technical_quality` `edit_locality` `edit_preservation` `semantic_match`(model) `vlm_judge`(model) `aesthetic_score`(model) `safety_check`(model) `edit_correctness`(model) |
 
 `compass list` 看当前注册表。
 

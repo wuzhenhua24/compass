@@ -9,7 +9,7 @@ import pytest
 from compass.core.artifacts import CodeArtifact
 from compass.core.transcript import Outcome, ToolCall, Transcript
 from compass.graders.base import GradeContext, GraderScope, GraderType
-from compass.graders.code.coding.integration import (
+from compass.graders.domains.coding.integration import (
     IntegrationGrader,
     _parse_generic,
     _parse_go_test,
