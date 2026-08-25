@@ -22,6 +22,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
 - **Skill 评测**：改完一个 Agent Skill 要发版，怎么证明是优化而不是改坏了？"装哪个版本"是一条可扫的轴（内容 hash 存档，隔离安装），`skill_trigger` 把"到底加载了没有"变成可比的触发率（shell 按命令行读，改写/删除 skill 不算加载；`acceptable_skills` 让"走近邻也算对"成立，同时用 `skill_primary_triggered` 保住"我这个赢了没"），负向控制抓 description 写太宽导致的误触发，`required_resources` 查 bundle 的脚本是真被用了还是又被现场重造（见 [docs/skills.md](docs/skills.md)）
+- **有据可依的结论（LLM judge）**：`compass compare` 只给区间和翻转、然后闭嘴——因为下一句"失败集中在检索类用例"是解读不是测量。`compass insights` 让模型写那一句，然后**逐条拿数据核**：引用了通过的用例、引用了 harness 崩掉的用例（那不是 agent 失败）、或者引用 A 却在谈 B 的断言，整条丢弃并报出理由。活下来的不是"大概对"，是"和这次测到的东西不矛盾"
 - **领域 recipe（可选）**：[`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）、[`examples/skill_eval/`](examples/skill_eval/)（Skill 的 v1 vs v2）、[`examples/swebench/`](examples/swebench/)（接公开数据集 SWE-bench）、[`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
 
 **🚫 不是什么**
@@ -142,6 +143,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 | `compass grade <traces> -s <scenario.yaml>` | **离线评分**：给已落盘的轨迹打分，不重跑 Agent（`-n` grade set / `--regrade`） |
 | `compass analyze <results>` | 分析评估结果：Scope 分维度、失败模式、改进建议 |
 | `compass compare <a.json> <b.json>` | 配对比较两次运行：case 翻转 + 置信区间 + MDE；`--on <grader>` 按某个 grader 的分比，`--metric <name>` 比轮次/成本/工具调用这类过程量 |
+| `compass insights <results> [<b.json>]` | 让模型给这次运行下结论，但**每条断言都拿数据核过**，过不了的整条丢弃并给出理由（`--show-dropped`）|
 | `compass site build <results>` | 把结果发布成可分享的静态站（界面 EN/中文可切换）；多个仓库可 build 进同一个目录，索引自动累积 |
 | `compass site compare <a> <b>` | 把两次运行的**配对比较**发布进同一个站点：总体 + 逐 grader + 过程指标，并标出判分契约不同、差异不可归因的 case |
 | `compass site serve <results \| site>` | 本地实时查看：每个请求从磁盘现算，跑到一半的运行也能看 |
@@ -308,7 +310,7 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 | **核心设计** | Transcript/Outcome 分离、GraderScope、ToolCall 协议（当前 2.0：多 Agent 字段、state_delta、run_id/config_hash 审计溯源）、JSONL 事件流、成本/token 聚合 | [docs/core-design.md](docs/core-design.md) |
 | **Grader 体系** | 三层体系（Code/Model/Human）、全部 42 个内置评分器、expected 简化配置、正负向测试、泄漏检测、Data Agent 评分器、自定义 grader | [docs/graders.md](docs/graders.md) |
 | **场景配置与指标** | 场景 YAML 完整参考、多次试验、pass@k / pass^k、分类聚合（category/tags） | [docs/scenario-config.md](docs/scenario-config.md) |
-| **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
+| **分析与报告** | `compass analyze` 分维度诊断、`compass compare` 配对比较（case 翻转 + 置信区间 + MDE、`--on` 按单个 grader 比）、`compass insights` 有据可依的 LLM 结论（逐条拿数据核，核不过就丢）、best-of-k、HTML 报告 | [docs/analysis.md](docs/analysis.md) |
 | **接入外部 Agent** | OpenAI Agents SDK / pi / Codex / OTLP·OpenInference / Claude Agent SDK / ATIF·Harbor 轨迹导入、Claude Code · pi · Codex 三个 CLI Adapter（真实仓库上评编程 Agent，同一份判分契约下跨栈对比）、Environment Adapter、自定义 Adapter、黑盒 Agent 的 ToolCall 获取 | [docs/integrations.md](docs/integrations.md) |
 | **Skill 评测** | 证明 skill 的新版本真的更好了：把"装哪个版本"变成可扫的轴（内容 hash 存档）、`skill_trigger` 量触发率、负向控制抓误触发、`required_resources` 查 bundle 脚本是否真被用上、v1→v2 的配对判断 | [docs/skills.md](docs/skills.md) |
 

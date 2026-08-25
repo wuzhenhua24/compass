@@ -13,10 +13,10 @@ Key design choices:
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from compass.adapters.llm import structured_completion
 from compass.graders.base import (
     GradeContext,
     GradeResult,
@@ -26,6 +26,12 @@ from compass.graders.base import (
 )
 from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.registry import register_grader
+
+#: What the judge is told it is, when a rubric supplies no role of its own.
+_DEFAULT_JUDGE_ROLE = (
+    "You are an expert evaluator. "
+    "Respond only with valid JSON matching the required schema."
+)
 
 
 @dataclass
@@ -421,88 +427,21 @@ class RubricGrader(ModelGrader):
             )
 
     async def _call_llm_structured(self, prompt: str) -> dict[str, Any]:
-        """Call LLM with structured output and return parsed JSON."""
-        if self.provider == "openai":
-            return await self._call_openai_structured(prompt)
-        elif self.provider == "anthropic":
-            return await self._call_anthropic_structured(prompt)
-        else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+        """Ask the model for JSON matching this rubric's schema.
 
-    async def _call_openai_structured(self, prompt: str) -> dict[str, Any]:
-        """Call OpenAI API with structured output."""
-        try:
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise ImportError(
-                "openai package required for OpenAI provider. "
-                "Install with: pip install openai"
-            ) from exc
-
-        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-        default_system = (
-            "You are an expert evaluator. "
-            "Respond only with valid JSON matching the required schema."
-        )
-        system_content = self._template.role or default_system
-
-        response = await client.chat.completions.create(
+        The provider plumbing lives in :func:`compass.adapters.llm.
+        structured_completion` — the two providers disagree about how you ask
+        for a schema, and that difference belongs in one place rather than in
+        every judge. Tests patch this method, so it stays the seam.
+        """
+        return await structured_completion(
+            prompt,
+            schema=self._schema,
             model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_content,
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "rubric_evaluation",
-                    "strict": True,
-                    "schema": self._schema,
-                },
-            },
-            temperature=0.1,  # Low temperature for consistent evaluations
+            provider=self.provider,
+            system=self._template.role or _DEFAULT_JUDGE_ROLE,
+            schema_name="rubric_evaluation",
         )
-
-        content = response.choices[0].message.content
-        return json.loads(content)
-
-    async def _call_anthropic_structured(self, prompt: str) -> dict[str, Any]:
-        """Call Anthropic API with tool use for structured output."""
-        try:
-            from anthropic import AsyncAnthropic
-        except ImportError as exc:
-            raise ImportError(
-                "anthropic package required for Anthropic provider. "
-                "Install with: pip install anthropic"
-            ) from exc
-
-        client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-        # Use tool use for structured output with Claude
-        response = await client.messages.create(
-            model=self.model if "claude" in self.model else "claude-sonnet-4-20250514",
-            max_tokens=4096,
-            tools=[
-                {
-                    "name": "submit_evaluation",
-                    "description": "Submit the rubric evaluation results",
-                    "input_schema": self._schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "submit_evaluation"},
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        # Extract tool use result
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "submit_evaluation":
-                return block.input
-
-        raise ValueError("No tool use response from Claude")
 
     def validate_config(self) -> bool:
         """Validate grader configuration."""

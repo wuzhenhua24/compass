@@ -54,6 +54,7 @@ uv run compass test qa.yaml -m gpt-5 -m claude-5 # Multi-model leaderboard
 uv run compass grade ./traces -s qa.yaml     # Offline grading, no agent re-run
 uv run compass analyze results/              # Analyze results
 uv run compass compare a.json b.json         # Paired comparison (flips + CI)
+uv run compass insights results.json        # LLM conclusions, each checked against the data
 uv run compass site build results.json -o site/  # Publish a static site
 uv run compass site compare a.json b.json -o site/  # Publish a paired comparison
 uv run compass site serve results.json       # Live view, recomputed per request

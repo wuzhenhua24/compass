@@ -295,6 +295,7 @@ compass site build results.json -o site/     # 发布静态站（细节默认脱
 compass site compare a.json b.json -o site/   # 把配对比较也发布进站点（逐 grader + 过程指标）
 compass site serve results.json              # 本地实时看：每请求现算，跑到一半也能看
 compass trace traces/case.json --steps       # 看轨迹
+compass insights results.json                # 模型下结论，逐条拿数据核；--show-dropped 看被驳回的和理由
 compass import session.jsonl                 # 导入 pi / codex / OTLP / Claude / ATIF 轨迹（codex 流要 --model 才有成本）
 compass import jobs/my-run -f atif           # 一个 Harbor job 的全部 trial（reward 停在 metadata.harbor，不当分数）
 compass list                                 # 已注册的 grader 和 adapter
