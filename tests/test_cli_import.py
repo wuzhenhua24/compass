@@ -7,7 +7,8 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from compass.cli.main import _detect_trace_format, cli
+from compass.cli.commands.imports import _detect_trace_format
+from compass.cli.main import cli
 from compass.core.transcript import Transcript
 
 # ---------------------------------------------------------------------------

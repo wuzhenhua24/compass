@@ -109,7 +109,10 @@ Human Graders                 → human_review (expert annotation)
 
 ```
 src/compass/
-├── cli/main.py           # CLI entry point
+├── cli/
+│   ├── app.py            # the Click group + shared console
+│   ├── main.py           # entry point: imports commands/, which registers them
+│   └── commands/         # one module per command (run, grade, compare, site, …)
 ├── core/
 │   ├── runner.py         # Compass class - main test runner
 │   ├── scenario.py       # Scenario/TestCase/GraderConfig models

@@ -246,14 +246,14 @@ class TestModelVariants:
         )
 
     def test_no_models_is_the_identity(self):
-        from compass.cli.main import _model_variants
+        from compass.cli.commands.run import _model_variants
 
         scn = self._scenario()
         variants = _model_variants([scn], [], "model")
         assert variants == [("s", scn)]
 
     def test_each_model_gets_its_own_variant(self):
-        from compass.cli.main import _model_variants
+        from compass.cli.commands.run import _model_variants
 
         variants = _model_variants([self._scenario()], ["a", "b"], "model")
 
@@ -262,7 +262,7 @@ class TestModelVariants:
         assert [v.name for _, v in variants] == ["s [a]", "s [b]"]
 
     def test_the_original_scenario_is_not_mutated(self):
-        from compass.cli.main import _model_variants
+        from compass.cli.commands.run import _model_variants
 
         scn = self._scenario()
         _model_variants([scn], ["a", "b"], "model")
@@ -270,14 +270,14 @@ class TestModelVariants:
         assert scn.name == "s"
 
     def test_a_custom_key_can_be_overridden(self):
-        from compass.cli.main import _model_variants
+        from compass.cli.commands.run import _model_variants
 
         variants = _model_variants([self._scenario()], ["v2"], "endpoint")
         assert variants[0][1].agent.config["endpoint"] == "v2"
         assert variants[0][1].agent.config["model"] == "default"
 
     def test_labels_disambiguate_across_scenarios(self):
-        from compass.cli.main import _model_variants
+        from compass.cli.commands.run import _model_variants
 
         variants = _model_variants(
             [self._scenario("one"), self._scenario("two")], ["a"], "model"

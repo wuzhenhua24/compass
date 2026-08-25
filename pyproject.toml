@@ -120,7 +120,7 @@ ignore_missing_imports = true
 
 # ── Type-checking ratchet ──
 #
-# `mypy src/compass` is green, and 53 of 84 modules are genuinely strict-clean:
+# `mypy src/compass` is green, and most modules are genuinely strict-clean:
 # anything not listed below is gated, so new code and edits to clean modules
 # cannot regress. The modules listed here still carry ~110 findings and are
 # quarantined rather than fixed.
@@ -139,7 +139,6 @@ ignore_missing_imports = true
 module = [
     "compass.adapters.coding",
     "compass.adapters.environment",
-    "compass.cli.main",
     "compass.core.artifact_store",
     "compass.core.result",
     "compass.core.sweep",

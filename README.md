@@ -421,7 +421,7 @@ Transcript / Model grader、自定义 Adapter、黑盒 Agent 的 ToolCall 获取
 ```
 compass/
 ├── src/compass/
-│   ├── cli/                  # CLI 入口
+│   ├── cli/                  # CLI：app.py 是 Click group，commands/ 一个命令一个模块
 │   ├── docs_index.py         # 随包分发的文档索引（撑起 compass docs）
 │   ├── core/
 │   │   ├── scenario.py       # 场景定义
