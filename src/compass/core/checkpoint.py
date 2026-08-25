@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.core.fileio import atomic_write_json
+from compass.core.fileio import atomic_write_json, safe_filename
 from compass.core.result import CaseResult, EvaluatorResult, TestStatus
 from compass.core.trial import TrialResult
 
@@ -97,9 +97,6 @@ def scenario_fingerprint(scenario: Any) -> str:
     return hasher.hexdigest()[:16]
 
 
-def _safe_filename(case_id: str) -> str:
-    """Sanitize case_id for use as filename."""
-    return case_id.replace("/", "_").replace("\\", "_").replace(" ", "_")
 
 
 # ── Data structures ──
@@ -352,7 +349,7 @@ class CheckpointStore:
 
     def save_case_result(self, case_id: str, result: CaseResult) -> None:
         """Persist a single completed case (called after each case finishes)."""
-        filename = f"{_safe_filename(case_id)}.json"
+        filename = f"{safe_filename(case_id)}.json"
         # Payload first, index second: an index entry that points at a
         # half-written file would be worse than no entry at all.
         atomic_write_json(self._cases_dir / filename, _case_result_to_dict(result))
@@ -368,7 +365,7 @@ class CheckpointStore:
         Trial-level granularity is what makes an interrupted multi-trial run
         resumable *without* throwing away the attempts it already paid for.
         """
-        filename = f"{_safe_filename(case_id)}__t{trial.trial_number}.json"
+        filename = f"{safe_filename(case_id)}__t{trial.trial_number}.json"
         atomic_write_json(self._trials_dir / filename, _trial_result_to_dict(trial))
 
         cp = self.get_checkpoint()

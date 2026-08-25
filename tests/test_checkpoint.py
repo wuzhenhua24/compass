@@ -9,7 +9,6 @@ from compass.core.checkpoint import (
     RunCheckpoint,
     _case_result_to_dict,
     _dict_to_case_result,
-    _safe_filename,
     find_checkpoints,
     scenario_fingerprint,
 )
@@ -256,22 +255,6 @@ class TestScenarioFingerprint:
         s2 = _make_scenario()
         s2.defaults.trials = 3
         assert scenario_fingerprint(s1) != scenario_fingerprint(s2)
-
-
-# ===================================================================
-# _safe_filename
-# ===================================================================
-
-
-class TestSafeFilename:
-    def test_slashes(self):
-        assert _safe_filename("a/b\\c") == "a_b_c"
-
-    def test_spaces(self):
-        assert _safe_filename("case with spaces") == "case_with_spaces"
-
-    def test_simple(self):
-        assert _safe_filename("case_1") == "case_1"
 
 
 # ===================================================================

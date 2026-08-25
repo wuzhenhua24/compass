@@ -39,9 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from compass.core.artifact_store import _safe_filename
 from compass.core.artifacts import ImageArtifact
-from compass.core.fileio import atomic_write_json
+from compass.core.fileio import atomic_write_json, safe_filename
 from compass.core.result import CaseResult, EvalResult, EvaluatorResult, TestStatus
 from compass.core.scenario import Scenario, TestCase
 from compass.core.transcript import Transcript
@@ -229,7 +228,7 @@ def _rehydrate_artifacts(transcript: Transcript, trace_dir: Path) -> None:
 
     # Legacy Outcome.image: ArtifactStore writes it to <trace_dir>/<case>/output.png
     if outcome.image is None:
-        legacy = trace_dir / _safe_filename(transcript.task_id) / "output.png"
+        legacy = trace_dir / safe_filename(transcript.task_id) / "output.png"
         if legacy.exists():
             outcome.image = _open(legacy)
 

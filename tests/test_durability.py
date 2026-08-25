@@ -32,6 +32,7 @@ from compass.core.fileio import (
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
+    safe_filename,
 )
 from compass.core.regrade import load_trace
 from compass.core.result import CaseResult, TestStatus
@@ -343,3 +344,28 @@ class TestTraceIsWrittenLast:
 
         ArtifactStore.save_image(Image.new("RGB", (2, 2)), tmp_path / "x.png")
         assert [p.name for p in tmp_path.iterdir()] == ["x.png"]
+
+
+# ===================================================================
+# safe_filename — one case id, one spelling on disk
+# ===================================================================
+
+
+class TestSafeFilename:
+    """The checkpoint and the artifact store used to sanitize a case id
+    differently, so the same id named two different paths. Now they share this.
+    """
+
+    def test_path_separators(self):
+        assert safe_filename("a/b\\c") == "a_b_c"
+
+    def test_whitespace(self):
+        assert safe_filename("case with spaces") == "case_with_spaces"
+        assert safe_filename("case\twith\ttabs") == "case_with_tabs"
+
+    def test_the_characters_windows_rejects(self):
+        assert safe_filename('a/b\\c:d*e?"f<g>h|i') == "a_b_c_d_e__f_g_h_i"
+
+    def test_an_already_safe_name_is_untouched(self):
+        assert safe_filename("hello-world_v2.txt") == "hello-world_v2.txt"
+        assert safe_filename("case_1") == "case_1"

@@ -1,12 +1,11 @@
 """VLM (Vision Language Model) grader."""
 
-import base64
-from io import BytesIO
 from typing import Any
 
 from PIL import Image
 
 from compass.graders.base import GradeContext, GradeResult, GraderScope, GraderType, ModelGrader
+from compass.graders.domains.image._encoding import image_to_base64
 from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.registry import register_grader
 
@@ -135,7 +134,7 @@ Finally, give an overall score from 0.0 to 1.0 based on how well the image meets
                 "for testing (NOT recommended)."
             )
 
-        image_base64 = self._image_to_base64(image)
+        image_base64 = image_to_base64(image)
 
         criteria_text = "\n".join(f"- {c}" for c in criteria)
 
@@ -226,8 +225,3 @@ Respond in JSON format:
                 "httpx is required for VLM API calls. Install with: pip install httpx"
             ) from exc
 
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """Convert PIL Image to base64 string."""
-        buffer = BytesIO()
-        image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")

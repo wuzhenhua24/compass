@@ -9,15 +9,14 @@ was correctly applied by comparing the original and edited images.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
-from io import BytesIO
 from typing import Any
 
 from PIL import Image
 
 from compass.graders.base import GradeContext, GradeResult, GraderScope, GraderType, ModelGrader
+from compass.graders.domains.image._encoding import image_to_base64
 from compass.graders.registry import register_grader
 
 
@@ -143,8 +142,8 @@ class EditCorrectnessGrader(ModelGrader):
                 "for testing (NOT recommended)."
             )
 
-        original_b64 = self._image_to_base64(original)
-        edited_b64 = self._image_to_base64(edited)
+        original_b64 = image_to_base64(original)
+        edited_b64 = image_to_base64(edited)
 
         criteria_text = ""
         if self.criteria:
@@ -222,9 +221,3 @@ class EditCorrectnessGrader(ModelGrader):
                 "issues": ["json_parse_error"],
             }
 
-    @staticmethod
-    def _image_to_base64(image: Image.Image) -> str:
-        """Convert PIL Image to base64 string."""
-        buffer = BytesIO()
-        image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")

@@ -8,7 +8,6 @@ regression testing.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,7 +17,7 @@ from compass.core.artifacts import (
     ImageArtifact,
     TextArtifact,
 )
-from compass.core.fileio import atomic_path, atomic_write_json, atomic_write_text
+from compass.core.fileio import atomic_path, atomic_write_json, atomic_write_text, safe_filename
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -66,7 +65,7 @@ class ArtifactStore:
         if not has_legacy_image and not has_artifacts:
             return []
 
-        safe_id = _safe_filename(case_id)
+        safe_id = safe_filename(case_id)
         artifact_dir = self.base_dir / safe_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +88,7 @@ class ArtifactStore:
 
             elif isinstance(artifact, CodeArtifact):
                 for j, gf in enumerate(artifact.files):
-                    safe_name = _safe_filename(Path(gf.path).name) if gf.path else f"file_{j}"
+                    safe_name = safe_filename(Path(gf.path).name) if gf.path else f"file_{j}"
                     fname = f"artifact_{i}_code_{j}_{safe_name}"
                     path = artifact_dir / fname
                     atomic_write_text(path, gf.content)
@@ -132,7 +131,7 @@ class ArtifactStore:
         document, a judge's raw response — is archived next to the output it
         was derived from, rather than living in a temp dir that disappears.
         """
-        path = self.base_dir / _safe_filename(case_id) / "grade"
+        path = self.base_dir / safe_filename(case_id) / "grade"
         if create:
             path.mkdir(parents=True, exist_ok=True)
         return path
@@ -149,9 +148,6 @@ class ArtifactStore:
 # ------------------------------------------------------------------
 
 
-def _safe_filename(name: str) -> str:
-    """Replace characters unsafe for filenames."""
-    return re.sub(r'[/\\:*?"<>|\s]', "_", name)
 
 
 def _get_timestamp() -> str:

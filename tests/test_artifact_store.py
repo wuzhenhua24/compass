@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from compass.core.artifact_store import ArtifactStore, _safe_filename
+from compass.core.artifact_store import ArtifactStore
 from compass.core.artifacts import CodeArtifact, GeneratedFile, ImageArtifact, TextArtifact
 from compass.core.transcript import Outcome, Transcript
 
@@ -172,19 +172,3 @@ class TestSaveTrialArtifacts:
         saved = store.save_trial_artifacts(transcript, "case1")
 
         assert saved == []
-
-
-# ---------------------------------------------------------------------------
-# TestSafeFilename
-# ---------------------------------------------------------------------------
-
-
-class TestSafeFilename:
-    def test_replaces_special_chars(self):
-        assert _safe_filename('a/b\\c:d*e?"f<g>h|i') == "a_b_c_d_e__f_g_h_i"
-
-    def test_preserves_safe_chars(self):
-        assert _safe_filename("hello-world_v2.txt") == "hello-world_v2.txt"
-
-    def test_replaces_spaces(self):
-        assert _safe_filename("my case id") == "my_case_id"

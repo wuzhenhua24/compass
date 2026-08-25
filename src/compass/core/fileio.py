@@ -18,11 +18,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+
+def safe_filename(name: str) -> str:
+    """Turn *name* into one path component, safe on any filesystem.
+
+    A case id is user text and reaches disk in several places — a checkpoint
+    file, an artifact directory, a grading workspace. Those used to sanitize it
+    separately and differently: the checkpoint replaced only ``/``, ``\\`` and
+    spaces, the artifact store also replaced ``:*?"<>|`` and every kind of
+    whitespace. One id, two spellings, and only the stricter one was safe on
+    Windows. This is the stricter one.
+    """
+    return re.sub(r'[/\\:*?"<>|\s]', "_", name)
 
 
 @contextmanager
