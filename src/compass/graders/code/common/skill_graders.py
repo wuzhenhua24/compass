@@ -36,6 +36,8 @@ and all.
 
 from __future__ import annotations
 
+import re
+import shlex
 from collections.abc import Iterator
 from typing import Any
 
@@ -60,6 +62,42 @@ _SKILL_TOOL_NAMES = frozenset({"skill", "skills"})
 
 # Longest matched string kept as evidence, per match.
 _EVIDENCE_CHARS = 200
+
+# Tools whose whole job is to change a file. Reaching into the skill's
+# directory with one of these is *editing the skill*, not loading it — an agent
+# asked to improve a skill rewrites its SKILL.md without ever using it, and
+# counting that as a trigger turns "the skill got edited" into "the skill
+# fired". Matched on the tool name's last segment, like ``Skill`` itself.
+_WRITE_TOOLS = frozenset(
+    {
+        "write", "edit", "multiedit", "notebookedit", "apply_patch",
+        "create_file", "write_file", "edit_file", "delete", "delete_file",
+    }
+)
+
+# Tools that carry a shell command line, which has to be read as a command
+# rather than as a bag of strings — see :func:`_shell_targets`.
+_SHELL_TOOLS = frozenset(
+    {
+        "bash", "shell", "sh", "zsh", "exec", "run", "terminal", "local_shell",
+        "command_execution", "run_command", "execute_command", "run_terminal_cmd",
+    }
+)
+
+# Commands whose path arguments are things they destroy or move, not things
+# they read. ``cp`` is deliberately absent: its source argument really is read.
+_DESTRUCTIVE = frozenset({"rm", "rmdir", "unlink", "mv", "shred", "truncate", "tee"})
+
+# Commands after which a bare ``NAME=value`` is still an assignment.
+_EXPORTERS = frozenset({"export", "declare", "local", "typeset", "readonly", "set"})
+
+# Control operators shlex hands back as their own tokens. Each one starts a new
+# command, so the destructive/assignment state resets.
+_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")", "{", "}", "\n"})
+
+_REDIRECT_RE = re.compile(r"^\d*(?:>>?|&>>?|>&)$")
+_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
 @register_grader("skill_trigger")
@@ -111,7 +149,7 @@ class SkillTriggerGrader(CodeGrader):
             )
 
         fragments = _fragments(skill, self.path)
-        touches = _scan(context.tool_calls, skill, fragments)
+        touches, writes = _scan(context.tool_calls, skill, fragments)
 
         triggered = bool(touches)
         checks: list[tuple[str, bool]] = [("triggered", triggered == self.should_trigger)]
@@ -138,11 +176,18 @@ class SkillTriggerGrader(CodeGrader):
         metrics: dict[str, float | bool] = {
             "skill_triggered": triggered,
             "skill_touch_calls": float(len(touches)),
+            "skill_write_calls": float(len(writes)),
         }
         if triggered:
             metrics["skill_trigger_turn"] = float(touches[0].turn)
         if self.required_resources:
             metrics["skill_resources_used"] = float(sum(resources.values()))
+
+        tags = [f"skill_via_{s}" for s in signals]
+        if writes and not triggered:
+            # The one case where a reader would otherwise be misled: the agent
+            # was all over the skill's directory and still never loaded it.
+            tags.append("skill_write_only")
 
         return GradeResult(
             name=self.name,
@@ -163,11 +208,20 @@ class SkillTriggerGrader(CodeGrader):
                     {"tool": t.tool, "turn": t.turn, "match": t.evidence}
                     for t in touches[:5]
                 ],
+                # Kept apart from `evidence` because it is evidence of the
+                # opposite: these calls reached into the skill's directory to
+                # change it, and none of them count as loading it.
+                "writes": [
+                    {"tool": t.tool, "turn": t.turn, "match": t.evidence}
+                    for t in writes[:5]
+                ],
             },
-            tags=[f"skill_via_{s}" for s in signals],
+            tags=tags,
             metrics=metrics,
             failure_tags=failure_tags,
-            reasoning=_reasoning(skill, triggered, self.should_trigger, resources),
+            reasoning=_reasoning(
+                skill, triggered, self.should_trigger, resources, bool(writes)
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -216,41 +270,152 @@ class _Touch:
         self.texts = texts
 
 
-def _scan(tool_calls: list[Any], skill: str, fragments: list[str]) -> list[_Touch]:
-    """Every tool call that named or opened the skill, in order."""
-    touches: list[_Touch] = []
+def _scan(
+    tool_calls: list[Any], skill: str, fragments: list[str]
+) -> tuple[list[_Touch], list[_Touch]]:
+    """(loads, writes) — calls that opened the skill, and calls that changed it.
+
+    Both are "the call mentioned a path inside the skill", and the difference
+    between them is the whole point: a run that rewrote ``SKILL.md`` and never
+    read it did not load the skill, and reporting it as a trigger would make an
+    edit look like a hit.
+    """
+    loads: list[_Touch] = []
+    writes: list[_Touch] = []
     for index, call in enumerate(tool_calls):
         tool = str(getattr(call, "tool_name", "") or getattr(call, "tool", ""))
-        texts = [t for t in _strings(getattr(call, "input", None)) if t]
-        normalized = [t.replace("\\", "/") for t in texts]
+        texts = [t.replace("\\", "/") for t in _strings(getattr(call, "input", None)) if t]
+        turn_index = getattr(call, "turn_index", None)
+        turn = int(turn_index) if turn_index is not None else index
 
-        signal = ""
-        evidence = ""
         if _is_skill_tool(tool):
-            for text in normalized:
-                if _names_skill(text, skill):
-                    signal, evidence = "skill_tool", text
-                    break
-        if not signal:
-            for text in normalized:
-                hit = next((f for f in fragments if f in text), "")
-                if hit:
-                    signal, evidence = "file", text
-                    break
-        if not signal:
+            named = next((t for t in texts if _names_skill(t, skill)), "")
+            if named:
+                loads.append(_Touch(tool, turn, "skill_tool", named[:_EVIDENCE_CHARS], texts))
+                continue
+
+        read_texts, write_texts = _by_intent(tool, texts)
+        read_hit = _first_hit(read_texts, fragments)
+        if read_hit:
+            loads.append(_Touch(tool, turn, "file", read_hit[:_EVIDENCE_CHARS], read_texts))
+            continue
+        write_hit = _first_hit(write_texts, fragments)
+        if write_hit:
+            writes.append(_Touch(tool, turn, "write", write_hit[:_EVIDENCE_CHARS], write_texts))
+    return loads, writes
+
+
+def _first_hit(texts: list[str], fragments: list[str]) -> str:
+    """The first of *texts* that points inside the skill, or ``""``."""
+    for text in texts:
+        if any(fragment in text for fragment in fragments):
+            return text
+    return ""
+
+
+def _by_intent(tool: str, texts: list[str]) -> tuple[list[str], list[str]]:
+    """Split a call's strings into what it read and what it changed.
+
+    Three kinds of tool, three answers. A write tool changes everything it
+    names. A shell tool has to be read as a command line, because the same path
+    means opposite things on either side of a ``>``. Everything else is read as
+    it always was — every string it carries counts as a reference.
+    """
+    if _last_segment(tool) in _WRITE_TOOLS:
+        return [], texts
+    if _last_segment(tool) not in _SHELL_TOOLS:
+        return texts, []
+
+    reads: list[str] = []
+    writes: list[str] = []
+    for text in texts:
+        text_reads, text_writes = _shell_targets(text)
+        reads.extend(text_reads)
+        writes.extend(text_writes)
+    return reads, writes
+
+
+def _shell_targets(command: str) -> tuple[list[str], list[str]]:
+    """(read, written) paths in one shell command line, variables resolved.
+
+    Two things this buys over searching the raw string. ``VAR=`` assignments are
+    followed, so ``D=.claude/skills/rw; cat $D/SKILL.md`` is recognized as the
+    read it is. And redirect targets and the arguments of ``rm``/``mv``/``tee``
+    land on the written side, so rewriting or deleting the skill stops reading
+    as loading it.
+
+    Deliberately shallow. There is no substitution, no globbing, no following
+    of a script that a command runs — a shell is not something to reimplement
+    inside a grader. A command that will not tokenize is handed back whole, on
+    the read side, which is exactly the behaviour this replaced: the fallback
+    keeps the old false positive rather than inventing a new false negative.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return [command], []
+
+    assignments: dict[str, str] = {}
+    reads: list[str] = []
+    writes: list[str] = []
+    at_command_start = True
+    taking_assignments = True
+    destructive = False
+    redirecting = False
+
+    for token in tokens:
+        if token in _SEPARATORS:
+            at_command_start = taking_assignments = True
+            destructive = redirecting = False
+            continue
+        if _REDIRECT_RE.match(token):
+            redirecting = True
             continue
 
-        turn = getattr(call, "turn_index", None)
-        touches.append(
-            _Touch(
-                tool=tool,
-                turn=int(turn) if turn is not None else index,
-                signal=signal,
-                evidence=evidence[:_EVIDENCE_CHARS],
-                texts=normalized,
-            )
-        )
-    return touches
+        assignment = _ASSIGN_RE.match(token) if taking_assignments else None
+        if assignment and not redirecting:
+            assignments[assignment.group(1)] = _expand(assignment.group(2), assignments)
+            continue
+
+        expanded = _expand(token, assignments)
+        if redirecting:
+            writes.append(expanded)
+            redirecting = False
+            continue
+        if at_command_start:
+            at_command_start = False
+            command_word = expanded.rsplit("/", 1)[-1]
+            taking_assignments = command_word in _EXPORTERS
+            destructive = command_word in _DESTRUCTIVE
+            reads.append(expanded)
+            continue
+        (writes if destructive else reads).append(expanded)
+
+    return reads, writes
+
+
+def _expand(text: str, assignments: dict[str, str]) -> str:
+    """Substitute ``$VAR`` / ``${VAR}`` from *assignments*.
+
+    A variable the command line never set is left as written. Expanding it to
+    the empty string would splice unrelated path pieces together and could
+    manufacture a match that never happened.
+    """
+    if "$" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return assignments.get(name, match.group(0))
+
+    return _VAR_RE.sub(replace, text)
+
+
+def _last_segment(tool_name: str) -> str:
+    """The bare tool name behind any namespacing (``mcp__x__Bash`` -> ``bash``)."""
+    return tool_name.replace("__", ".").replace(":", ".").rsplit(".", 1)[-1].strip().lower()
 
 
 def _fragments(skill: str, extra_path: str) -> list[str]:
@@ -270,8 +435,7 @@ def _fragments(skill: str, extra_path: str) -> list[str]:
 
 def _is_skill_tool(tool_name: str) -> bool:
     """Whether this tool is "load a skill by name" (``Skill``, ``mcp__x__Skill``)."""
-    segment = tool_name.replace("__", ".").replace(":", ".").rsplit(".", 1)[-1]
-    return segment.strip().lower() in _SKILL_TOOL_NAMES
+    return _last_segment(tool_name) in _SKILL_TOOL_NAMES
 
 
 def _names_skill(text: str, skill: str) -> bool:
@@ -310,10 +474,19 @@ def _strings(value: Any, depth: int = 0) -> Iterator[str]:
 
 
 def _reasoning(
-    skill: str, triggered: bool, should_trigger: bool, resources: dict[str, bool]
+    skill: str,
+    triggered: bool,
+    should_trigger: bool,
+    resources: dict[str, bool],
+    edited: bool = False,
 ) -> str:
     if triggered != should_trigger:
         if should_trigger:
+            if edited:
+                return (
+                    f"'{skill}' was never loaded — the run wrote into its directory "
+                    f"but never read from it."
+                )
             return f"'{skill}' was never loaded — no Skill call and no file read under it."
         return f"'{skill}' loaded on a prompt that should have been handled without it."
     unused = [r for r, used in resources.items() if not used]

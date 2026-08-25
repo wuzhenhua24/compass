@@ -50,7 +50,7 @@ gains its scenario name plus the two scope axes.
 import json
 import re
 import shutil
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -65,6 +65,11 @@ from urllib.parse import unquote
 
 from compass.core.result import EvalResult, TestStatus
 from compass.report.analyzer import iter_case_dicts
+from compass.report.redaction import (
+    env_secret_values,
+    redact_json,
+    redact_text,
+)
 
 #: Bumped when the document shape changes incompatibly. A viewer reads this
 #: before anything else, so an old page can refuse a new document instead of
@@ -492,17 +497,27 @@ def publish_doc(doc: Mapping[str, Any], *, include_details: bool = False) -> dic
     A skill's install record is kept — its ``digest`` is the point of
     publishing it at all — minus ``source``, which is an absolute path on the
     machine that ran the eval and says nothing a reader of the page needs.
+
+    Credentials come out **either way**. ``--include-details`` means "show me
+    the evidence", and a grader's evidence is the tool call's own arguments —
+    which is exactly where an ``Authorization: Bearer …`` lives. What was
+    scrubbed is recorded in ``secrets_redacted`` rather than dropped quietly:
+    a reader is entitled to know the evidence in front of them is incomplete,
+    and the run's owner is entitled to know a key needs rotating. See
+    :mod:`compass.report.redaction` for what is recognized and what is not.
     """
     published: dict[str, Any] = json.loads(json.dumps(doc))
-    if include_details:
-        return published
+    if not include_details:
+        for case in iter_cases(published):
+            for grader in case.get("evaluator_results") or []:
+                grader.pop("metadata", None)
+            for skill in case.get("skills") or []:
+                skill.pop("source", None)
+        published["details_redacted"] = True
 
-    for case in iter_cases(published):
-        for grader in case.get("evaluator_results") or []:
-            grader.pop("metadata", None)
-        for skill in case.get("skills") or []:
-            skill.pop("source", None)
-    published["details_redacted"] = True
+    published, counts = redact_json(published)
+    if counts:
+        published["secrets_redacted"] = dict(counts)
     return published
 
 
@@ -792,8 +807,9 @@ def build_comparison(
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True)
+    scrubbed, _ = redact_json(doc)
     (target / "comparison.json").write_text(
-        json.dumps(doc, ensure_ascii=False), encoding="utf-8"
+        json.dumps(scrubbed, ensure_ascii=False), encoding="utf-8"
     )
 
     entry = comparison_entry(slug, doc)
@@ -828,17 +844,86 @@ class BuildResult:
     #: Slug's previous builds still remembered, for the trend line.
     history: int = 0
     published_paths: list[str] = field(default_factory=list)
+    #: Secrets scrubbed on the way out, by pattern name. See
+    #: :mod:`compass.report.redaction`.
+    redactions: dict[str, int] = field(default_factory=dict)
 
 
-def _copy_traces(source: Path, target: Path) -> tuple[list[str], int]:
-    """Copy a trace directory into the site, reporting what was published."""
+# Trace files whose text is scrubbed on the way into a site. Anything else
+# (images, archives) is copied byte-for-byte: a secret cannot be recognized in
+# a PNG, and rewriting one would corrupt it.
+_JSON_TRACE_SUFFIXES = frozenset({".json"})
+_JSONL_TRACE_SUFFIXES = frozenset({".jsonl", ".ndjson"})
+_TEXT_TRACE_SUFFIXES = frozenset(
+    {".txt", ".md", ".log", ".html", ".htm", ".yaml", ".yml", ".csv", ".diff", ".patch"}
+)
+
+
+def _redact_trace_file(path: Path, known: tuple[str, ...]) -> Counter[str]:
+    """Scrub one published trace file in place; report what was hit.
+
+    JSON is parsed and scrubbed value by value, so no pattern can match across
+    two fields — ``"total_tokens": 1234567890`` is never read as an assignment.
+    A file that does not parse falls back to scrubbing it as text, because a
+    truncated trace from a killed run is exactly the kind that still holds a
+    command line.
+    """
+    suffix = path.suffix.lower()
+    if suffix not in _JSON_TRACE_SUFFIXES | _JSONL_TRACE_SUFFIXES | _TEXT_TRACE_SUFFIXES:
+        return Counter()
+    try:
+        original = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return Counter()
+
+    counts: Counter[str] = Counter()
+    scrubbed: str | None = None
+
+    if suffix in _JSON_TRACE_SUFFIXES:
+        try:
+            value, counts = redact_json(json.loads(original), extra_values=known)
+            scrubbed = json.dumps(value, ensure_ascii=False)
+        except (ValueError, TypeError):
+            scrubbed = None
+    elif suffix in _JSONL_TRACE_SUFFIXES:
+        lines: list[str] = []
+        for line in original.splitlines():
+            try:
+                value, hits = redact_json(json.loads(line), extra_values=known)
+            except (ValueError, TypeError):
+                lines.append(redact_text(line, extra_values=known, counts=counts))
+                continue
+            counts += hits
+            lines.append(json.dumps(value, ensure_ascii=False))
+        scrubbed = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+
+    if scrubbed is None:
+        counts = Counter()
+        scrubbed = redact_text(original, extra_values=known, counts=counts)
+
+    if scrubbed != original:
+        path.write_text(scrubbed, encoding="utf-8")
+    return counts
+
+
+def _copy_traces(source: Path, target: Path) -> tuple[list[str], int, Counter[str]]:
+    """Copy a trace directory into the site, reporting what was published.
+
+    A trace is the highest-exposure thing a site can carry — every tool call's
+    arguments, verbatim — so it is scrubbed here rather than at the document
+    level, which never sees these files. Sizes are measured *after* the scrub,
+    so what the build reports is what is actually on disk.
+    """
     shutil.copytree(source, target)
+    known = env_secret_values()
+    counts: Counter[str] = Counter()
     paths, total = [], 0
     for path in sorted(target.rglob("*")):
         if path.is_file():
+            counts += _redact_trace_file(path, known)
             paths.append(path.relative_to(target).as_posix())
             total += path.stat().st_size
-    return paths, total
+    return paths, total, counts
 
 
 def build_site(
@@ -886,8 +971,11 @@ def build_site(
 
     trace_paths: list[str] = []
     trace_bytes = 0
+    trace_redactions: Counter[str] = Counter()
     if trace_dir is not None:
-        trace_paths, trace_bytes = _copy_traces(Path(trace_dir), run_dir / "traces")
+        trace_paths, trace_bytes, trace_redactions = _copy_traces(
+            Path(trace_dir), run_dir / "traces"
+        )
     published["traces"] = trace_paths
 
     (run_dir / "run.json").write_text(
@@ -920,6 +1008,9 @@ def build_site(
         trace_bytes=trace_bytes,
         history=len(entry["history"]),
         published_paths=trace_paths,
+        redactions=dict(
+            trace_redactions + Counter(published.get("secrets_redacted") or {})
+        ),
     )
 
 
@@ -992,6 +1083,12 @@ def make_server(
     """
     by_slug = {source.slug: source for source in sources}
     cache: dict[str, tuple[int, dict[str, Any]]] = {}
+    # On loopback this is a private view of files already on this disk, and
+    # scrubbing them would only make `serve` disagree with `build` about what a
+    # trace says. Bound anywhere else, serving a raw transcript *is* publishing
+    # it — the same rule `include_details` already follows.
+    scrub_traces = not is_loopback(host)
+    known_secrets = env_secret_values() if scrub_traces else ()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802  (BaseHTTPRequestHandler's API)
@@ -1053,7 +1150,15 @@ def make_server(
                 if target.suffix in (".json", ".jsonl", ".yaml", ".yml", ".txt", ".log")
                 else guess_type(target.name)[0] or "application/octet-stream"
             )
-            self._reply(200, target.read_bytes(), ctype)
+            body = target.read_bytes()
+            if scrub_traces and ctype.startswith("text/"):
+                try:
+                    body = redact_text(
+                        body.decode("utf-8"), extra_values=known_secrets
+                    ).encode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+            self._reply(200, body, ctype)
 
         def _reply_json(self, data: Mapping[str, Any]) -> None:
             self._reply(

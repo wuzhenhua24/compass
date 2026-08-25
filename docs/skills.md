@@ -116,6 +116,33 @@ skill 会被报成 0% 触发率。
 **只在正文里提到名字不算**。agent 在 Bash 里 `echo` 一句带 skill 名的话、在写出
 的文件里提一嘴，都不构成加载——否则触发率会随着 agent 的话变多而虚高。
 
+**改写它不算加载**。同一个目录，两件相反的事：
+
+```bash
+cat  .claude/skills/report-writer/SKILL.md      # 加载
+echo x > .claude/skills/report-writer/SKILL.md  # 不是加载，是编辑
+rm -rf .claude/skills/report-writer/            # 更不是
+```
+
+让 agent"把这个 skill 改好"的运行，会通篇在 skill 目录里写文件却一次都没用过
+它。按"碰到路径就算"来数，这种运行的触发率是 100%——**编辑被报成了命中**，而且
+错在让人高兴的那个方向。所以 `Write` / `Edit` / `apply_patch` 这类工具、以及
+shell 里重定向的目标和 `rm`/`mv`/`tee` 的参数，都记在写那一侧，不进触发。
+
+要做到这点，shell 命令是**按命令行读的，不是按字符串搜的**——同一个路径在 `>`
+两边意思相反。顺带也就认得出变量：
+
+```bash
+D=.claude/skills/report-writer; cat $D/SKILL.md   # 加载（跟着 D 走）
+export D=... && python $D/scripts/render.py       # 加载，且算 required_resources
+D=.claude/skills/report-writer; echo done          # 不算——赋值不是读取
+```
+
+刻意做得浅：不做命令替换、不展开 glob、不跟进被执行的脚本——**评分器里不该塞一个
+shell 实现**。没设过的变量原样留着而不是展开成空串（否则会把无关的路径片段拼出
+一个根本没发生的匹配）。引号不闭合之类分词失败的命令，整条退回旧的字符串匹配：
+这是触发信号本身，**留一个旧的误报也好过造一个新的漏报**。
+
 产出的指标：
 
 | 指标 | 含义 |
@@ -123,7 +150,11 @@ skill 会被报成 0% 触发率。
 | `skill_triggered` | 布尔；跨 trial 求均值就是**触发率** |
 | `skill_trigger_turn` | 第几轮加载的——越早越好，晚加载意味着它先走了一段弯路 |
 | `skill_touch_calls` | 碰到 skill 的调用数 |
+| `skill_write_calls` | 往 skill 目录里**写**的调用数（不计入触发）|
 | `skill_resources_used` | 用上了几个 `required_resources` |
+
+写了但没读的运行带 `skill_write_only` 标签——它满目录都是动作却没加载，不标一下
+读的人会以为是普通的"没触发"。
 
 `score=None` 的一种情况：既没配 `skill:`、安装记录里也没有。**基线支线属于这一
 类**——它没装任何 skill——所以带基线的 sweep 一定要显式写 `skill: <name>`，让基线
@@ -181,11 +212,13 @@ compass site compare out/results.<v1>.json out/results.<v2>.json \
   （3 次里中了 1 次 → `0.3333`），和它旁边那个同样是均值的分数对得上。
 - 触发失败的 case 带着 `not_triggered` / `unexpected_trigger` / `resource_unused`
   标签，点一下就能筛出来；`skill_via_file` / `skill_via_skill_tool` 说明它是被哪种
-  信号认定为"加载了"的。
+  信号认定为"加载了"的，`skill_write_only` 则说明它只往 skill 目录里写、没读。
 
 `--include-details` 才会把 grader 的 `details`（证据：碰到的具体路径、工具名、轮次）
 一起发布。skill 的安装记录里那条本机绝对路径（`source`）永远不发布，名字、digest、
-文件数会。
+文件数会。**证据里的凭据两条路都拦**（run 文档 + 轨迹文件），没有开关：
+`--include-details` 要的是证据，不是密钥，而 `skill_trigger` 的证据恰好就是工具调用
+的入参原文。命中数会报出来，不是悄悄删——见 [analysis.md](analysis.md)。
 
 `compass compare` 做的是**配对**比较：逐 case 配对、列出翻转（哪条从过变成不过）、
 给出 95% 置信区间和当前样本量下的可检测效应（MDE）。这比"两边各报一个均值 ±

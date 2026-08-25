@@ -269,3 +269,139 @@ def test_a_skill_without_frontmatter_falls_back_to_its_directory(tmp_path: Path)
 def test_a_bare_name_passes_through():
     assert resolve_skill_name("report-writer") == "report-writer"
     assert resolve_skill_name("  ") == ""
+
+
+# ---------------------------------------------------------------------------
+# Reading the skill vs rewriting it
+#
+# Both reach into the skill's directory, and only one is a load. An agent asked
+# to *improve* a skill edits its SKILL.md without ever using it; counting that
+# as a trigger would report an edit as a hit, and every trigger rate measured
+# over such a run would be wrong in the flattering direction.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_redirect_into_the_skill_is_not_a_load():
+    context = _context([_bash(f"echo 'rewritten' > {SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is False
+    assert result.metrics["skill_write_calls"] == 1.0
+    assert "skill_write_only" in result.tags
+    assert "wrote into its directory" in result.reasoning
+
+
+async def test_deleting_the_skill_is_not_a_load():
+    context = _context([_bash(f"rm -rf {SKILL_ROOT}/references/")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is False
+    assert result.details["writes"][0]["tool"] == "Bash"
+
+
+async def test_the_write_tools_are_not_loads():
+    context = _context(
+        [ToolCall(tool_name="Write", input={"file_path": f"{SKILL_ROOT}/SKILL.md"})]
+    )
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is False
+    assert result.metrics["skill_write_calls"] == 1.0
+
+
+async def test_reading_before_redirecting_elsewhere_is_still_a_load():
+    """The skill is on the read side of the `>`; only `/tmp/out` is written."""
+    context = _context([_bash(f"cat {SKILL_ROOT}/SKILL.md > /tmp/out.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is True
+    assert result.metrics["skill_write_calls"] == 0.0
+
+
+async def test_a_negative_control_is_not_tripped_by_an_edit():
+    """The half of this that matters for scoring: no false `unexpected_trigger`."""
+    context = _context([_bash(f"echo x >> {SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(skill="report-writer", should_trigger=False).grade(context)
+
+    assert result.passed is True
+    assert result.failure_tags == []
+
+
+async def test_a_run_that_both_edits_and_reads_counts_as_a_load():
+    context = _context(
+        [
+            _bash(f"echo x > {SKILL_ROOT}/SKILL.md", turn=1),
+            _read(f"{SKILL_ROOT}/SKILL.md", turn=2),
+        ]
+    )
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is True
+    assert result.metrics["skill_write_calls"] == 1.0
+    assert "skill_write_only" not in result.tags
+
+
+# ---------------------------------------------------------------------------
+# Variables in a shell command
+# ---------------------------------------------------------------------------
+
+
+async def test_a_read_through_a_shell_variable_counts():
+    context = _context([_bash(f"D={SKILL_ROOT}; cat $D/SKILL.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is True
+
+
+async def test_an_exported_variable_counts_too():
+    context = _context([_bash(f"export D={SKILL_ROOT} && python $D/scripts/render.py")])
+
+    result = await _grader(
+        skill="report-writer", required_resources=["scripts/render.py"]
+    ).grade(context)
+
+    assert result.details["triggered"] is True
+    assert result.details["resources"] == {"scripts/render.py": True}
+
+
+async def test_assigning_a_path_without_using_it_is_not_a_load():
+    context = _context([_bash(f"D={SKILL_ROOT}; echo done")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is False
+
+
+async def test_an_unset_variable_is_left_alone_rather_than_emptied():
+    """Expanding `$NOPE` to "" could splice a match out of unrelated pieces."""
+    context = _context([_bash("cat $NOPE/SKILL.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is False
+
+
+async def test_an_unparseable_command_keeps_the_old_reading():
+    """A dangling quote falls back to the raw string — a stale false positive
+    beats a new false negative, since this is the trigger signal itself."""
+    context = _context([_bash(f"cat '{SKILL_ROOT}/SKILL.md")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is True
+
+
+async def test_running_a_bundled_script_is_still_a_load():
+    context = _context([_bash(f"python {SKILL_ROOT}/scripts/summarize.py --out x")])
+
+    result = await _grader(skill="report-writer").grade(context)
+
+    assert result.details["triggered"] is True
+    assert result.metrics["skill_write_calls"] == 0.0

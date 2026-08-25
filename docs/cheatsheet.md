@@ -315,5 +315,7 @@ compass docs <topic>                         # 本文档体系
 | `expect: fail` 的 case「通过」了 | 负向测试：agent 被拦截或 grader 判否即为通过 |
 | sandbox 里跑带凭证的 agent，认证总是失败 | 密钥过滤器拦了 `ANTHROPIC_API_KEY`（前缀+子串双命中），三条注入路径都拦；用 `sandbox_config.env_allow` 显式放行，订阅制凭证还要 `preserve_home: true` |
 | `claude_code` / `pi` / `codex` 跑完后磁盘涨了一堆 worktree | `keep_workspace` 默认 True——grader 要对那棵树跑隐藏测试。事后 `git worktree prune` |
+| `skill_trigger` 在“让 agent 改这个 skill”的运行上报 100% | 已经不会了：写（`Write`/`Edit`、shell 重定向、`rm`/`mv`/`tee`）记在 `skill_write_calls`，不算触发；只写没读的 case 带 `skill_write_only` 标签 |
+| 发到站点的证据里带着 API key | `site build` 和非 loopback 的 `site serve` 都会先脱敏（run 文档 + 轨迹文件），命中数报一行、也写进 `run.json` 的 `secrets_redacted`。没有关闭开关——`--include-details` 要的是证据不是密钥 |
 | `state_delta` 没抓到 agent 用 `rm` 删的文件 | 只有编辑类工具会记 delta（Claude 的 `Write`/`Edit`/`MultiEdit`/`NotebookEdit`，pi 的 `write`/`edit`，codex 的 `apply_patch`），Bash 不解析（错的 delta 比缺的更糟）。空 delta = 没记录 ≠ 没变更；shell 侧要自己写领域 grader |
 | `state_delta` 的 `target` glob 一条都匹配不上 | 用相对 session cwd 的路径（`src/*`），不是绝对路径——worktree 每次都是新的临时目录 |

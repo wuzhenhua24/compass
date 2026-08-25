@@ -16,11 +16,12 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 - **执行与评分解耦**：轨迹是不可变证据，`compass grade` 给已落盘的轨迹打分——改判分器不用重跑 Agent，多套 grader 可并排评同一批样本；判分器指纹自动标记过期评分（见 [docs/analysis.md](docs/analysis.md)）
 - **评测卫生**：harness 失败不算模型失败（移出 pass rate 分母）、未打分 ≠ 0 分（判官超时不会伪装成低分，但也不许签发"通过"）、多试验轮转采样 + 补齐语义（中断后样本均衡，pass^k 不被偏样本污染）
 - **观察标签与指标**：grader 产出中性标签与定量指标（通过的样本也打）——标签聚合成占比 + 每标签通过率，指标按类型聚合（数值 mean±stderr、布尔比率）——「短回答占 67%、其中只有 25% 通过」这类行为画像，失败统计给不出；LLM 判官支持受控词表（编译进 schema enum，跨 run 可聚合）
+- **发布即脱敏**：`site build` 和非 loopback 的 `site serve` 在写出去之前扫一遍 run 文档和轨迹文件里的凭据（前缀式 key、JWT、`Bearer`、凭据形状的赋值，外加环境里那些 `*_API_KEY` 的字面值），命中数报出来而不是悄悄删——`--include-details` 要的是证据，不是密钥
 - **子进程 Checker**：`external_checker` 让**任何可执行文件**成为 grader（shell / Go 二进制 / `npm test`），契约是进程边界（env 进、stdout JSON 出、exit code 判定），checker 无需 import Compass——扩展面从「会写 Python」扩到「会写脚本」
 - **评分流水线**：grader 按声明顺序共享 workspace，产物可在 grader 间传递（抠 SVG → 渲染 → VLM 判分）；`creates:` 让"承诺产出"可验证，`required:` 失败即中止链路省下昂贵调用；中间产物作为判分证据落盘（见 [docs/graders.md](docs/graders.md)）
 - **多模型排行榜**：`compass test -m a -m b` 一次跑多个模型并排名——但排名是**读数不是测量**，每行带标准误，并明说 top 2 的差距是否经得起配对检验（建在 `compass compare` 之上）
 - **可靠性指标与工程底座**：pass@k / pass^k（无偏估计）、聚合、报告、checkpoint 续跑、并行执行、`compass compare` 配对比较（case 翻转 + 置信区间，涨分是真提升还是噪声）、审计溯源（trace 自带 run_id / config_hash / grader_version，两次运行可比性可验证）
-- **Skill 评测**：改完一个 Agent Skill 要发版，怎么证明是优化而不是改坏了？"装哪个版本"是一条可扫的轴（内容 hash 存档，隔离安装），`skill_trigger` 把"到底加载了没有"变成可比的触发率，负向控制抓 description 写太宽导致的误触发，`required_resources` 查 bundle 的脚本是真被用了还是又被现场重造（见 [docs/skills.md](docs/skills.md)）
+- **Skill 评测**：改完一个 Agent Skill 要发版，怎么证明是优化而不是改坏了？"装哪个版本"是一条可扫的轴（内容 hash 存档，隔离安装），`skill_trigger` 把"到底加载了没有"变成可比的触发率（shell 按命令行读，改写/删除 skill 不算加载），负向控制抓 description 写太宽导致的误触发，`required_resources` 查 bundle 的脚本是真被用了还是又被现场重造（见 [docs/skills.md](docs/skills.md)）
 - **领域 recipe（可选）**：[`examples/coding_agent/`](examples/coding_agent/)（Claude Code 实现业务需求）、[`examples/skill_eval/`](examples/skill_eval/)（Skill 的 v1 vs v2）、[`examples/swebench/`](examples/swebench/)（接公开数据集 SWE-bench）、[`examples/ops_qa/`](examples/ops_qa/)（文档问答 bot），是"如何自己写定制层"的模板，都能离线跑
 
 **🚫 不是什么**

@@ -2018,6 +2018,17 @@ def site_build(
             f"[yellow]Published {last.trace_files} trace file(s): "
             f"transcripts carry prompts and model output.[/yellow]"
         )
+    from collections import Counter
+
+    from compass.report.redaction import summarize
+
+    scrubbed: Counter[str] = Counter()
+    for result in built:
+        scrubbed.update(result.redactions)
+    if scrubbed:
+        # Worth a line of its own: whoever ran this has a key to rotate, and
+        # whoever reads the page is looking at evidence with holes in it.
+        console.print(f"[yellow]{summarize(scrubbed).capitalize()} before publishing.[/yellow]")
     console.print(f"[dim]Preview with:[/dim] python -m http.server -d {last.site_dir}")
 
 
