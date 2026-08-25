@@ -36,7 +36,6 @@ against a known-clean baseline.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import shlex
@@ -54,7 +53,7 @@ from compass.core.artifacts import (
     GeneratedFile,
     TextArtifact,
 )
-from compass.core.skills import read_skill_name
+from compass.core.skills import read_skill_name, tree_digest
 from compass.core.transcript import Transcript
 
 logger = logging.getLogger(__name__)
@@ -553,7 +552,7 @@ class CliAgentAdapter(Adapter):
                 ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
             )
 
-            digest, file_count = _tree_digest(dest)
+            digest, file_count = tree_digest(dest)
             installed.append(
                 {
                     "name": name,
@@ -889,23 +888,6 @@ class CliAgentAdapter(Adapter):
         )
 
 
-def _tree_digest(root: Path) -> tuple[str, int]:
-    """``(digest, file_count)`` over every file under *root*.
-
-    Paths go into the hash alongside the bytes, so renaming a reference file
-    is a different skill even when the content is the same.
-    """
-    h = hashlib.sha256()
-    count = 0
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        h.update(b"\0")
-        try:
-            h.update(path.read_bytes())
-        except OSError:  # unreadable file: hash the fact, not the content
-            h.update(b"<unreadable>")
-        count += 1
-    return h.hexdigest()[:16], count
 
 
 class _CliRun:
