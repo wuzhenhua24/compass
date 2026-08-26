@@ -76,8 +76,9 @@ class SemanticMatchGrader(ModelGrader):
 
         if self._model is None:
             raise NotImplementedError(
-                "CLIP model not available. Install the image domain's backends: "
-                "pip install 'compass-qa[image]' "
+                "CLIP model not available. Install the image domain's backends — "
+                "Compass is not on PyPI, so install the extra from a checkout: "
+                "uv pip install -e '/path/to/compass[image]' — "
                 "or set config.allow_placeholder=true to use placeholder scoring (NOT recommended)."
             )
 

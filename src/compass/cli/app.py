@@ -18,8 +18,10 @@ console = Console()
 @click.group()
 @click.version_option(version=__version__, prog_name="compass")
 def cli() -> None:
-    """Compass - Agent QA Framework.
+    """Compass - Agent Evaluation Substrate.
 
-    A universal testing and evaluation framework for AI Agents.
+    The reusable spine for evaluating AI agents: a standard trajectory model,
+    trace ingestion, process graders and reliability metrics. Domain
+    correctness graders are yours to write.
     """
     pass

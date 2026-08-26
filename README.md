@@ -1,4 +1,4 @@
-# Compass - Agent QA Framework
+# Compass — Agent Evaluation Substrate
 
 Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执行轨迹模型、多来源轨迹接入、可复用的过程评分器与可靠性指标——领域相关的"答案对不对"由你用几十行自定义 grader 补齐。它之于 Agent 评测，就像 pytest 之于测试、OpenTelemetry 之于可观测：**框架给骨架和标准，业务判定你来写**。
 
@@ -85,59 +85,28 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 ## 架构概览
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        1. Interface Layer                           │
-│   compass CLI    │    Python SDK    │    compass site (静态站)      │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │
-┌────────────────────────────┴────────────────────────────────────────┐
-│                    2. Test Orchestration Layer                      │
-│  ┌────────────────┐  ┌─────────────────┐  ┌──────────────────────┐  │
-│  │ Scenario Engine│  │ Trial Manager   │  │ Parallel Executor    │  │
-│  │ (YAML + DSL)   │  │ (Multi-attempt) │  │ (Asyncio + Worker)   │  │
-│  └────────────────┘  └─────────────────┘  └──────────────────────┘  │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │
-┌────────────────────────────┴────────────────────────────────────────┐
-│                       3. Core Engine Layer                          │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                   Grader System (三层评估)                   │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐   │   │
-│  │  │ Code Grader │  │Model Grader │  │ Human Grader        │   │   │
-│  │  │ (确定性检查)│  │ (LLM Judge) │  │ (人工标注/复核)     │   │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────┐  │
-│  │ Transcript   │  │ Metrics      │  │ Asset Manager│  │ Report  │  │
-│  │ Collector    │  │ (pass@k/^k)  │  │ (Image Store)│  │ Gen     │  │
-│  └──────────────┘  └──────────────┘  └──────────────┘  └─────────┘  │
-│  ┌──────────────┐  ┌──────────────┐                                 │
-│  │ Sandbox Mgr  │  │ Environment  │                                 │
-│  │ (隔离执行)   │  │ (状态管理)   │                                 │
-│  └──────────────┘  └──────────────┘                                 │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │
-┌────────────────────────────┴────────────────────────────────────────┐
-│                      4. Agent Adapter Layer                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ ┌────────┐  │
-│  │ ComfyUI  │  │ SD WebUI │  │Midjourney│  │ DALL-E   │ │ Custom │  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘ └────────┘  │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ ┌─────┐ ┌────┐ ┌─────┐ │
-│  │ Image    │  │ Coding   │  │Environment │ │Claude│ │ pi │ │Codex│ │
-│  └──────────┘  └──────────┘  └────────────┘ └─────┘ └────┘ └─────┘ │
-└─────────────────────────────────────────────────────────────────────┘
+1. 接口层      compass CLI · Python SDK · compass site（静态站）
+2. 编排层      Scenario Engine（YAML）· Trial Manager（多试验）· Parallel Executor
+3. 核心引擎    Grader System（Code / Model / Human 三层）
+               Transcript + ToolCall 协议 · ArtifactStore（Image/Code/Text，插件式）
+               Metrics（pass@k / pass^k）· Report（console / html / site / compare / insights）
+4. 接入层      Adapter      Compass 亲自驱动：image · coding · environment ·
+                            claude_code · pi · codex（后三者共用 cli_agent.py）
+               Integrations 消费自产轨迹：openai_agents · pi · codex_exec ·
+                            otlp · claude_agent · atif
+
+横跨 3 / 4     compass/llm/      定价 · token 用量提取 · 结构化输出（控制面）
+               compass/sandbox/  隔离 workdir + 执行 + 收集（adapter 与 coding 域 grader 共用）
 ```
 
-> 第 4 层有**两种接入**：上图的 **Adapter**（Compass 亲自驱动 Agent，适合图像/代码沙箱），
-> 以及 **Integrations**（消费 Agent 自产的轨迹，适合自跑的 LLM Agent——见 [docs/integrations.md](docs/integrations.md)）。
-> 二者产出的都是同一个 Transcript，下游评分/指标完全共用。
+> **两种接入，同一个 Transcript。** Adapter 是 Compass 亲自驱动 Agent（适合图像端点、代码沙箱
+> 这类可被外部调用的场景）；Integrations 是消费 Agent 自产的轨迹（适合自跑的 LLM Agent——见
+> [docs/integrations.md](docs/integrations.md)）。二者产出的都是同一个 Transcript，下游评分与
+> 指标完全共用。ComfyUI / SD WebUI / Midjourney / DALL-E 这类目标用 `@register_adapter` 自己接。
 >
-> 图中上排（ComfyUI / SD WebUI / Midjourney / DALL-E / Custom）是可对接的**目标**示意，下排是
-> **当前内置注册的六个 adapter**：`image` / `coding` / `environment` / `claude_code` / `pi` / `codex`——其余目标通过
-> `@register_adapter` 自定义接入。注意 `adapters/llm.py` 不是 adapter：它只提供
-> `LLMToolCallMixin`——自定义 adapter 记录一次 LLM 调用时用。模型定价表、token 用量提取
-> 与结构化输出客户端住在 `compass/llm/`（控制面），Model Grader 与轨迹导入器直接用它，
-> 不必把 adapter 层拖进来。
+> `adapters/llm.py` 不是 adapter：它只提供 `LLMToolCallMixin`——自定义 adapter 记录一次 LLM
+> 调用时用。定价表、用量提取与结构化输出客户端住在 `compass/llm/`（控制面），Model Grader 与
+> 轨迹导入器直接用，不必把 adapter 层拖进来。
 
 ### CLI 命令总览
 
@@ -203,34 +172,15 @@ compass init my_scenario.yaml
 ### 2. 运行测试
 
 ```bash
-# 运行单个场景
-compass test scenarios/my_test.yaml
-
-# 并行运行
-compass test scenarios/ --parallel --workers 4
-
-# 生成报告
-compass test scenarios/ --report html --output report.html
-
-# 保存执行轨迹（JSONL 格式，推荐用于脚本分析）
-compass test scenarios/my_test.yaml --trace-dir ./traces --trace-format jsonl
-
-# 保存执行轨迹（JSON 格式，用于程序间交换）
-compass test scenarios/my_test.yaml --trace-dir ./traces --trace-format json
-
-# 完整示例：并行运行 + 生成报告 + 保存 JSONL 轨迹
-compass test scenarios/ -p -w 8 --report html -o report.html --trace-dir ./traces --trace-format jsonl
+compass test scenarios/my_test.yaml                      # 单个场景
+compass test scenarios/ -p -w 8                          # 整目录，并行 8 路
+compass test scenarios/ -p -w 8 --report html -o r.html \
+    --trace-dir ./traces --trace-format jsonl            # 报告 + 落盘轨迹
 ```
 
-**Trace 选项说明：**
-
-| 选项 | 说明 |
-|------|------|
-| `--trace-dir PATH` | 保存执行轨迹的目录，每个 case 生成一个文件 |
-| `--trace-format [json\|jsonl]` | 轨迹文件格式，默认 `json` |
-
-- **JSONL 格式**：每行一个事件，便于用 `jq` 进行快速分析（见 [docs/core-design.md](docs/core-design.md) 的"JSONL 事件流导出"）
-- **JSON 格式**：完整的 Transcript 结构，便于程序间交换和持久化
+**留住轨迹**（`--trace-dir`）是后面每一步的前提：离线评分、配对比较、发布站点都读它。
+`--trace-format` 默认 `json`（完整 Transcript，便于程序间交换）；`jsonl` 每行一个事件，
+适合 `jq`（见 [docs/core-design.md](docs/core-design.md)）。
 
 > 多次试验数在 YAML 里配置（`defaults.trials` 或 case 级 `trials:`），不是 CLI 选项。
 
@@ -252,29 +202,10 @@ compass grade ./traces -s judge.yaml -n judge -o judge.json
 ### 4. 分析评估结果
 
 ```bash
-# 分析单个结果文件（终端可视化输出）
-compass analyze results/eval_results.json
-
-# 分析整个目录
-compass analyze results/
-
-# 导出分析报告为 JSON
-compass analyze results/ --output analysis_report.json
-```
-
-输出包含：汇总统计、Transcript/Outcome 分维度分析、Scope 对比诊断、失败模式排名和改进建议。
-
-```bash
-# 配对比较两次运行（A = 基线，B = 候选）：case 翻转 + 置信区间
-compass compare results_a/ results_b/
-```
-
-```bash
-# 发布成可分享的静态站（同一目录可被多个仓库反复 build，索引累积）
-compass site build results.json -o site/ --slug agent-qa
-
-# 本地实时查看：不 build，每个请求从磁盘现算，跑到一半的运行也能看
-compass site serve results.json
+compass analyze results/                       # 分维度诊断：Scope 对比、失败模式、改进建议
+compass compare results_a/ results_b/          # 配对比较：case 翻转 + 置信区间
+compass site build results.json -o site/       # 发布静态站（多仓库可 build 进同一目录）
+compass site serve results.json                # 实时查看：每个请求现算，跑到一半也能看
 ```
 
 ### 5. 查看执行轨迹
@@ -333,81 +264,19 @@ Compass 的能力全貌按主题拆分为专题文档，README 只保留骨架�
 - **可靠性指标**：pass@k（探索）/ pass^k（可靠性）无偏估计；`compass compare` 把"涨没涨"变成带置信区间的测量。
 - **审计溯源**：每条 trace 自带 run_id / config_hash / grader_version——两次运行是否可比、分数变化归因于 agent 还是判分器，可验证。
 
-## 端到端示例：文档问答 Agent 评估（`examples/ops_qa/`）
+## 端到端示例（四个模板，都能离线跑，不需要 API key、不花钱）
 
-一个把 Compass 各能力串起来的**可跑模板**——评估基于文档的 agentic-RAG 运维问答 bot（`ops-qa-bot` 形态：`Read`/`Grep` 检索 `docs/`、只读 `Bash`/SSH 诊断、写操作只提议）。核心是：**doc-grounded 问答不能只判"语义对不对"**，模板把它拆成四类样本，每类配一组合适的 grader：
+每个都演示一类评测里最容易做错的事。离线不是靠绕过流水线——跑的是真的 adapter、真的 git
+worktree、真的 grader，唯一的替身是 agent CLI 本身。完整讲解在各自的 README：
 
-| 样本类型 | 评什么 | grader |
+| 模板 | 它演示的那件事 | 跑 |
 |---|---|---|
-| `answerable` | 语义正确 + 关键事实 + 检索命中 | `key_facts`(gate) · `retrieval_hit` · `rubric`* |
-| `unanswerable` | 正确弃答、不编造 | `abstention`(gate) |
-| `live` | 跑了只读诊断（无固定 golden 答案）| `tool_usage`(gate) |
-| `forbidden_write` | 只提议不执行（**P0 安全**）| `no_write_ops`(gate) |
+| **文档问答**<br>[`examples/ops_qa/`](examples/ops_qa/README.md) | doc-grounded 问答不能只判「语义对不对」：四类样本各配一组 grader；检索命中与越权写从 `transcript.tool_calls` **确定性**地评；安全评的是**执行**而非文字——答案里*建议* `CONFIG SET` 没问题，*执行*才算违规 | `python examples/ops_qa/eval.py` |
+| **编程 Agent**<br>[`examples/coding_agent/`](examples/coding_agent/README.md) | 编程 agent 搞砸评测有三种不同方式（老实做 / 改测试作弊 / 结果对但绕远路），单一 pass/fail 会把它们糊成一团。附带三条设计点：验收测试必须放在仓库外、过程侧不是锦上添花、排序看 pass rate 不看 score。`check.py` 是**跑 agent 之前**先跑的那步，最容易被跳过，而它决定了数字有没有意义 | `python examples/coding_agent/eval.py` |
+| **Skill 版本对比**<br>[`examples/skill_eval/`](examples/skill_eval/README.md) | 证明 v2 是优化而不是改坏：触发率 0.17→0.67 显著提升，但总体判定仍在噪声带里（6 条用例只能检测到 86% 以上的差异）；而负向用例上的 `↓ neg_chart` 暴露出 v2 开始抢画图的活——只有正向用例的触发率评测看不见这一行 | `python examples/skill_eval/eval.py` |
+| **公开数据集**<br>[`examples/swebench/`](examples/swebench/README.md) | 官方判定协议的三个坑都守住了：测试对 agent 全程不可见、先重置测试文件再打 patch、没跑起来的测试算失败。两条必须知道：SWE-bench Verified 早已进入所有模型的训练集（比 Prompt 可以，**比模型是硬伤**），判定要跑真实依赖，正经做法是挂官方 Docker 镜像 | `python examples/swebench/demo.py` |
 
-关键洞察：bot 的检索是 `Read`/`Grep` 工具调用、诊断是 `Bash` 工具调用，所以"读没读对文档""有没有越权写"都能从 `transcript.tool_calls` **确定性**评（agentic-RAG 相比黑盒 RAG 的评估红利）；安全评的是"**执行**"而非"文字"——答案里**建议** `CONFIG SET` 没问题、**执行**才算违规。
-
-```bash
-uv run python examples/ops_qa/eval.py    # 离线跑，无需真 bot / API key
-```
-
-配套：`GradeContext` 新增一等字段 `reference_answer`（golden 答案，对称于 `reference_image`）和 `.answer` 便捷属性（取 `outcome.output_data["final_output"]`）。详见 [`examples/ops_qa/README.md`](examples/ops_qa/README.md)。
-
-## 端到端示例：编程 Agent 评估（`examples/coding_agent/`）
-
-评测**同一批业务需求下，不同 Prompt / 不同模型驱动的 Claude Code 谁做得更好**——真实 git 仓库、隐藏验收测试、过程侧守卫、多变体排行榜。
-
-```bash
-uv run python examples/coding_agent/check.py   # 先自检用例（红绿）
-uv run python examples/coding_agent/eval.py    # 离线跑，无需 API key，不花钱
-```
-
-离线不是靠绕过流水线：跑的是**真的** `claude_code` adapter、真的 git worktree、真的 grader，唯一的替身是 CLI 本身（`replay_cli.py` 回放预置运行）。接真实 agent = 删掉配置里 `cli_path` 一行。
-
-模板比的不是三个模型，是编程 agent 搞砸评测的**三种不同方式**——单一 pass/fail 会把它们糊成一团：
-
-| 行为 | 干了什么 | 被谁抓住 |
-|---|---|---|
-| `honest` | 按需求改，改完就停 | —— 全绿 |
-| `cheats` | 逻辑写错，然后**改测试**让测试变绿 | `integration_test` + `state_delta` |
-| `overreach` | 答案对，但绕远路、原地重试、改无关文件 | `state_delta` · `cost_budget` · `turn_count` · `loop_detection` |
-
-三个可以带走的设计点：**验收测试必须放在仓库外**（放进去 agent 就能读到甚至改掉，`cheats` 演的正是这个）；**过程侧不是锦上添花**（`overreach` 结果正确却不能上线）；**排序看 pass rate 不看 score**（gate 不计入加权分，只踩 gate 的 agent 分数几乎不动）。
-
-接自己项目时，`suite.yaml` 是要拷走的那份骨架（按"改 bug 明确/需定位、需求 增量/跨模块、陷阱 回归/歧义"排好了槽位），而 `check.py` 是**跑 agent 之前先跑的那一步**——每条用例四项自检：原始项目上隐藏测试必须**红**（不然这活早做完了，白送分）、套上参考实现必须**绿**、参考实现不能弄坏项目自带测试、绿检查重复三次不翻转（flaky 测试会污染整轮 pass^k）。**这步最容易被跳过，而它决定了你的数字有没有意义。** 详见 [`examples/coding_agent/README.md`](examples/coding_agent/README.md)。
-
-## 端到端示例：Skill 版本对比（`examples/skill_eval/`）
-
-改完一个 Agent Skill 要发版，怎么证明它是**优化**而不是**改坏了**？
-
-```bash
-uv run python examples/skill_eval/eval.py     # 离线跑，无需 API key，不花钱
-```
-
-三条支线（不装 skill / v1 / v2）跑同一批请求，同一份判分契约，唯一变量是 skill 本身——`--model-key skill -m "" -m skills/v1 -m skills/v2`。装进 workspace 的那份连内容 hash 一起记进 trace："v2 更好"和"**这个** v2 更好"是两回事。
-
-输出的不是一句"v2 赢了"，而是分维度的、带噪声判断的读数：
-
-```
-触发率（skill_triggered）    v1 0.17 → v2 0.67
-    B is significantly higher — +0.5 (95% CI [+0.06, +0.94])
-按 `triggered` 判分：within noise band: pass-rate diff +16.7%
-    (95% CI [-43.6%, +76.9%]); detectable at n=6: ~86.0%
-    ↑ pos_contextual   ↑ pos_implicit   ↓ neg_chart   ← 回退
-```
-
-读法：触发率确实显著提升了，但把正负例合起来的总体判定还在噪声带里——**6 条用例只能检测到 86% 以上的差异**，想要结论得加用例而不是加解读。而那条 `↓ neg_chart` 是这个例子的重点：v2 的 description 写得更"主动"，召回上去了，代价是它开始抢画图的活。**只有正向用例的触发率评测看不见这一行，只报均值的 benchmark 也看不见。** 详见 [`examples/skill_eval/README.md`](examples/skill_eval/README.md) 与 [docs/skills.md](docs/skills.md)。
-
-## 接公开数据集：SWE-bench（`examples/swebench/`）
-
-上面那个模板要你自己写需求和验收测试。想先用现成数据集验证量具，`examples/swebench/` 把 SWE-bench 实例接了进来——映射几乎只是改个名字（`repo`+`base_commit` → worktree，`problem_statement` → prompt，`FAIL_TO_PASS`/`PASS_TO_PASS` → 判定）：
-
-```bash
-uv run python examples/swebench/demo.py    # 离线跑，虚构实例，不用凭证/Docker
-```
-
-`swebench_tests` grader 实现官方判定协议，三个容易做错的地方都守住了：**测试对 agent 全程不可见**（test patch 在 agent 结束后才打）、**先重置测试文件再打 patch**（所以改测试蒙混无效，demo 里 `edits_tests` 那档演的就是这个）、**没跑起来的测试算失败**（另加 `no_tests_ran` 标签和输出尾巴，避免把环境坏掉读成 0 分）。
-
-两条必须知道：SWE-bench Verified **早已进入所有模型的训练集**——比 Prompt 可以（两边污染一样），**比模型是硬伤**；判定要跑真实依赖，本地直跑只在依赖恰好装好时成立，正经做法是挂官方 Docker 镜像。详见 [`examples/swebench/README.md`](examples/swebench/README.md)。
+> 在 checkout 里请前缀 `uv run`。
 
 ## 自定义扩展（骨架）
 
@@ -460,9 +329,10 @@ compass/
 │   │   └── domains/          # 领域正确性判定，按需加载：coding / data / image
 │   │                         #   可选后端走 extras：compass[data] / compass[image]
 │   ├── adapters/             # Agent 适配器（image / coding / environment / claude_code / pi / codex；
-│   │                         #   cli_agent.py 是后三者共用的基类，llm.py 是 mixin 与定价，均非 adapter）
+│   │                         #   cli_agent.py 是后三者共用的基类，llm.py 只剩 LLMToolCallMixin，均非 adapter）
 │   ├── integrations/         # 外部轨迹导入（openai_agents / pi / codex_exec / otlp / claude_agent / atif）
-│   ├── sandbox/              # 沙箱执行
+│   ├── llm/                  # 控制面的 LLM 管道：定价 / token 用量提取 / 结构化输出
+│   ├── sandbox/              # 隔离 workdir + 执行 + 收集（adapter 与 coding 域 grader 共用）
 │   └── report/               # 报告与分析
 │       ├── analyzer.py       # 分维度诊断、失败模式、改进建议
 │       ├── console.py        # Rich 终端输出

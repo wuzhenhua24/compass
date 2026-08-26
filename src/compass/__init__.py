@@ -1,4 +1,4 @@
-"""Compass - Agent QA Framework."""
+"""Compass - Agent Evaluation Substrate."""
 
 from typing import TYPE_CHECKING, Any
 

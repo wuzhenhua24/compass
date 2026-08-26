@@ -70,7 +70,11 @@ class SqlSyntaxGrader(CodeGrader):
             return GradeResult(
                 score=0.0,
                 passed=False,
-                error="sqlparse not installed. Run: pip install 'compass-qa[data]'",
+                error=(
+                    "sqlparse not installed. It is the data extra, and Compass "
+                    "is not on PyPI — install it from a checkout: "
+                    "uv pip install -e '/path/to/compass[data]'"
+                ),
             )
 
         # Extract content

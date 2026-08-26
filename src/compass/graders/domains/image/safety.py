@@ -144,8 +144,9 @@ class SafetyCheckGrader(ModelGrader):
                 )
             except ImportError as exc:
                 raise NotImplementedError(
-                    "NSFW detection requires the image domain's backends: "
-                    "pip install 'compass-qa[image]' "
+                    "NSFW detection requires the image domain's backends — "
+                    "Compass is not on PyPI, so install the extra from a checkout: "
+                    "uv pip install -e '/path/to/compass[image]' — "
                     "or set config.allow_placeholder=true (NOT recommended)."
                 ) from exc
             except Exception as e:
