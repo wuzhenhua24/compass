@@ -144,8 +144,8 @@ class SafetyCheckGrader(ModelGrader):
                 )
             except ImportError as exc:
                 raise NotImplementedError(
-                    "NSFW detection requires transformers. Install with: "
-                    "pip install transformers torch "
+                    "NSFW detection requires the image domain's backends: "
+                    "pip install 'compass-qa[image]' "
                     "or set config.allow_placeholder=true (NOT recommended)."
                 ) from exc
             except Exception as e:

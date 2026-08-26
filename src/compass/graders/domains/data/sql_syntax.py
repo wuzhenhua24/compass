@@ -70,7 +70,7 @@ class SqlSyntaxGrader(CodeGrader):
             return GradeResult(
                 score=0.0,
                 passed=False,
-                error="sqlparse library not installed. Run: pip install sqlparse",
+                error="sqlparse not installed. Run: pip install 'compass-qa[data]'",
             )
 
         # Extract content

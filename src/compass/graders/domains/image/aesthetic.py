@@ -77,7 +77,8 @@ class AestheticScoreGrader(ModelGrader):
 
         if self._model is None:
             raise NotImplementedError(
-                "Aesthetic model not available. Install with: pip install open-clip-torch "
+                "Aesthetic model not available. Install the image domain's backends: "
+                "pip install 'compass-qa[image]' "
                 "or set config.allow_placeholder=true to use placeholder scoring (NOT recommended)."
             )
 

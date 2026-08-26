@@ -1,3 +1,12 @@
+# 前置条件：这个场景用的 6 个 grader 全在 image 域
+# （image_assertions / technical_quality / semantic_match / vlm_judge /
+#  aesthetic_score / safety_check）。其中几个要模型后端：
+#
+#     uv pip install -e '/path/to/compass[image]'      # torch + open-clip
+#
+# 缺后端时它们判为「未打分」（score=None）而不是 0 分，并在 error 里说明——
+# 未打分不会伪装成低分，但也不会签发通过。vlm_judge 另需一个 VLM API key。
+# `adapter: image` 还需要一个跑在 endpoint 上的生成服务。
 name: "Image Generation Quality Test"
 description: "Comprehensive test for AIGC image generation with positive and negative cases"
 
