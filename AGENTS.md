@@ -1,43 +1,27 @@
-# Repository Guidelines
+# AGENTS.md
 
-## Project Structure & Module Organization
-- `src/compass/` contains production code, organized by domain:
-  - `cli/` for Click commands
-  - `core/` for scenario models, runner, trials, and metrics
-  - `adapters/`, `graders/`, `eval/`, `sandbox/`, `report/`, `trace/` for integrations and evaluation pipeline
-- `tests/` contains pytest suites (`test_*.py`) mirroring package behavior.
-- `examples/scenarios/` and `examples/results/` provide runnable sample inputs/outputs.
-- `protocols/` and `docs/` store reference material and design notes; keep executable logic in `src/`.
+**Read [CLAUDE.md](CLAUDE.md) first** — it is the same guidance for every agent:
+the positioning rule (what belongs to the framework and what to a domain), the
+commands, and the three traps (`ruff format`, the mypy ratchet, the lazy
+`compass.adapters` import). This file adds only what is not there.
 
-## Build, Test, and Development Commands
-- `uv sync --extra dev`: install project + development dependencies.
-- `uv run pytest`: run the full test suite.
-- `uv run pytest tests/test_cli.py -k init`: run a focused test subset.
-- `uv run ruff check src tests`: run lint/import-order checks.
-- `uv run mypy src`: run strict static type checks.
-- `uv run compass test examples/scenarios/image_gen_test.yaml`: execute a sample scenario through the CLI.
+## Tests
 
-## Coding Style & Naming Conventions
-- Target Python `>=3.10`; use 4-space indentation and explicit type hints.
-- Follow Ruff defaults configured in `pyproject.toml` (line length `100`, rules `E/W/F/I/B/UP`).
-- Mypy is configured as `strict = true`; avoid untyped defs and unchecked `Any`.
-- Naming: `snake_case` for modules/functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
+- One file per feature, `tests/test_<feature>.py`.
+- `asyncio_mode = "auto"` — async tests need no `@pytest.mark.asyncio`. Older
+  files still carry it; don't copy it into new ones.
+- Deterministic and isolated: fixtures and fakes over network or a real
+  filesystem. No coverage threshold is configured; new behavior gets tests for
+  the success path and the failure path.
 
-## Testing Guidelines
-- Use `pytest` (+ `pytest-asyncio`); async tests should use `@pytest.mark.asyncio`.
-- Keep tests deterministic and isolated; prefer fixtures/mocks over external network or filesystem dependencies.
-- Place regression tests next to related behavior in `tests/test_<feature>.py`.
-- No explicit coverage threshold is configured; new changes should include meaningful tests for success and failure paths.
+## Commits
 
-## Commit & Pull Request Guidelines
-- This workspace snapshot does not include `.git` history, so no local commit pattern can be inferred.
-- Use Conventional Commits going forward (for example, `feat(cli): add trace format flag`, `fix(sandbox): block leaked env vars`).
-- PRs should include:
-  - clear problem/solution summary
-  - linked issue (if available)
-  - test evidence (`uv run pytest`, plus lint/type checks when relevant)
-  - sample CLI output or report screenshots for user-facing changes.
+Conventional Commits, working directly on `main`. The subject says what changed
+about the system, not which files were touched — read `git log` before writing
+one.
 
-## Security & Configuration Tips
-- Keep secrets in environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`); never commit them.
-- When touching sandbox logic, verify sensitive env vars remain blocked and add/adjust tests in `tests/test_sandbox.py`.
+## Secrets
+
+API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …) live in the environment,
+never in the tree. When touching sandbox logic, verify sensitive env vars stay
+blocked — `tests/test_sandbox.py`.
