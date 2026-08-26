@@ -93,6 +93,14 @@ adapters/: a trace importer or an LLM judge needs all three, and used to have to
 import the whole adapter registry (and dodge a cycle) to get them.
 ```
 
+**Layer 4 is lazy from the root.** `Compass` — the one export that drives an
+agent — is served by a PEP 562 `__getattr__` in `compass/__init__.py`, so
+`import compass` does not import `compass.adapters` (66 modules that grading,
+importing a trace and publishing a site never touch). Anything that makes the
+root package import `compass.core.runner` eagerly undoes it, invisibly;
+`tests/test_package_api.py` asserts it in a subprocess. The same discipline as
+the lazy grader domains, one layer up.
+
 ### Core Concepts
 
 | Concept | Description |
