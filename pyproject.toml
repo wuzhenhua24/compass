@@ -142,11 +142,12 @@ ignore_missing_imports = true
 #
 # `mypy src/compass` is green, and most modules are genuinely strict-clean:
 # anything not listed below is gated, so new code and edits to clean modules
-# cannot regress. The modules listed here still carry ~110 findings and are
-# quarantined rather than fixed.
+# cannot regress. The modules listed here are quarantined rather than fixed;
+# deleting this block and re-running reports what they still carry — 89 findings
+# across 28 files when this was last measured.
 #
-# Those findings are NOT strictness artifacts — plain mypy with every optional
-# check off still reports 86 of them. They share one root cause: values read out
+# Those findings are NOT strictness artifacts — with strict, warn_return_any and
+# warn_unused_ignores off, 70 of them remain. They share one root cause: values read out
 # of `dict[str, Any]` payloads (grader `findings`, `trial_metrics`, parsed JSON)
 # flow into typed positions, so mypy sees `Any`/`object` where a float or a list
 # is required. A sample was audited and none were real bugs, but mypy cannot
@@ -154,17 +155,17 @@ ignore_missing_imports = true
 #
 # Burning this list down means modelling those payloads (TypedDict) rather than
 # casting at each boundary. Do it per module: delete the entry, fix what mypy
-# then reports, keep the suite green. Do not add new entries.
+# then reports, keep the suite green. Entries also go stale on their own when
+# other work cleans a module, so re-measure before trusting the list — that is
+# how these two came off it. Do not add new entries.
 [[tool.mypy.overrides]]
 module = [
     "compass.adapters.coding",
     "compass.adapters.environment",
-    "compass.core.artifact_store",
     "compass.core.result",
     "compass.core.sweep",
     "compass.core.transcript",
     "compass.graders.base",
-    "compass.graders.code.common.structure",
     "compass.graders.code.common.style",
     "compass.graders.code.common.transcript_graders",
     "compass.graders.domains.coding.functional",

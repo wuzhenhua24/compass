@@ -27,7 +27,7 @@ suite is fully green either way. Working on that domain: `uv sync --extra image`
 # Install dependencies
 uv sync
 
-# Run all tests (2257 as of now; keep them green)
+# Run all tests — keep them green
 uv run pytest tests/
 
 # Run a single test file
@@ -45,17 +45,18 @@ uv run mypy src/compass
 ```
 
 **Do not run `ruff format .`** — the codebase has never been formatter-managed,
-so it would reformat 168 of the 252 tracked `.py` files (~12k lines) and bury
+so it would reformat most of the tracked `.py` files (~12k lines) and bury
 real changes. Match the surrounding style by hand instead. Adopting the
 formatter is a deliberate, separate commit if it ever happens.
 
 **The mypy ratchet.** `uv run mypy src/compass` passes, but that is a floor, not
-a clean bill of health: 30 modules are quarantined by `ignore_errors` in
-`pyproject.toml` and still carry 87 findings (measured by deleting the block and
-re-running). Everything else among the 114 checked files is gated —
+a clean bill of health: `pyproject.toml` quarantines a list of modules with
+`ignore_errors`, and they still carry real findings. Everything else is gated —
 **new code and edits to clean modules must type-check**. Never add a module to
 that list to make an error go away; fix the annotation, or say so explicitly.
-Removing an entry (and fixing what mypy then reports) is always welcome.
+Removing an entry (and fixing what mypy then reports) is always welcome; entries
+also go stale as other work cleans a module. To see the real state, delete the
+`[[tool.mypy.overrides]]` block, run mypy, restore the file.
 
 ```bash
 # CLI usage
@@ -86,53 +87,31 @@ uv run compass list                          # List registered graders/adapters
 4. Agent Adapter Layer  → image, coding, environment, claude_code, pi, codex adapters (registry-based;
                           adapters/cli_agent.py is the shared base of the last three, and
                           adapters/llm.py holds LLMToolCallMixin; neither is a registered adapter)
-
-Cutting across 3 and 4: compass/llm/ — pricing, token-usage extraction and the
-structured-completion client. Control plane, and deliberately not under
-adapters/: a trace importer or an LLM judge needs all three, and used to have to
-import the whole adapter registry (and dodge a cycle) to get them.
 ```
 
-**Layer 4 is lazy from the root.** `Compass` — the one export that drives an
-agent — is served by a PEP 562 `__getattr__` in `compass/__init__.py`, so
-`import compass` does not import `compass.adapters` (66 modules that grading,
-importing a trace and publishing a site never touch). Anything that makes the
-root package import `compass.core.runner` eagerly undoes it, invisibly;
-`tests/test_package_api.py` asserts it in a subprocess. The same discipline as
-the lazy grader domains, one layer up.
+**Two placements the tree does not explain.** Both survive a freeze of the
+drivers; neither belongs under `adapters/`:
 
-### Core Concepts
+- `compass/llm/` — pricing, usage extraction, structured completions. Control
+  plane: trace importers and LLM judges need it, and reaching it through the
+  adapter package used to mean an import cycle.
+- `compass/sandbox/` — one primitive (isolated workdir, exec, collect) with six
+  callers: the `coding`/`environment` adapters *and* four `domains/coding/`
+  graders. Not grader isolation two adapters borrowed. Do not move it by
+  association with `adapters/`; `LocalSandbox` is explicit that it is not a
+  security boundary, and `cli_agent.py` says why the agent CLIs skip it.
 
-| Concept | Description |
-|---------|-------------|
-| **Task** | Single test case with input, expectations, and graders |
-| **Trial** | One execution attempt of a Task (supports multiple trials) |
-| **Grader** | Scorer with three types: Code (deterministic), Model (LLM), Human |
-| **Transcript** | Execution trace - HOW the agent worked (tool calls, timing, cost) |
-| **Outcome** | Final result - WHAT the agent produced (image, data, blocked status) |
-| **GraderScope** | Data requirement: `OUTCOME` / `TRANSCRIPT` / `BOTH` |
-
-### Transcript/Outcome Separation (Key Design)
-
-Graders declare their data needs via `GraderScope`:
-- **OUTCOME graders** - Evaluate final output only (exact_match, json_schema)
-- **TRANSCRIPT graders** - Evaluate execution process only (cost_budget, tool_usage)
-- **BOTH graders** - Need both for efficiency analysis (efficiency, external_checker)
-
-This enables independent evaluation of "did it work?" vs "did it work efficiently?"
+**Layer 4 is lazy from the root.** `Compass` comes from a PEP 562 `__getattr__`
+in `compass/__init__.py`, so `import compass` does not import `compass.adapters`.
+An eager import of `compass.core.runner` there silently undoes it;
+`tests/test_package_api.py` asserts it in a subprocess.
 
 ### Three-Tier Grader System
 
-The tier says *how* a grader decides; it says nothing about where the code
-lives. Examples below are the framework's own — see the positioning section for
-why `semantic_match`, `vlm_judge` and `safety_check` are Model graders that live
-under `domains/image/` rather than under `model/`.
-
-```
-Code Graders (deterministic)  → json_schema, style_convention, tool_usage
-Model Graders (LLM-based)     → rubric, trajectory_judge, groundedness
-Human Graders                 → human_review (expert annotation)
-```
+Code (deterministic) / Model (LLM) / Human — the tier says *how* a grader
+decides and nothing about where its code lives. `semantic_match`, `vlm_judge`
+and `safety_check` are Model graders that live under `domains/image/`, not under
+`model/`. `compass list` prints the current roster, split into the two halves.
 
 ### Code Organization
 
@@ -159,66 +138,19 @@ src/compass/
 ├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi, codex)
 ├── integrations/         # Trace importers (pi, codex, otlp, claude_agent, openai_agents, atif)
 │                         #   _common.py holds what all six ask of untyped JSON
-├── sandbox/              # Execution sandbox — used by the coding/environment
-│                         #   adapters and the test_runner/integration_test graders
+├── llm/                  # pricing, usage extraction, structured completions
+├── sandbox/              # isolated workdir + exec + collect (see above)
 └── report/               # console, html, site, analyzer, compare, insights
 ```
 
-## Key Patterns
+## Metrics
 
-### Creating Custom Graders
+- `pass@k` = P(at least 1 success in k attempts) — for exploration
+- `pass^k` = P(all k attempts successful) — for reliability
 
-```python
-from compass.graders import CodeGrader, GradeContext, GradeResult, GraderScope, register_grader
-
-@register_grader("my_grader")
-class MyGrader(CodeGrader):
-    grader_scope = GraderScope.OUTCOME  # Declare data requirement
-
-    async def grade(self, context: GradeContext) -> GradeResult:
-        image = context.image  # Access via context properties
-        return GradeResult(
-            name=self.name,
-            grader_type=self.grader_type,
-            grader_scope=self.grader_scope,
-            passed=True,
-            score=1.0,
-            details={},
-        )
-```
-
-### Scenario YAML Structure
-
-```yaml
-name: "Test Scenario"
-agent:
-  adapter: image
-  endpoint: "http://localhost:8000"
-
-cases:
-  - id: "test_case"
-    input:
-      prompt: "Generate an image"
-    expect: pass  # or fail for negative tests
-    graders:
-      - name: semantic_match
-        config:
-          threshold: 0.25
-    aggregation:
-      method: weighted_sum
-      pass_threshold: 0.7
-```
-
-### Metrics
-
-- `pass@k` = P(at least 1 success in k attempts) - for exploration
-- `pass^k` = P(all k attempts successful) - for reliability
-
-## Testing Notes
-
-- Tests use `pytest-asyncio` with `asyncio_mode = "auto"`
-- Test files in `tests/` directory mirror the source structure
-- Run specific grader tests: `pytest tests/test_*_graders.py`
+Writing a grader, and the scenario YAML schema, are not repeated here: README
+carries a worked grader and `docs/scenario-config.md` the full YAML. Both are
+readable in place with `uv run compass docs <topic>`.
 
 ## document
  - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
