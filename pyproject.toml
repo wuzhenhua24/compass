@@ -46,15 +46,28 @@ data = [
     "sqlparse>=0.4.0",
     "duckdb>=0.9.0",
 ]
+all = [
+    "compass-qa[image,data]",
+]
+
+# Dev tooling, plus the domain backends the test suite actually exercises.
+# A PEP 735 group rather than an extra, because `uv sync` installs groups by
+# default and extras only when asked — and `uv sync` is what CLAUDE.md tells a
+# contributor to run. As an extra, a plain `uv sync` uninstalled pytest, ruff
+# and mypy, so the documented workflow could not run.
+# `sqlparse` is here because six sql_syntax tests need a real parser; without it
+# they skip. `torch` deliberately is not — the image graders degrade when it is
+# absent and the suite is fully green without it, so the default sync stays
+# small. Working on that domain: `uv sync --extra image`.
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-]
-all = [
-    "compass-qa[image,data,dev]",
+    "sqlparse>=0.4.0",
+    "duckdb>=0.9.0",
 ]
 
 [project.scripts]

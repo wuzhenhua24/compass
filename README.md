@@ -28,7 +28,7 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 **🚫 不是什么**
 
 - 不是"开箱评测任意 Agent"的银弹——**领域正确性判定必然要你写**（这是设计，不是缺陷）
-- 不内置每个领域的正确性 grader（图像美学、代码功能、答案事实……天然定制）
+- 不内置**每个**领域的正确性 grader（图像美学、代码功能、答案事实……天然定制）。随包带了 `coding` / `data` / `image` 三个域共 23 个，但它们的身份是**用户代码的样板**，不是承诺——住在 `compass/graders/domains/` 里，按需加载，可选后端走 extras。你的领域不在这三个里是常态，那正是你写 grader 的地方
 - 不强求"驱动任意 Agent 跑"——自跑的 Agent 走**导入轨迹**更合适（见下）
 
 ### 控制面 / 数据面：这条边界的专业名字
@@ -48,6 +48,8 @@ Compass 是 **Agent 评测的基座（substrate）**：提供一套标准的执�
 |---|---|------|------|
 | **过程** | TRANSCRIPT | 成本 / 延迟 / 绕圈 / 工具使用 / 是否执行危险操作 | ✅ 框架内置，跨 Agent 复用 |
 | **正确性** | OUTCOME | 答案对不对 / 图美不美 / 代码能不能跑 | ✍️ 你写领域 grader（通常几十行） |
+
+这条线在目录里是看得见的：`compass/graders/`（框架 20 个，过程与可靠性）对 `compass/graders/domains/`（领域 23 个，正确性）。`compass list` 也分两栏打印。领域包**查不到时才加载**——`import compass` 不会为你不评的领域付出代价。
 
 > **纪律**：核心 schema 保持小。领域字段（如 ops_qa 里的 `expected_doc` / `key_facts`）放进 grader config 或用户 harness，**别塞进核心模型**——这是防止"定制爆炸"淹没框架的关键。（反例参照物：`reference_answer` 之所以能进 `GradeContext`，是因为它像 `reference_image` 一样是跨领域的"参考数据"通用概念，而非某个领域的字段。）
 
@@ -85,7 +87,7 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        1. Interface Layer                           │
-│   compass CLI    │    Python SDK    │    Web Dashboard (后期)       │
+│   compass CLI    │    Python SDK    │    compass site (静态站)      │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────────┐
@@ -120,9 +122,9 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ ┌────────┐  │
 │  │ ComfyUI  │  │ SD WebUI │  │Midjourney│  │ DALL-E   │ │ Custom │  │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ └────────┘  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐                       │
-│  │ Image    │  │ Coding   │  │ Environment  │                       │
-│  └──────────┘  └──────────┘  └──────────────┘                       │
+│  ┌──────────┐  ┌──────────┐  ┌────────────┐ ┌─────┐ ┌────┐ ┌─────┐ │
+│  │ Image    │  │ Coding   │  │Environment │ │Claude│ │ pi │ │Codex│ │
+│  └──────────┘  └──────────┘  └────────────┘ └─────┘ └────┘ └─────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -177,6 +179,16 @@ uv run compass --help
 uv pip install -e /path/to/compass     # 可编辑安装，Compass 更新后无需重装
 compass list                           # 验证：应列出 43 个 grader（框架 20 + 领域 23）和 6 个 adapter
 ```
+
+**领域后端按需装（extras）**——框架本体和 43 个 grader 都会装上，但两个域的**重后端**是可选的，缺了的 grader 在结果里说明情况而不是 import 报错：
+
+```bash
+uv pip install -e '/path/to/compass[data]'    # sqlparse + duckdb → sql_syntax / sql_equivalence
+uv pip install -e '/path/to/compass[image]'   # torch + open-clip → semantic_match / aesthetic_score
+uv pip install -e '/path/to/compass[all]'     # 两个都要
+```
+
+`coding` 域调用你项目自己的工具链（ruff / mypy / pytest），没有对应的 extra。在 Compass 的 checkout 里开发时，`uv sync` 已包含 `data` 后端与测试/lint/类型工具；`image` 后端用 `uv sync --extra image`。
 
 ## 快速开始
 

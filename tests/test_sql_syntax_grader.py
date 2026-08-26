@@ -7,6 +7,11 @@ from compass.graders import get_grader
 from compass.graders.base import GradeContext
 from compass.graders.domains.data.sql_syntax import SqlSyntaxGrader
 
+# `sqlparse` is the `compass[data]` extra, not a hard dependency — the grader
+# reports its absence instead of raising, so these tests skip rather than fail.
+# `uv sync` installs it (dev group); a consumer install may not have it.
+pytest.importorskip("sqlparse")
+
 
 class TestSqlSyntaxGrader:
     """Tests for SqlSyntaxGrader."""

@@ -17,11 +17,17 @@ One field already sits on the wrong side of this line and is not being moved: `O
 Everything runs through `uv run` — Compass is not installed on PATH in a source
 checkout, `uv sync` only puts it in `.venv`.
 
+`uv sync` gives a working dev environment: the test/lint/type tooling and the
+`data` domain's backends live in the PEP 735 `dev` group, which uv installs by
+default. The `image` domain's backends (torch, open-clip) are the `image`
+*extra* and are not installed — the image graders degrade without them and the
+suite is fully green either way. Working on that domain: `uv sync --extra image`.
+
 ```bash
 # Install dependencies
 uv sync
 
-# Run all tests (2272 as of now; keep them green)
+# Run all tests (2257 as of now; keep them green)
 uv run pytest tests/
 
 # Run a single test file
@@ -39,13 +45,14 @@ uv run mypy src/compass
 ```
 
 **Do not run `ruff format .`** — the codebase has never been formatter-managed,
-so it would reformat 113 of 151 files (~8.8k lines) and bury real changes. Match
-the surrounding style by hand instead. Adopting the formatter is a deliberate,
-separate commit if it ever happens.
+so it would reformat 168 of the 252 tracked `.py` files (~12k lines) and bury
+real changes. Match the surrounding style by hand instead. Adopting the
+formatter is a deliberate, separate commit if it ever happens.
 
 **The mypy ratchet.** `uv run mypy src/compass` passes, but that is a floor, not
-a clean bill of health: 31 modules are quarantined by `ignore_errors` in
-`pyproject.toml` and still carry ~110 findings. The other 53 modules are gated —
+a clean bill of health: 30 modules are quarantined by `ignore_errors` in
+`pyproject.toml` and still carry 87 findings (measured by deleting the block and
+re-running). Everything else among the 114 checked files is gated —
 **new code and edits to clean modules must type-check**. Never add a module to
 that list to make an error go away; fix the annotation, or say so explicitly.
 Removing an entry (and fixing what mypy then reports) is always welcome.
@@ -63,7 +70,7 @@ uv run compass site build results.json -o site/  # Publish a static site
 uv run compass site compare a.json b.json -o site/  # Publish a paired comparison
 uv run compass site serve results.json       # Live view, recomputed per request
 uv run compass trace results/case.json       # View transcript
-uv run compass import session.jsonl          # Import trace (pi/codex/OTLP/Claude/OpenAI)
+uv run compass import session.jsonl          # Import trace (pi/codex/OTLP/Claude/OpenAI/ATIF)
 uv run compass docs [topic]                  # Read Compass's own docs
 uv run compass list                          # List registered graders/adapters
 ```
@@ -95,17 +102,22 @@ uv run compass list                          # List registered graders/adapters
 ### Transcript/Outcome Separation (Key Design)
 
 Graders declare their data needs via `GraderScope`:
-- **OUTCOME graders** - Evaluate final output only (semantic_match, aesthetic_score)
+- **OUTCOME graders** - Evaluate final output only (exact_match, json_schema)
 - **TRANSCRIPT graders** - Evaluate execution process only (cost_budget, tool_usage)
-- **BOTH graders** - Need both for efficiency analysis
+- **BOTH graders** - Need both for efficiency analysis (efficiency, external_checker)
 
 This enables independent evaluation of "did it work?" vs "did it work efficiently?"
 
 ### Three-Tier Grader System
 
+The tier says *how* a grader decides; it says nothing about where the code
+lives. Examples below are the framework's own — see the positioning section for
+why `semantic_match`, `vlm_judge` and `safety_check` are Model graders that live
+under `domains/image/` rather than under `model/`.
+
 ```
-Code Graders (deterministic)  → image_assertions, json_schema, style_convention
-Model Graders (LLM-based)     → semantic_match, vlm_judge, rubric, safety_check
+Code Graders (deterministic)  → json_schema, style_convention, tool_usage
+Model Graders (LLM-based)     → rubric, trajectory_judge, groundedness
 Human Graders                 → human_review (expert annotation)
 ```
 
@@ -132,7 +144,11 @@ src/compass/
 │   ├── human/            # human_review, pairwise_comparison
 │   └── domains/          # domain CORRECTNESS, lazily loaded: coding / data / image
 ├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi, codex)
-└── report/               # Console and HTML reporting, analyzer
+├── integrations/         # Trace importers (pi, codex, otlp, claude_agent, openai_agents, atif)
+│                         #   _common.py holds what all six ask of untyped JSON
+├── sandbox/              # Execution sandbox — used by the coding/environment
+│                         #   adapters and the test_runner/integration_test graders
+└── report/               # console, html, site, analyzer, compare, insights
 ```
 
 ## Key Patterns
