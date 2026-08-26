@@ -4,28 +4,21 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## Positioning — the line to hold
 
-Compass is a **substrate for Agent evaluation**, not an out-of-the-box eval
-framework. The framework owns the reusable spine (Transcript/Outcome model,
-ToolCall protocol, trace ingestion, domain-agnostic *process* graders,
-reliability metrics); *correctness* graders and datasets are user code that
-plugs in, like `tests/` using pytest.
-
-Before adding anything, decide which half it is on:
-
-- **Process / reliability** (TRANSCRIPT scope: cost, latency, loops, tool usage,
-  dangerous-op execution) → framework, `graders/code/common/`.
-- **Correctness** (OUTCOME scope: is the answer/image/code right) → a domain,
-  `graders/domains/{coding,data,image}/`. If it fits none of the three, that is
-  the signal it is user code, not a core addition.
-- **Domain-specific fields** (`expected_doc`, `key_facts`, …) go in grader config
-  or a user harness — **never** in core `Scenario`/`GradeContext`.
-- **Domain backends** are extras named after the domain (`compass[data]`,
-  `compass[image]`), imported in a try/except so a missing one degrades the
-  grader instead of breaking the import.
-
-One deliberate exception: `Outcome.image` is a core field, so Pillow is a hard
-dependency and image is the one domain core knows by name. Don't move it in
-passing.
+Compass is a **substrate**: the framework owns the reusable spine
+(Transcript/Outcome, the ToolCall protocol, trace ingestion, domain-agnostic
+*process* graders, reliability metrics), while *correctness* graders and datasets
+are user code that plugs in, the way `tests/` plugs into pytest. So every
+addition picks a side — process/reliability (TRANSCRIPT scope: cost, latency,
+loops, tool usage, dangerous ops) goes in `graders/code/common/`; correctness
+(OUTCOME scope: is the answer/image/code right) goes in
+`graders/domains/{coding,data,image}/`; fitting none of the three is the signal
+it is user code, not a core addition. Two corollaries: domain fields
+(`expected_doc`, `key_facts`, …) live in grader config or a user harness, never
+in core `Scenario`/`GradeContext`, and domain backends are extras
+(`compass[data]`, `compass[image]`) imported in a try/except so a missing one
+degrades the grader instead of breaking the import — with `Outcome.image` the
+one deliberate exception, which is why Pillow is a hard dependency and image is
+the one domain core knows by name.
 
 ## Commands
 
