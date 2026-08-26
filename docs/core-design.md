@@ -436,7 +436,7 @@ graders:
 
 ### 模型价格配置（可覆盖）
 
-`LLMToolCallMixin` 会用内置价格表（`compass.adapters.MODEL_PRICING`，按 1M token 计价，含 input/output/cached-input）自动估算每次调用的成本。价格经常变动，因此**内置表只是默认值，用户可以覆盖**，优先级为 `外部文件 / 运行时注册 > 内置默认`。
+成本估算走一张内置价格表（`compass.llm.MODEL_PRICING`，按 1M token 计价，含 input/output/cached-input）——`LLMToolCallMixin` 在驱动 agent 时用它，轨迹导入器给别人录的 trajectory 补算成本时也用它。价格经常变动，因此**内置表只是默认值，用户可以覆盖**，优先级为 `外部文件 / 运行时注册 > 内置默认`。
 
 **方式一：外部价格文件（适合 CLI / 团队共享）**
 
@@ -458,7 +458,7 @@ export COMPASS_PRICING_FILE=/path/to/pricing.json
 **方式二：SDK 运行时注册（适合程序化调用 / 测试）**
 
 ```python
-from compass.adapters import register_pricing, load_pricing_file, reset_pricing
+from compass.llm import register_pricing, load_pricing_file, reset_pricing
 
 register_pricing("gpt-5", {"input": 2.0, "output": 8.0, "cached": 0.2})
 register_pricing("my-model", (1.5, 6.0))          # (input, output[, cached]) 元组

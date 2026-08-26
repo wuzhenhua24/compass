@@ -16,7 +16,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from compass.adapters.llm import structured_completion
 from compass.graders.base import (
     GradeContext,
     GradeResult,
@@ -26,6 +25,7 @@ from compass.graders.base import (
 )
 from compass.graders.model.prompt_template import RubricPromptTemplate
 from compass.graders.registry import register_grader
+from compass.llm import structured_completion
 
 #: What the judge is told it is, when a rubric supplies no role of its own.
 _DEFAULT_JUDGE_ROLE = (
@@ -429,8 +429,9 @@ class RubricGrader(ModelGrader):
     async def _call_llm_structured(self, prompt: str) -> dict[str, Any]:
         """Ask the model for JSON matching this rubric's schema.
 
-        The provider plumbing lives in :func:`compass.adapters.llm.
-        structured_completion` — the two providers disagree about how you ask
+        The provider plumbing lives in
+        :func:`compass.llm.structured_completion` — the two providers
+        disagree about how you ask
         for a schema, and that difference belongs in one place rather than in
         every judge. Tests patch this method, so it stays the seam.
         """

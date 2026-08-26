@@ -71,7 +71,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from compass.adapters.llm import structured_completion
+from compass.llm import structured_completion
 
 if TYPE_CHECKING:
     from compass.report.compare import ComparisonReport

@@ -42,9 +42,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
 from compass.integrations._common import as_dict, opt_float, token_count
+from compass.llm import calculate_cost
 
 logger = logging.getLogger(__name__)
 

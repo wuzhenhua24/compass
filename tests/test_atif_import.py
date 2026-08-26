@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from compass.adapters import register_pricing, reset_pricing
 from compass.integrations import (
     ATIFImportError,
     atif_to_transcript,
@@ -20,6 +19,7 @@ from compass.integrations import (
     load_atif,
     looks_like_atif,
 )
+from compass.llm import register_pricing, reset_pricing
 
 
 @pytest.fixture(autouse=True)

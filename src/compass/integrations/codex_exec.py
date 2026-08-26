@@ -57,12 +57,12 @@ transcript as an explicit gap rather than a plausible-looking number:
   price.
 - **No dollar cost.** Codex reports tokens, never money (a ChatGPT-plan run is
   not billed per token at all). Cost is therefore *computed* from
-  :func:`~compass.adapters.llm.calculate_cost`, which needs a pricing entry for
+  :func:`~compass.llm.calculate_cost`, which needs a pricing entry for
   the model: no entry means ``cost=None``, ``metadata["cost_unpriced_model"]``
   set, and a ``cost_budget`` grader that passes on $0.00 having measured
   nothing. Register a rate before reading that grader's verdict::
 
-      from compass.adapters import register_pricing
+      from compass.llm import register_pricing
       register_pricing("gpt-5.4-mini", {"input": 0.25, "output": 2.0, "cached": 0.025})
 
   or point ``COMPASS_PRICING_FILE`` at a JSON/YAML rate card.
@@ -106,7 +106,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import (
     CostInfo,
     StateChange,
@@ -115,6 +114,7 @@ from compass.core.transcript import (
     Transcript,
 )
 from compass.integrations._common import as_dict, truncate
+from compass.llm import calculate_cost
 
 logger = logging.getLogger(__name__)
 

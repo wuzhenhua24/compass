@@ -85,7 +85,12 @@ uv run compass list                          # List registered graders/adapters
 3. Core Engine          → Grader System (3-tier), Transcript Collector, Report Gen
 4. Agent Adapter Layer  → image, coding, environment, claude_code, pi, codex adapters (registry-based;
                           adapters/cli_agent.py is the shared base of the last three, and
-                          adapters/llm.py provides LLM mixins/pricing; neither is a registered adapter)
+                          adapters/llm.py holds LLMToolCallMixin; neither is a registered adapter)
+
+Cutting across 3 and 4: compass/llm/ — pricing, token-usage extraction and the
+structured-completion client. Control plane, and deliberately not under
+adapters/: a trace importer or an LLM judge needs all three, and used to have to
+import the whole adapter registry (and dodge a cycle) to get them.
 ```
 
 ### Core Concepts

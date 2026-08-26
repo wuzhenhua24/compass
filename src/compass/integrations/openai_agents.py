@@ -36,11 +36,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-# Imported from the submodule, not the ``compass.adapters`` package: an adapter
-# that consumes an integration (claude_code) makes the package-level import a
-# cycle, while the submodule only depends on compass.core.
-from compass.adapters.llm import calculate_cost
 from compass.core.transcript import TokenUsage, ToolCall, Transcript
+from compass.llm import calculate_cost
 
 logger = logging.getLogger(__name__)
 

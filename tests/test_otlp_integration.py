@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from compass.adapters import register_pricing, reset_pricing
 from compass.graders import GradeContext, get_grader
 from compass.integrations import (
     OTLPImportError,
@@ -19,6 +18,7 @@ from compass.integrations import (
     load_otlp,
     otlp_to_transcripts,
 )
+from compass.llm import register_pricing, reset_pricing
 
 _NS = 1_700_000_000_000_000_000  # base start (nanoseconds ~ 2023)
 

@@ -39,7 +39,7 @@ YAML::
   not billed per token at all. Compass computes cost from its pricing table, so
   a model with no rate registered produces ``$0.00`` and a ``cost_budget``
   grader that passes having measured nothing. Register a rate (see
-  :func:`~compass.adapters.llm.register_pricing` or ``COMPASS_PRICING_FILE``)
+  :func:`~compass.llm.register_pricing` or ``COMPASS_PRICING_FILE``)
   before that column means anything; the adapter puts
   ``cost_unpriced_model`` in the transcript metadata when it could not price a
   run, so the gap is visible rather than silent.

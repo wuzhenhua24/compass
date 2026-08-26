@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from compass.adapters import register_pricing, reset_pricing
 from compass.graders import GradeContext, get_grader
 from compass.integrations import (
     PiSessionError,
@@ -22,6 +21,7 @@ from compass.integrations import (
     import_pi_stream_json,
     load_pi_session,
 )
+from compass.llm import register_pricing, reset_pricing
 
 
 @pytest.fixture(autouse=True)

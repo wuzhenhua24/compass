@@ -512,11 +512,11 @@ class TestRubricGraderProviders:
     async def test_openai_import_error(self, openai_config):
         """OpenAI import error is handled.
 
-        The provider plumbing moved to ``compass.adapters.llm`` so one place
+        The provider plumbing lives in ``compass.llm`` so one place
         knows how to ask each provider for a schema; this checks the message a
         user without the package actually sees.
         """
-        from compass.adapters.llm import structured_completion
+        from compass.llm import structured_completion
 
         with patch.dict("sys.modules", {"openai": None}):
             with pytest.raises(ImportError, match="openai package required"):
@@ -527,7 +527,7 @@ class TestRubricGraderProviders:
     @pytest.mark.asyncio
     async def test_anthropic_import_error(self, anthropic_config):
         """Anthropic import error is handled."""
-        from compass.adapters.llm import structured_completion
+        from compass.llm import structured_completion
 
         with patch.dict("sys.modules", {"anthropic": None}):
             with pytest.raises(ImportError, match="anthropic package required"):

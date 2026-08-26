@@ -86,12 +86,12 @@ rather than a plausible-looking number:
   two signals sit side by side — it never turns them into a Compass score.
 
 **Cost.** ``metrics.cost_usd`` is used verbatim when the producer recorded it.
-Otherwise cost is computed from :func:`~compass.adapters.llm.calculate_cost`,
+Otherwise cost is computed from :func:`~compass.llm.calculate_cost`,
 which needs a pricing entry for the step's model: no entry means ``cost=None``
 and a ``cost_budget`` grader that passes on $0.00 having measured nothing.
 Register a rate before reading that grader's verdict::
 
-    from compass.adapters import register_pricing
+    from compass.llm import register_pricing
     register_pricing("claude-opus-4-1", {"input": 15.0, "output": 75.0})
 
 ATIF's ``prompt_tokens`` includes cache hits; Compass keeps cached traffic out of
@@ -109,9 +109,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import CostInfo, TokenUsage, ToolCall, Transcript
 from compass.integrations._common import MAX_STEP_CHARS, as_dict, token_count
+from compass.llm import calculate_cost
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from compass.adapters import register_pricing, reset_pricing
 from compass.graders import GradeContext, get_grader
 from compass.integrations import (
     CodexStreamError,
@@ -20,6 +19,7 @@ from compass.integrations import (
     load_codex_stream,
     looks_like_codex_stream,
 )
+from compass.llm import register_pricing, reset_pricing
 
 
 @pytest.fixture(autouse=True)

@@ -376,8 +376,7 @@ async def test_cost_is_zero_but_says_so_when_the_model_has_no_price(
     """codex never reports dollars. An unpriced model therefore yields $0.00 —
     which a cost_budget grader would pass having measured nothing, so the trace
     has to record that the number is missing rather than small."""
-    from compass.adapters import register_pricing
-    from compass.adapters.llm import MODEL_PRICING
+    from compass.llm import MODEL_PRICING, register_pricing
 
     cli = _make_stub_cli(tmp_path, edits={"app.py": "changed\n"})
     agent_input, transcript = _agent_input()

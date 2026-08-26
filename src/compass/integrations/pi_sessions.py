@@ -68,7 +68,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from compass.adapters.llm import calculate_cost  # submodule: see openai_agents.py
 from compass.core.transcript import (
     CostInfo,
     StateChange,
@@ -77,6 +76,7 @@ from compass.core.transcript import (
     Transcript,
 )
 from compass.integrations._common import as_dict, opt_float, truncate, write_op
+from compass.llm import calculate_cost
 
 logger = logging.getLogger(__name__)
 

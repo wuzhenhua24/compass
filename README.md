@@ -134,8 +134,10 @@ Compass 在这些场景最省事；否则一个几十行的 pytest 可能就够�
 >
 > 图中上排（ComfyUI / SD WebUI / Midjourney / DALL-E / Custom）是可对接的**目标**示意，下排是
 > **当前内置注册的六个 adapter**：`image` / `coding` / `environment` / `claude_code` / `pi` / `codex`——其余目标通过
-> `@register_adapter` 自定义接入。注意 `adapters/llm.py` 不是 adapter：它提供 LLM 调用 mixin
-> 与模型定价表，供 Model Grader 和自定义 adapter 复用。
+> `@register_adapter` 自定义接入。注意 `adapters/llm.py` 不是 adapter：它只提供
+> `LLMToolCallMixin`——自定义 adapter 记录一次 LLM 调用时用。模型定价表、token 用量提取
+> 与结构化输出客户端住在 `compass/llm/`（控制面），Model Grader 与轨迹导入器直接用它，
+> 不必把 adapter 层拖进来。
 
 ### CLI 命令总览
 
