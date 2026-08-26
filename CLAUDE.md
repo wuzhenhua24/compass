@@ -1,163 +1,87 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
-## Project Overview
+## Positioning — the line to hold
 
-Compass is a **substrate for Agent evaluation** — not a "evals everything out of the box" framework. It provides the reusable spine (a standard Transcript/Outcome model + ToolCall protocol, trace ingestion, domain-agnostic *process* graders, and reliability metrics); domain *correctness* graders and datasets are user code that plugs in (like `tests/` using pytest). Design inspired by [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
+Compass is a **substrate for Agent evaluation**, not an out-of-the-box eval
+framework. The framework owns the reusable spine (Transcript/Outcome model,
+ToolCall protocol, trace ingestion, domain-agnostic *process* graders,
+reliability metrics); *correctness* graders and datasets are user code that
+plugs in, like `tests/` using pytest.
 
-Positioning discipline (keep this in mind when extending): the core stays small. Process/reliability checks (TRANSCRIPT scope: cost, latency, loops, tool usage, dangerous-op execution) are reusable and belong in the framework; correctness checks (OUTCOME scope: is the answer/image/code right) are domain-specific and belong in user graders. Domain-specific fields (e.g. `expected_doc`, `key_facts`) go in grader config or a user harness, NOT the core Scenario/GradeContext models — resist adding them to core. See README "定位：是什么 / 不是什么".
+Before adding anything, decide which half it is on:
 
-**Where that line falls in the tree.** `compass/graders/` holds the framework's 20 (`code/common/`, `model/`, `human/`); `compass/graders/domains/` holds the 23 that ship as worked examples of user code, one package per domain (`coding`, `data`, `image`), imported lazily on a registry miss so `import compass` costs nothing for a domain nobody is evaluating. A new *process* grader goes in `code/common/`. A new *correctness* grader goes in a domain — and if it does not fit one of the three, that is the signal it is user code, not a core addition. Optional backends are extras named after the domain (`compass[data]`, `compass[image]`), imported inside a try/except so a missing one degrades the grader instead of breaking the import.
+- **Process / reliability** (TRANSCRIPT scope: cost, latency, loops, tool usage,
+  dangerous-op execution) → framework, `graders/code/common/`.
+- **Correctness** (OUTCOME scope: is the answer/image/code right) → a domain,
+  `graders/domains/{coding,data,image}/`. If it fits none of the three, that is
+  the signal it is user code, not a core addition.
+- **Domain-specific fields** (`expected_doc`, `key_facts`, …) go in grader config
+  or a user harness — **never** in core `Scenario`/`GradeContext`.
+- **Domain backends** are extras named after the domain (`compass[data]`,
+  `compass[image]`), imported in a try/except so a missing one degrades the
+  grader instead of breaking the import.
 
-One field already sits on the wrong side of this line and is not being moved: `Outcome.image` is a first-class field of the core transcript model, so Pillow is a hard dependency and image is the one domain the core knows about by name. Pulling it out means generalizing `Outcome` to artifacts across seven core modules — a deliberate, separate change, not something to do in passing.
+One deliberate exception: `Outcome.image` is a core field, so Pillow is a hard
+dependency and image is the one domain core knows by name. Don't move it in
+passing.
 
-## Common Commands
+## Commands
 
-Everything runs through `uv run` — Compass is not installed on PATH in a source
-checkout, `uv sync` only puts it in `.venv`.
-
-`uv sync` gives a working dev environment: the test/lint/type tooling and the
-`data` domain's backends live in the PEP 735 `dev` group, which uv installs by
-default. The `image` domain's backends (torch, open-clip) are the `image`
-*extra* and are not installed — the image graders degrade without them and the
-suite is fully green either way. Working on that domain: `uv sync --extra image`.
-
-```bash
-# Install dependencies
-uv sync
-
-# Run all tests — keep them green
-uv run pytest tests/
-
-# Run a single test file
-uv run pytest tests/test_scenario.py
-
-# Run a specific test
-uv run pytest tests/test_scenario.py::test_function_name -v
-
-# Lint — clean; keep it that way
-uv run ruff check .
-uv run ruff check . --fix     # safe autofixes only
-
-# Type check — green via a ratchet (see below)
-uv run mypy src/compass
-```
-
-**Do not run `ruff format .`** — the codebase has never been formatter-managed,
-so it would reformat most of the tracked `.py` files (~12k lines) and bury
-real changes. Match the surrounding style by hand instead. Adopting the
-formatter is a deliberate, separate commit if it ever happens.
-
-**The mypy ratchet.** `uv run mypy src/compass` passes, but that is a floor, not
-a clean bill of health: `pyproject.toml` quarantines a list of modules with
-`ignore_errors`, and they still carry real findings. Everything else is gated —
-**new code and edits to clean modules must type-check**. Never add a module to
-that list to make an error go away; fix the annotation, or say so explicitly.
-Removing an entry (and fixing what mypy then reports) is always welcome; entries
-also go stale as other work cleans a module. To see the real state, delete the
-`[[tool.mypy.overrides]]` block, run mypy, restore the file.
+Everything runs through `uv run` — a source checkout is not on PATH. `uv sync`
+alone gives a working dev environment (the `dev` group carries test/lint/type
+tooling and the `data` backends). The `image` backends are an extra
+(`uv sync --extra image`); without them the image graders degrade and the suite
+is still green.
 
 ```bash
-# CLI usage
-uv run compass test <scenario.yaml>          # Run tests
-uv run compass test scenarios/ --parallel -w 4   # Parallel execution
-uv run compass test qa.yaml -m gpt-5 -m claude-5 # Multi-model leaderboard
-uv run compass grade ./traces -s qa.yaml     # Offline grading, no agent re-run
-uv run compass analyze results/              # Analyze results
-uv run compass compare a.json b.json         # Paired comparison (flips + CI)
-uv run compass insights results.json        # LLM conclusions, each checked against the data
-uv run compass site build results.json -o site/  # Publish a static site
-uv run compass site compare a.json b.json -o site/  # Publish a paired comparison
-uv run compass site serve results.json       # Live view, recomputed per request
-uv run compass trace results/case.json       # View transcript
-uv run compass import session.jsonl          # Import trace (pi/codex/OTLP/Claude/OpenAI/ATIF)
-uv run compass docs [topic]                  # Read Compass's own docs
-uv run compass list                          # List registered graders/adapters
+uv run pytest tests/       # keep green
+uv run ruff check .        # keep clean
+uv run mypy src/compass    # green via a ratchet, see below
 ```
 
-## Architecture
+CLI usage: `uv run compass --help`. Compass's own docs: `uv run compass docs <topic>`.
 
-### Four-Layer Design
+## Three things that bite
 
-```
-1. Interface Layer      → CLI (compass.cli.main), Python SDK
-2. Test Orchestration   → Scenario Engine, Trial Manager, Parallel Executor
-3. Core Engine          → Grader System (3-tier), Transcript Collector, Report Gen
-4. Agent Adapter Layer  → image, coding, environment, claude_code, pi, codex adapters (registry-based;
-                          adapters/cli_agent.py is the shared base of the last three, and
-                          adapters/llm.py holds LLMToolCallMixin; neither is a registered adapter)
-```
+- **Never run `ruff format .`** — this codebase has never been formatter-managed;
+  it would reformat ~12k lines and bury the real change. Match surrounding style
+  by hand. Adopting the formatter is a separate, deliberate commit.
+- **mypy is a ratchet**, not a clean bill of health: `pyproject.toml` quarantines
+  modules with `ignore_errors` that still carry real findings. New code and edits
+  to clean modules must type-check. **Never add a module to that list to silence
+  an error** — fix it, or say so. Removing entries is always welcome.
+- **`import compass` must not import `compass.adapters`** — `Compass` comes from a
+  PEP 562 `__getattr__` in `compass/__init__.py`; an eager import of
+  `compass.core.runner` there silently undoes it. `tests/test_package_api.py`
+  asserts this in a subprocess.
 
-**Two placements the tree does not explain.** Both survive a freeze of the
-drivers; neither belongs under `adapters/`:
+## Two placements the tree doesn't explain
 
-- `compass/llm/` — pricing, usage extraction, structured completions. Control
-  plane: trace importers and LLM judges need it, and reaching it through the
-  adapter package used to mean an import cycle.
-- `compass/sandbox/` — one primitive (isolated workdir, exec, collect) with six
-  callers: the `coding`/`environment` adapters *and* four `domains/coding/`
-  graders. Not grader isolation two adapters borrowed. Do not move it by
-  association with `adapters/`; `LocalSandbox` is explicit that it is not a
-  security boundary, and `cli_agent.py` says why the agent CLIs skip it.
-
-**Layer 4 is lazy from the root.** `Compass` comes from a PEP 562 `__getattr__`
-in `compass/__init__.py`, so `import compass` does not import `compass.adapters`.
-An eager import of `compass.core.runner` there silently undoes it;
-`tests/test_package_api.py` asserts it in a subprocess.
-
-### Three-Tier Grader System
-
-Code (deterministic) / Model (LLM) / Human — the tier says *how* a grader
-decides and nothing about where its code lives. `semantic_match`, `vlm_judge`
-and `safety_check` are Model graders that live under `domains/image/`, not under
-`model/`. `compass list` prints the current roster, split into the two halves.
-
-### Code Organization
-
-```
-src/compass/
-├── cli/
-│   ├── app.py            # the Click group + shared console
-│   ├── main.py           # entry point: imports commands/, which registers them
-│   └── commands/         # one module per command (run, grade, compare, site, …)
-├── core/
-│   ├── runner.py         # Compass class - main test runner
-│   ├── scenario.py       # Scenario/TestCase/GraderConfig models
-│   ├── trial.py          # TrialManager, multi-attempt testing
-│   ├── transcript.py     # TranscriptRecorder, Outcome, Transcript
-│   └── result.py         # EvalResult, TestStatus
-├── graders/
-│   ├── base.py           # Grader, GraderScope, GradeContext, GradeResult
-│   ├── registry.py       # @register_grader; loads domains/ on a lookup miss
-│   ├── content.py        # extract_content — pull the graded subject out of a context
-│   ├── code/common/      # the framework's Code graders (process & reliability)
-│   ├── model/            # the framework's Model graders (rubric, trajectory, groundedness)
-│   ├── human/            # human_review, pairwise_comparison
-│   └── domains/          # domain CORRECTNESS, lazily loaded: coding / data / image
-├── adapters/             # Agent adapters (image, coding, environment, claude_code, pi, codex)
-├── integrations/         # Trace importers (pi, codex, otlp, claude_agent, openai_agents, atif)
-│                         #   _common.py holds what all six ask of untyped JSON
-├── llm/                  # pricing, usage extraction, structured completions
-├── sandbox/              # isolated workdir + exec + collect (see above)
-└── report/               # console, html, site, analyzer, compare, insights
-```
+`compass/llm/` (pricing, usage, structured completions) and `compass/sandbox/`
+(isolated workdir + exec + collect) do **not** belong under `adapters/`: the
+former is needed by trace importers and LLM judges, the latter has six callers
+(two adapters plus four `domains/coding/` graders). Don't relocate them by
+association.
 
 ## Metrics
 
-- `pass@k` = P(at least 1 success in k attempts) — for exploration
-- `pass^k` = P(all k attempts successful) — for reliability
+`pass@k` = P(at least 1 success in k) — exploration. `pass^k` = P(all k succeed)
+— reliability.
 
-Writing a grader, and the scenario YAML schema, are not repeated here: README
-carries a worked grader and `docs/scenario-config.md` the full YAML. Both are
-readable in place with `uv run compass docs <topic>`.
+## 文档
 
-## document
- - 每次增加新功能特性，请更新到文档和 interview.md 文件中。
- - 文档结构：README.md 只保留骨架（定位/概念/架构/CLI/快速开始/导航）；细节按主题放在 docs/ 专题文档——cheatsheet.md（单页速查，agent 入口）、core-design.md（Transcript/Outcome、ToolCall 协议）、graders.md（内置与自定义评分器）、scenario-config.md（YAML 与指标）、analysis.md（analyze/compare/报告）、integrations.md（轨迹导入与 Adapter）、skills.md（Agent Skill 评测）、roadmap.md（路线图归档）。新特性写进对应专题文档，README 只在导航表/特性要点里加一句。
- - 这 8 份专题文档同时是 `compass docs <topic>` 的内容源，且在 pyproject 的 `force-include` 里逐个打进 wheel。**新增专题文档要三处同步**：`src/compass/docs_index.py` 的 TOPICS、pyproject 的 force-include、README 导航表——漏掉任一处，装出来的包就读不到它。
- - 改评分器数量时记得同步：README 导航表两处 + 安装校验那行、docs/graders.md 的分组表格、docs/cheatsheet.md。数量以 `list_graders()` 为准（当前 43 = 框架 20 + 领域 23）；`compass.graders.domains.domain_of(name)` 给出某个 grader 属于哪一半。改完可以跑这个核对，不要靠人数：
-   ```bash
-   uv run python -c "from compass.graders import list_graders; from compass.graders.domains import domain_of; import collections; print(collections.Counter(domain_of(g) for g in list_graders()))"
-   ```
- - docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 等是本地参考资料（gitignore），专题 *.md 文档是版本库的一部分。
+- 每次增加新功能特性，更新对应专题文档和 `docs/interview.md`。
+- README.md 只留骨架（定位/概念/架构/CLI/快速开始/导航），细节进 `docs/` 专题文档：
+  cheatsheet / core-design / graders / scenario-config / analysis / integrations /
+  skills / roadmap。新特性写进专题文档，README 只在导航表加一句。
+- **新增专题文档要三处同步**：`src/compass/docs_index.py` 的 TOPICS、pyproject 的
+  force-include、README 导航表——漏一处，装出来的包就读不到它。
+- **改 grader 数量要同步**：README 导航表两处 + 安装校验那行、docs/graders.md 分组
+  表格、docs/cheatsheet.md。数量以这条命令为准，不要靠人数：
+  ```bash
+  uv run python -c "from compass.graders import list_graders; from compass.graders.domains import domain_of; import collections; print(collections.Counter(domain_of(g) for g in list_graders()))"
+  ```
+- docs/ 下的 *.html、*_files/、interview.md、todos.md、idea.md 是本地参考资料
+  （gitignore），专题 *.md 文档是版本库的一部分。
