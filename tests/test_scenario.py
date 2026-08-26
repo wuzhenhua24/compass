@@ -873,3 +873,88 @@ cases:
         })
 
         assert scenario.cases[0].stage == "regression"
+
+
+# ===================================================================
+# defaults 里的每个字段都必须有人读
+# ===================================================================
+
+
+class TestDefaultsAreLoadBearing:
+    """A scenario field nobody reads is a promise the YAML cannot keep.
+
+    `defaults` once carried `timeout` and an `environment` block
+    (`isolation` / `clean_cache`). Both were documented as working and neither
+    was read anywhere, so setting them got silence. This asserts that every
+    field still on DefaultsConfig is consumed by something outside its own
+    definition — the check that would have caught it.
+    """
+
+    @staticmethod
+    def _source_outside_the_model() -> str:
+        import pathlib
+
+        scenario_py = pathlib.Path("src/compass/core/scenario.py")
+        everything = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in pathlib.Path("src/compass").rglob("*.py")
+        )
+        return everything.replace(scenario_py.read_text(encoding="utf-8"), "")
+
+    def test_every_defaults_field_is_read_somewhere(self):
+        from compass.core.scenario import DefaultsConfig, Scenario
+
+        scenario_py = __import__("pathlib").Path(
+            "src/compass/core/scenario.py"
+        ).read_text(encoding="utf-8")
+        outside = self._source_outside_the_model()
+
+        for field in DefaultsConfig.model_fields:
+            reads = (
+                f"defaults.{field}" in scenario_py
+                or f"defaults.{field}" in outside
+                or f'defaults["{field}"]' in outside
+            )
+            assert reads, (
+                f"DefaultsConfig.{field} is never read — either wire it up or "
+                f"drop it, but do not document it as configuration"
+            )
+        assert "trials" in DefaultsConfig.model_fields
+        assert Scenario(
+            name="n", agent={"adapter": "image"}, cases=[]
+        ).defaults.trials == 1
+
+    def test_an_old_scenario_carrying_the_dropped_keys_still_loads(self):
+        """Pydantic ignores unknown keys, so removing them broke no YAML."""
+        from compass.core.scenario import Scenario
+
+        scenario = Scenario.model_validate(
+            {
+                "name": "legacy",
+                "agent": {"adapter": "image"},
+                "defaults": {
+                    "trials": 3,
+                    "timeout": 300,
+                    "environment": {"isolation": True, "clean_cache": True},
+                },
+                "cases": [{"id": "c", "input": {"prompt": "p"}}],
+            }
+        )
+        assert scenario.defaults.trials == 3
+
+    def test_for_coding_eval_timeout_reaches_the_adapter(self):
+        """It used to land on DefaultsConfig, where nothing read it."""
+        from compass.core.scenario import Scenario
+
+        scenario = Scenario.for_coding_eval(
+            "n", [{"id": "a", "files": {}}], timeout=600
+        )
+        assert scenario.agent.config["timeout"] == 600
+
+    def test_an_explicit_adapter_timeout_wins(self):
+        from compass.core.scenario import Scenario
+
+        scenario = Scenario.for_coding_eval(
+            "n", [{"id": "a", "files": {}}], adapter_config={"timeout": 5}, timeout=600
+        )
+        assert scenario.agent.config["timeout"] == 5

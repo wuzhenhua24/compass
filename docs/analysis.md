@@ -772,9 +772,19 @@ TrialMetrics.best_of_k(k)          # 单 Case 的 best-of-k
 
 ### 使用示例
 
+试验次数写在场景里，不是命令行参数——它是场景定义的一部分，改它就改了这次评测测的是什么：
+
+```yaml
+defaults:
+  trials: 3            # 所有 case 默认跑 3 次
+cases:
+  - id: flaky_one
+    trials: 5          # 单个 case 可覆盖
+```
+
 ```bash
-# 每个任务跑 3 次，报告自动展示 best-of-k
-compass test scenarios/my_test.yaml --trials 3
+# 报告自动展示 best-of-k
+compass test scenarios/my_test.yaml
 
 # 分析结果中包含 best-of-k 数据
 compass analyze results/ --output json

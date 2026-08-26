@@ -14,13 +14,9 @@ agent:
   workflow: "workflows/sdxl_txt2img.json"
   # 对接 ComfyUI 等自有服务：用 @register_adapter("comfyui") 注册自定义 adapter 后填其名称
 
-# 全局默认配置
+# 全局默认配置（case 可逐项覆盖）
 defaults:
   trials: 3                    # 每个 case 运行 3 次
-  timeout: 300                 # 超时时间（秒）
-  environment:
-    isolation: true            # 环境隔离
-    clean_cache: true          # 清理缓存
 
 # 默认 Graders
 default_graders:

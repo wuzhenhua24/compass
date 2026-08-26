@@ -354,20 +354,20 @@ class TestCase(BaseModel):
         return all_graders
 
 
-class EnvironmentConfig(BaseModel):
-    """Environment configuration."""
-
-    isolation: bool = True
-    clean_cache: bool = True
-    timeout: int = 300
-
-
 class DefaultsConfig(BaseModel):
-    """Default configuration for all cases."""
+    """Scenario-wide defaults a case can override.
+
+    Only ``trials`` — read by :meth:`Scenario.get_trials_for_case`. A ``timeout``
+    and an ``environment`` block (``isolation`` / ``clean_cache``) used to sit
+    here and were documented as working; nothing in the codebase ever read
+    either, so a scenario setting them got silence. Timeouts are real at the
+    layers that can enforce one: the adapter (``agent.config.timeout``) and the
+    grader (``external_checker``). Pydantic ignores unknown keys, so a YAML
+    still carrying the old ones loads exactly as before — it just no longer
+    reads as a promise.
+    """
 
     trials: int = 1
-    timeout: int = 300
-    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
 
 
 class AgentConfig(BaseModel):
@@ -624,14 +624,19 @@ class Scenario(BaseModel):
                 )
             )
 
+        # timeout goes to the adapter, which is the layer that can enforce
+        # one — CodingAdapter reads config["timeout"]. It used to be stored on
+        # DefaultsConfig, where nothing read it, so the parameter did nothing.
+        agent_config = dict(adapter_config or {})
+        agent_config.setdefault("timeout", timeout)
+
         return cls(
             name=name,
             description=description,
             agent=AgentConfig(
                 adapter="coding",
-                config=adapter_config or {},
+                config=agent_config,
             ),
-            defaults=DefaultsConfig(timeout=timeout),
             default_graders=parsed_graders,
             cases=test_cases,
         )

@@ -8,10 +8,6 @@ agent:
 # Default configuration
 defaults:
   trials: 3
-  timeout: 300
-  environment:
-    isolation: true
-    clean_cache: true
 
 # Default graders applied to all cases
 default_graders:

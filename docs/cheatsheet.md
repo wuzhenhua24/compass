@@ -28,8 +28,7 @@ agent:                            # 必填
 
 defaults:
   trials: 1                       # 每个 case 跑几次（>1 触发轮转采样 + pass^k）
-  timeout: 300
-  environment: {isolation: true, clean_cache: true, timeout: 300}
+                                  # 超时不在这一层：adapter 用 agent.config.timeout
 
 default_graders: []               # 应用到所有 case，排在 case 自己的 grader 之前
 default_aggregation:              # case 未显式设置的字段从这里继承（逐字段合并）
